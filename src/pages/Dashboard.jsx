@@ -56,8 +56,8 @@ export default function Dashboard() {
     try {
       // 1️⃣ Active loads (fast view)
       const { data: loads, error: loadsErr } = await supabase
-        .from("v_loads_active")
-        .select("id, status");
+  .from("loads")            // <- includes DELIVERED
+  .select("id, status");
 
       if (loadsErr) throw loadsErr;
       setStatusData(aggregateStatus(loads));

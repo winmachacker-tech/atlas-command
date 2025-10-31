@@ -8,7 +8,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import Protected from "./components/Protected";
 import "./index.css";
 
-// 🔍 Check Supabase environment (logs URL + key status)
+// Log env sanity
 pingSupabase();
 
 /** Route-level code splitting */
@@ -16,6 +16,7 @@ const Dashboard  = lazy(() => import("./pages/Dashboard"));
 const Loads      = lazy(() => import("./pages/Loads"));
 const InTransit  = lazy(() => import("./pages/InTransit"));
 const Trucks     = lazy(() => import("./pages/Trucks"));
+const Drivers    = lazy(() => import("./pages/Drivers"));
 const AdminAudit = lazy(() => import("./pages/AdminAudit"));
 const Login      = lazy(() => import("./pages/Login"));
 
@@ -23,7 +24,6 @@ const Login      = lazy(() => import("./pages/Login"));
 const Fallback = () => <div className="p-6">Loading…</div>;
 
 const router = createBrowserRouter([
-  // Public login
   {
     path: "/login",
     element: (
@@ -32,16 +32,12 @@ const router = createBrowserRouter([
       </Suspense>
     ),
   },
-
-  // App shell (protected) + global error boundary
   {
     path: "/",
     element: (
-      <ErrorBoundary>
-        <Protected>
-          <MainLayout />
-        </Protected>
-      </ErrorBoundary>
+      <Protected>
+        <MainLayout />
+      </Protected>
     ),
     errorElement: <div className="p-6">Route not found.</div>,
     children: [
@@ -81,6 +77,16 @@ const router = createBrowserRouter([
           <ErrorBoundary>
             <Suspense fallback={<Fallback />}>
               <Trucks />
+            </Suspense>
+          </ErrorBoundary>
+        ),
+      },
+      {
+        path: "drivers",
+        element: (
+          <ErrorBoundary>
+            <Suspense fallback={<Fallback />}>
+              <Drivers />
             </Suspense>
           </ErrorBoundary>
         ),

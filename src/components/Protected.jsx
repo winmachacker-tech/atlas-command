@@ -5,25 +5,61 @@ import { supabase } from "../lib/supabase";
 
 export default function Protected({ children }) {
   const [loading, setLoading] = useState(true);
-  const [session, setSession] = useState(null);
-  const loc = useLocation();
+  const [authed, setAuthed] = useState(false);
+  const location = useLocation();
 
   useEffect(() => {
-    let unsub;
-    (async () => {
-      const { data } = await supabase.auth.getSession();
-      setSession(data.session ?? null);
-      setLoading(false);
+    let active = true;
 
-      const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
-        setSession(s ?? null);
-      });
-      unsub = () => sub.subscription.unsubscribe();
+    // Safety net: if Supabase stalls, stop loading so <Navigate> can run
+    const safety = setTimeout(() => {
+      if (!active) return;
+      setLoading(false);
+    }, 6000);
+
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (!active) return;
+        setAuthed(!!data?.session);
+        setLoading(false);
+      } catch {
+        if (!active) return;
+        setAuthed(false);
+        setLoading(false);
+      }
     })();
-    return () => unsub?.();
+
+    // keep in sync with auth state changes
+    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
+      if (!active) return;
+      setAuthed(!!session);
+      setLoading(false);
+    });
+
+    return () => {
+      active = false;
+      clearTimeout(safety);
+      sub?.subscription?.unsubscribe?.();
+    };
   }, []);
 
-  if (loading) return <div className="p-6">Checking session…</div>;
-  if (!session) return <Navigate to="/login" state={{ from: loc.pathname }} replace />;
+  if (loading) {
+    return (
+      <div className="flex h-[60vh] items-center justify-center text-sm text-neutral-500">
+        <svg className="mr-2 h-4 w-4 animate-spin" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" opacity="0.25" />
+          <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="4" fill="none" />
+        </svg>
+        Checking session…
+      </div>
+    );
+  }
+
+  // ✅ Declarative redirect (no blank screen)
+  if (!authed) {
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }
+
   return children;
 }
