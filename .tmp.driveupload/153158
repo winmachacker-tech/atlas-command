@@ -1,7 +1,0 @@
-﻿node_modules/
-.env
-.env.local
-.vscode/
-dist/
-.vercel/
-.DS_Store
