@@ -1,1 +1,0 @@
-import{j as e}from"./index-BzW9ot81.js";function s(){return e.jsxs("section",{className:"space-y-4",children:[e.jsx("h1",{className:"text-xl font-semibold",children:"Problem Board"}),e.jsx("p",{className:"opacity-70",children:"Placeholder page. Your problem loads / exceptions will render here."})]})}export{s as default};
