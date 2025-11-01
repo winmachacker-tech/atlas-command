@@ -1,13 +1,6 @@
-// src/main.jsx
-import React, { StrictMode, Suspense, lazy, useEffect } from "react";
+import React, { StrictMode, Suspense, lazy } from "react";
 import ReactDOM from "react-dom/client";
-import {
-  BrowserRouter,
-  Routes,
-  Route,
-  Navigate,
-  useLocation,
-} from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import "./index.css";
 import MainLayout from "./layout/MainLayout.jsx";
@@ -24,76 +17,56 @@ const Activity     = lazy(() => import("./pages/Activity.jsx"));
 const Settings     = lazy(() => import("./pages/Settings.jsx"));
 const Trucks       = lazy(() => import("./pages/Trucks.jsx"));
 const Drivers      = lazy(() => import("./pages/Drivers.jsx"));
-const AdminAudit   = lazy(() => import("./pages/AdminAudit.jsx"));
-const NotFound     = lazy(() => import("./pages/NotFound.jsx"));
-const Users        = lazy(() => import("./pages/Users.jsx")); // 👈 add this
+const Users        = lazy(() => import("./pages/Users.jsx"));       // ✅ new Users page
 
-/* ------------------------------- Utilities -------------------------------- */
-function ScrollToTop() {
-  const { pathname } = useLocation();
-  useEffect(() => {
-    try { window.scrollTo({ top: 0, left: 0, behavior: "instant" }); }
-    catch { window.scrollTo(0, 0); }
-  }, [pathname]);
-  return null;
-}
+/* ----------------------------- Auth / Utility ----------------------------- */
+const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx"));
+const Onboarding   = lazy(() => import("./pages/Onboarding.jsx"));
+const NotFound     = lazy(() => import("./pages/NotFound.jsx")); // optional
 
-function Fallback() {
-  return (
-    <div className="w-full min-h-[40vh] grid place-items-center">
-      <div className="flex items-center gap-3 text-sm opacity-80">
-        <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
-        </svg>
-        <span>Loading…</span>
-      </div>
-    </div>
-  );
-}
-
-function AppRoutes() {
-  return (
-    <Suspense fallback={<Fallback />}>
-      <Routes>
-        <Route element={<MainLayout />}>
-          <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/loads" element={<Loads />} />
-          <Route path="/in-transit" element={<InTransit />} />
-          <Route path="/delivered" element={<Delivered />} />
-          <Route path="/problems" element={<ProblemBoard />} />
-          <Route path="/activity" element={<Activity />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/trucks" element={<Trucks />} />
-          <Route path="/drivers" element={<Drivers />} />
-          <Route path="/admin/audit" element={<AdminAudit />} />
-          <Route path="/users" element={<Users />} /> {/* 👈 add this */}
-          <Route path="*" element={<NotFound />} />
-          <Route path="/auth/callback" element={<AuthCallback />} />
-          <Route path="/onboarding" element={<Onboarding />} />
-
-        </Route>
-      </Routes>
-    </Suspense>
-  );
-}
-
+/* ------------------------------ Root App ---------------------------------- */
 function App() {
   return (
-    <BrowserRouter>
+    <StrictMode>
       <SettingsProvider>
-        <ScrollToTop />
-        <ErrorBoundary>
-          <AppRoutes />
-        </ErrorBoundary>
+        <BrowserRouter>
+          <ErrorBoundary>
+            <Suspense
+              fallback={
+                <div className="grid place-items-center min-h-screen text-sm opacity-70">
+                  Loading interface…
+                </div>
+              }
+            >
+              <Routes>
+                {/* -------------------- Public Auth Routes -------------------- */}
+                <Route path="/auth/callback" element={<AuthCallback />} />
+                <Route path="/onboarding" element={<Onboarding />} />
+
+                {/* -------------------- Main Application -------------------- */}
+                <Route path="/" element={<MainLayout />}>
+                  <Route index element={<Dashboard />} />
+                  <Route path="loads" element={<Loads />} />
+                  <Route path="in-transit" element={<InTransit />} />
+                  <Route path="delivered" element={<Delivered />} />
+                  <Route path="problem-board" element={<ProblemBoard />} />
+                  <Route path="activity" element={<Activity />} />
+                  <Route path="settings" element={<Settings />} />
+                  <Route path="trucks" element={<Trucks />} />
+                  <Route path="drivers" element={<Drivers />} />
+                  <Route path="users" element={<Users />} /> {/* ✅ Users route inside MainLayout */}
+                </Route>
+
+                {/* ------------------------ Catch-all ------------------------ */}
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </Suspense>
+          </ErrorBoundary>
+        </BrowserRouter>
       </SettingsProvider>
-    </BrowserRouter>
+    </StrictMode>
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(
-  <StrictMode>
-    <App />
-  </StrictMode>
-);
+/* ------------------------------ Mount App -------------------------------- */
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
