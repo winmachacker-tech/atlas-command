@@ -1,221 +1,127 @@
+// src/components/AddUserModal.jsx
 import { useEffect, useState } from "react";
-import { X, Loader2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
-import { useActiveOrg } from "../lib/useActiveOrg";
 
-export default function AddDriverModal({ open, onClose, onCreated }) {
-  const { orgId, loading: orgLoading, error: orgError } = useActiveOrg();
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState("");
-  const [form, setForm] = useState({
-    first_name: "",
-    last_name: "",
-    email: "",
-    phone: "",
-    license_number: "",
-    license_class: "A",
-    license_expiry: "",
-    med_card_expiry: "",
-    status: "ACTIVE",
-    notes: "",
-  });
+export default function AddUserModal({ open, onClose, onCreated }) {
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("dispatcher");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!open) {
-      setForm({
-        first_name: "",
-        last_name: "",
-        email: "",
-        phone: "",
-        license_number: "",
-        license_class: "A",
-        license_expiry: "",
-        med_card_expiry: "",
-        status: "ACTIVE",
-        notes: "",
-      });
-      setErr("");
+    if (open) {
+      setFullName("");
+      setEmail("");
+      setRole("dispatcher");
+      setError("");
+      setSending(false);
     }
   }, [open]);
 
   if (!open) return null;
 
-  async function handleSave(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
-    setErr("");
-
-    if (orgLoading) return;
-    if (!orgId) {
-      setErr(orgError || "No organization assigned to your user.");
-      return;
-    }
-    if (!form.first_name.trim() || !form.last_name.trim()) {
-      setErr("First and last name are required.");
-      return;
-    }
-    if (!form.license_number.trim()) {
-      setErr("CDL / License number is required.");
-      return;
-    }
+    setSending(true);
+    setError("");
 
     try {
-      setSaving(true);
-      const { data: userData } = await supabase.auth.getUser();
-      const userId = userData?.user?.id || null;
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error("Not authenticated.");
+      }
 
-      const payload = {
-        ...form,
-        license_expiry: form.license_expiry ? new Date(form.license_expiry).toISOString() : null,
-        med_card_expiry: form.med_card_expiry ? new Date(form.med_card_expiry).toISOString() : null,
-        org_id: orgId,
-        created_by: userId,
-      };
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/invite_user`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ full_name: fullName, email, role }),
+      });
 
-      const { error } = await supabase.from("drivers").insert([payload]);
-      if (error) throw error;
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error || `Invite failed (${res.status})`);
+      }
 
       onCreated?.();
-    } catch (e) {
-      setErr(e.message || "Failed to create driver.");
+      onClose?.();
+    } catch (err) {
+      setError(err.message || "Failed to create user.");
     } finally {
-      setSaving(false);
+      setSending(false);
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-3xl rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="font-semibold text-lg">Add Driver</h2>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-xl hover:bg-neutral-100 dark:hover:bg-neutral-900"
-            aria-label="Close"
-          >
-            <X />
-          </button>
-        </div>
-
-        {err && <div className="mb-3 text-sm text-red-600 dark:text-red-400">{err}</div>}
-
-        <form onSubmit={handleSave} className="space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <Field label="First Name *" value={form.first_name} onChange={(v) => setForm({ ...form, first_name: v })} />
-            <Field label="Last Name *" value={form.last_name} onChange={(v) => setForm({ ...form, last_name: v })} />
-            <Field label="Phone" value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} />
-
-            <Field label="Email" value={form.email} onChange={(v) => setForm({ ...form, email: v })} type="email" />
-
-            <Field
-              label="CDL / License # *"
-              value={form.license_number}
-              onChange={(v) => setForm({ ...form, license_number: v })}
-              className="font-mono"
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="w-full max-w-md rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
+        <h2 className="text-lg font-semibold mb-4">Invite New User</h2>
+        {error && (
+          <div className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+            {error}
+          </div>
+        )}
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label className="block text-sm mb-1">Full name</label>
+            <input
+              className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="e.g., Jane Doe"
+              required
             />
-            <Field
-              label="License Class"
-              value={form.license_class}
-              onChange={(v) => setForm({ ...form, license_class: v })}
-              placeholder="A"
-              maxLength={2}
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Email</label>
+            <input
+              type="email"
+              className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="jane@company.com"
+              required
             />
-
-            <Field
-              label="CDL Expiry"
-              type="date"
-              value={form.license_expiry}
-              onChange={(v) => setForm({ ...form, license_expiry: v })}
-            />
-            <Field
-              label="Med Card Expiry"
-              type="date"
-              value={form.med_card_expiry}
-              onChange={(v) => setForm({ ...form, med_card_expiry: v })}
-            />
-
-            <Select
-              label="Status"
-              value={form.status}
-              onChange={(v) => setForm({ ...form, status: v })}
-              options={["ACTIVE", "INACTIVE", "SUSPENDED"]}
-            />
-
-            <Textarea
-              label="Notes"
-              value={form.notes}
-              onChange={(v) => setForm({ ...form, notes: v })}
-              placeholder="Optional notes…"
-              className="md:col-span-3"
-            />
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Role</label>
+            <select
+              className="w-full rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+            >
+              <option value="admin">Admin</option>
+              <option value="manager">Manager</option>
+              <option value="dispatcher">Dispatcher</option>
+              <option value="viewer">Viewer</option>
+            </select>
           </div>
 
           <div className="flex items-center justify-end gap-2 pt-2">
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-800"
+              className="rounded-xl px-3 py-2 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              disabled={sending}
             >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={saving || orgLoading}
-              className="px-4 py-2 rounded-xl bg-black text-white disabled:opacity-60 inline-flex items-center gap-2"
+              disabled={sending}
+              className="rounded-xl bg-black text-white px-4 py-2 hover:bg-black/90 disabled:opacity-60 dark:bg-white dark:text-black dark:hover:bg-white/90"
             >
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Create
+              {sending ? "Inviting…" : "Invite"}
             </button>
           </div>
         </form>
       </div>
     </div>
-  );
-}
-
-/* ---------- tiny UI helpers ---------- */
-function Field({ label, value, onChange, type = "text", placeholder = "", maxLength, className = "" }) {
-  return (
-    <label className={className + " block"}>
-      <div className="text-xs text-neutral-500 mb-1">{label}</div>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        maxLength={maxLength}
-        className="w-full px-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900"
-      />
-    </label>
-  );
-}
-function Select({ label, value, onChange, options }) {
-  return (
-    <label className="block">
-      <div className="text-xs text-neutral-500 mb-1">{label}</div>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full px-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900"
-      >
-        {options.map((o) => (
-          <option key={o} value={o}>{o}</option>
-        ))}
-      </select>
-    </label>
-  );
-}
-function Textarea({ label, value, onChange, placeholder = "", className = "" }) {
-  return (
-    <label className={className + " block"}>
-      <div className="text-xs text-neutral-500 mb-1">{label}</div>
-      <textarea
-        rows={3}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full px-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900"
-      />
-    </label>
   );
 }
