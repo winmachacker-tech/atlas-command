@@ -1,133 +1,86 @@
-// src/components/Topbar.jsx
-import { useState, useEffect } from "react";
-import { useLocation } from "react-router-dom";
-import {
-  Menu,
-  Bell,
-  Sun,
-  Moon,
-  Plus,
-  UserCircle2,
-} from "lucide-react";
-import AddLoadModal from "./AddLoadModal"; // optional modal (safe to comment if not ready)
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Menu, LogOut } from "lucide-react";
+import { supabase } from "../lib/supabase";
 
-function cx(...a) {
-  return a.filter(Boolean).join(" ");
-}
+export default function Topbar({ onOpenSidebar }) {
+  const nav = useNavigate();
+  const [userEmail, setUserEmail] = useState("");
+  const [hasSession, setHasSession] = useState(false);
 
-export default function Topbar({ onOpenSidebar = () => {} }) {
-  const loc = useLocation();
-  const [theme, setTheme] = useState(() =>
-    document.documentElement.classList.contains("dark") ? "dark" : "light"
-  );
-  const [showAddLoad, setShowAddLoad] = useState(false);
-
-  // Map paths to pretty titles
-  const titles = {
-    "/dashboard": "Dashboard Overview",
-    "/loads": "Active Loads",
-    "/activity": "Activity Feed",
-    "/settings": "System Settings",
-    "/users": "Users & Roles",
-  };
-  const currentTitle = titles[loc.pathname] || "Atlas Command";
-
-  /** Theme toggle handler */
-  const toggleTheme = () => {
-    if (theme === "dark") {
-      document.documentElement.classList.remove("dark");
-      setTheme("light");
-      localStorage.setItem("theme", "light");
-    } else {
-      document.documentElement.classList.add("dark");
-      setTheme("dark");
-      localStorage.setItem("theme", "dark");
-    }
-  };
-
-  /** Keep theme in sync with localStorage */
   useEffect(() => {
-    const saved = localStorage.getItem("theme");
-    if (saved) {
-      document.documentElement.classList.toggle("dark", saved === "dark");
-      setTheme(saved);
+    let mounted = true;
+
+    async function load() {
+      const { data } = await supabase.auth.getSession();
+      if (!mounted) return;
+      const session = data?.session ?? null;
+      setHasSession(!!session);
+      setUserEmail(session?.user?.email || "");
     }
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
+      if (!mounted) return;
+      setHasSession(!!session);
+      setUserEmail(session?.user?.email || "");
+    });
+
+    load();
+    return () => {
+      mounted = false;
+      sub?.subscription?.unsubscribe?.();
+    };
   }, []);
 
-  const onLoadsPage = loc.pathname.startsWith("/loads");
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    setHasSession(false);
+    setUserEmail("");
+    nav("/login", { replace: true });
+  }
 
   return (
-    <>
-      <header
-        className={cx(
-          "flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800",
-          "bg-white/70 backdrop-blur dark:bg-neutral-950/60",
-          "px-4 sm:px-6 py-3 sticky top-0 z-30"
-        )}
-      >
-        {/* Left side */}
+    <div className="sticky top-0 z-10 bg-white/80 dark:bg-neutral-950/80 backdrop-blur border-b border-zinc-200/60 dark:border-neutral-800">
+      <div className="h-14 flex items-center justify-between px-4">
         <div className="flex items-center gap-3">
-          {/* Mobile sidebar toggle */}
+          {/* Mobile sidebar button */}
           <button
-            onClick={onOpenSidebar}
-            className="sm:hidden inline-flex items-center justify-center rounded-xl p-2 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            type="button"
             aria-label="Open sidebar"
+            onClick={onOpenSidebar}
+            className="md:hidden inline-flex items-center rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-neutral-900"
           >
             <Menu size={18} />
           </button>
 
-          {/* Page title */}
-          <h1 className="text-lg sm:text-xl font-semibold tracking-tight">
-            {currentTitle}
-          </h1>
+          <Link to="/dashboard" className="font-medium">Command Center</Link>
+          <span className="text-xs text-zinc-500">v0.1 • Dev</span>
         </div>
 
-        {/* Right side */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          {/* Add Load button only on Loads page */}
-          {onLoadsPage && (
+        <div className="flex items-center gap-3">
+          {hasSession ? (
             <>
+              <span className="hidden md:inline text-xs text-zinc-500 dark:text-zinc-400">
+                {userEmail}
+              </span>
               <button
-                onClick={() => setShowAddLoad(true)}
-                className="inline-flex items-center gap-2 rounded-xl bg-black text-white px-3 py-2 text-sm font-medium hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
-                title="Add new load"
+                onClick={handleLogout}
+                className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
               >
-                <Plus size={16} /> Add Load
+                <LogOut size={16} />
+                Logout
               </button>
             </>
+          ) : (
+            <Link
+              to="/login"
+              className="text-xs underline text-zinc-500 hover:text-zinc-700 dark:text-zinc-400"
+            >
+              Sign in
+            </Link>
           )}
-
-          {/* Theme toggle */}
-          <button
-            onClick={toggleTheme}
-            className="rounded-xl p-2 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-            aria-label="Toggle theme"
-          >
-            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-          </button>
-
-          {/* Notifications */}
-          <button
-            className="rounded-xl p-2 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-            aria-label="Notifications"
-          >
-            <Bell size={18} />
-          </button>
-
-          {/* User profile */}
-          <button
-            className="rounded-xl p-2 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-            aria-label="Profile"
-          >
-            <UserCircle2 size={20} />
-          </button>
         </div>
-      </header>
-
-      {/* Optional modal (safe to remove if not built yet) */}
-      {showAddLoad && (
-        <AddLoadModal open={showAddLoad} onClose={() => setShowAddLoad(false)} />
-      )}
-    </>
+      </div>
+    </div>
   );
 }

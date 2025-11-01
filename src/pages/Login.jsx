@@ -1,65 +1,45 @@
-// src/pages/Login.jsx
-import { useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
 export default function Login() {
-  const [email, setEmail] = useState("");
-  const [pw, setPw] = useState("");
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
   const nav = useNavigate();
-  const loc = useLocation();
-  const redirectTo = loc.state?.from || "/";
+  const [email, setEmail] = useState("");
+  const [msg, setMsg] = useState("");
 
-  async function onSubmit(e) {
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (data?.session) nav("/dashboard", { replace: true });
+    });
+  }, [nav]);
+
+  async function signIn(e) {
     e.preventDefault();
-    setErr("");
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
-    setLoading(false);
-    if (error) setErr(error.message);
-    else nav(redirectTo, { replace: true });
+    setMsg("");
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.origin }, // or `${window.location.origin}/dashboard`
+    });
+    if (error) setMsg(error.message);
+    else setMsg("Check your email for the magic link.");
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <form
-        onSubmit={onSubmit}
-        className="w-full max-w-sm space-y-3 rounded-2xl border border-neutral-200 dark:border-neutral-800 p-5 bg-white dark:bg-neutral-950"
-      >
-        <h1 className="text-lg font-semibold">Sign in</h1>
-        {err && <div className="text-sm text-red-600 dark:text-red-400">{err}</div>}
-
-        <label className="block">
-          <div className="text-xs text-neutral-500 mb-1">Email</div>
-          <input
-            type="email"
-            value={email}
-            onChange={(e)=>setEmail(e.target.value)}
-            className="w-full px-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900"
-            required
-          />
-        </label>
-
-        <label className="block">
-          <div className="text-xs text-neutral-500 mb-1">Password</div>
-          <input
-            type="password"
-            value={pw}
-            onChange={(e)=>setPw(e.target.value)}
-            className="w-full px-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900"
-            required
-          />
-        </label>
-
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full px-4 py-2 rounded-xl bg-black text-white disabled:opacity-60"
-        >
-          {loading ? "Signing in…" : "Sign in"}
+    <div className="min-h-screen grid place-items-center p-6">
+      <form onSubmit={signIn} className="w-full max-w-sm space-y-4 rounded-2xl border p-6 dark:border-zinc-800">
+        <h1 className="text-xl font-semibold">Sign in</h1>
+        <input
+          type="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@company.com"
+          className="w-full rounded-xl border px-3 py-2 dark:border-zinc-700 dark:bg-neutral-900"
+        />
+        <button type="submit" className="w-full rounded-xl border px-3 py-2 font-medium dark:border-zinc-700 dark:bg-neutral-900">
+          Send magic link
         </button>
+        {msg && <p className="text-sm text-zinc-500">{msg}</p>}
       </form>
     </div>
   );

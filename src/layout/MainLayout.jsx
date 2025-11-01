@@ -1,4 +1,3 @@
-// src/layout/MainLayout.jsx
 import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import Sidebar from "../components/Sidebar";
@@ -30,7 +29,6 @@ export default function MainLayout() {
           setMobileOpen={setMobileOpen}
         />
 
-        {/* Main content column */}
         <div className="flex min-h-screen flex-1 flex-col">
           <Topbar onOpenSidebar={() => setMobileOpen(true)} />
           <main className="p-4 sm:p-6">
