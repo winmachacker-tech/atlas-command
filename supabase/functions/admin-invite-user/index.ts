@@ -1,79 +1,130 @@
-import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// supabase/functions/admin-invite-user/index.ts
+// Deno Edge Function (Supabase). Deploy with: `supabase functions deploy admin-invite-user`
 
-/** ───────────────────────────────────────────────────────────
- *  Env vars (must be set via `supabase secrets set`)
- *  NOTE: Do NOT prefix with SUPABASE_ — those are blocked.
- *  ─────────────────────────────────────────────────────────── */
-const SB_URL = Deno.env.get("SB_URL")!;
-const SB_ANON_KEY = Deno.env.get("SB_ANON_KEY")!;
-const SB_SERVICE_ROLE_KEY = Deno.env.get("SB_SERVICE_ROLE_KEY")!;
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 
-/** CORS (tighten origin later) */
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Content-Type": "application/json",
-};
+// ---- ENV REQUIRED ----
+// SUPABASE_URL            -> project URL (auto in Functions env)
+// SB_SERVICE_ROLE_KEY     -> service role key (Functions secret; never expose to client)
+// SITE_URL                -> your app base URL, e.g. https://atlas-command-iota.vercel.app
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_KEY  = Deno.env.get("SB_SERVICE_ROLE_KEY")!;
+const SITE_URL     = Deno.env.get("SITE_URL") || "https://atlas-command-iota.vercel.app";
 
-function json(status: number, body: unknown) {
-  return new Response(JSON.stringify(body, null, 2), { status, headers: cors });
+const service = createClient(SUPABASE_URL, SERVICE_KEY);
+
+// CORS helper
+const cors = (status = 200, body?: unknown) =>
+  new Response(body ? JSON.stringify(body) : null, {
+    status,
+    headers: {
+      "Access-Control-Allow-Origin": SITE_URL,
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+      "Content-Type": "application/json",
+    },
+  });
+
+async function requireAdmin(req: Request) {
+  const auth = req.headers.get("Authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.substring(7) : null;
+  if (!token) return { ok: false, status: 401, error: "Missing bearer token" };
+
+  // Get the user from the access token
+  const { data: userData, error: userErr } = await service.auth.getUser(token);
+  if (userErr || !userData?.user) {
+    return { ok: false, status: 401, error: "Invalid token" };
+  }
+
+  const uid = userData.user.id;
+
+  // Verify admin role in your app registry
+  const { data: profile, error: profErr } = await service
+    .from("users")
+    .select("id, is_admin, role, is_active")
+    .eq("id", uid)
+    .single();
+
+  if (profErr || !profile) {
+    return { ok: false, status: 403, error: "No app profile" };
+  }
+  if (!profile.is_active) {
+    return { ok: false, status: 403, error: "User inactive" };
+  }
+  const isAdmin = profile.is_admin === true || profile.role === "admin";
+  if (!isAdmin) {
+    return { ok: false, status: 403, error: "Admin required" };
+  }
+
+  return { ok: true, adminId: uid, adminProfile: profile };
 }
 
-serve(async (req) => {
-  // Preflight
-  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
-  if (req.method !== "POST") return json(405, { error: "Method Not Allowed" });
+Deno.serve(async (req) => {
+  // CORS preflight
+  if (req.method === "OPTIONS") return cors(204);
 
-  try {
-    const { email, is_admin = false, redirectTo } = await req.json().catch(() => ({}));
-    if (!email) return json(400, { error: "Missing 'email'" });
-
-    // Pull caller JWT (header is case-insensitive)
-    const authHeader = req.headers.get("authorization") ?? req.headers.get("Authorization") ?? "";
-    if (!authHeader) return json(401, { error: "Unauthorized: no Authorization header" });
-
-    // 1) Verify caller is signed in (user-scoped client)
-    const userScoped = createClient(SB_URL, SB_ANON_KEY, {
-      global: { headers: { Authorization: authHeader } },
-    });
-    const { data: whoami, error: whoErr } = await userScoped.auth.getUser();
-    if (whoErr || !whoami?.user) return json(401, { error: "Unauthorized" });
-
-    // 2) Verify caller is admin (pick one: RPC or table check)
-    // If you already created the RPC 'app_is_admin', keep it:
-    const { data: isAdmin, error: adminErr } = await userScoped.rpc("app_is_admin");
-    if (adminErr) return json(500, { error: "Admin check failed", detail: adminErr.message });
-    if (!isAdmin) return json(403, { error: "Forbidden: admin only" });
-
-    // 3) Service-role client for privileged ops
-    const service = createClient(SB_URL, SB_SERVICE_ROLE_KEY);
-
-    // 4) Send invite
-    // Use your production app URL for redirect (pass from client or set default)
-    const emailRedirectTo = redirectTo ?? "https://atlas-command-iota.vercel.app/login";
-    const { data: invited, error: inviteErr } = await service.auth.admin.inviteUserByEmail(email, {
-      emailRedirectTo,
-    });
-    if (inviteErr) return json(400, { error: "Invite failed", detail: inviteErr.message });
-
-    // 5) Ensure profile row exists (not fatal if it fails)
-    if (invited?.user?.id) {
-      const { error: upsertErr } = await service.from("users").upsert({
-        id: invited.user.id,
-        email,
-        is_admin,
-      });
-      if (upsertErr) {
-        // Don’t fail the invite because of profile upsert — just report it
-        console.error("users.upsert failed:", upsertErr.message);
-      }
-    }
-
-    return json(200, { ok: true, invited: email, user_id: invited?.user?.id ?? null });
-  } catch (e) {
-    console.error("❌ admin-invite-user crashed:", e);
-    return json(500, { error: "Server error", detail: String(e?.message ?? e) });
+  if (req.method !== "POST") {
+    return cors(405, { error: "Method Not Allowed" });
   }
+
+  // Check admin
+  const adminCheck = await requireAdmin(req);
+  if (!adminCheck.ok) {
+    return cors(adminCheck.status, { error: adminCheck.error });
+  }
+  const adminId = adminCheck.adminId!;
+
+  // Parse input
+  let payload: { email?: string; role?: string };
+  try {
+    payload = await req.json();
+  } catch {
+    return cors(400, { error: "Invalid JSON body" });
+  }
+
+  const email = (payload.email || "").trim().toLowerCase();
+  const role = (payload.role || "dispatcher").trim().toLowerCase();
+
+  if (!email || !email.includes("@")) {
+    return cors(400, { error: "Valid email required" });
+  }
+  if (!["admin", "dispatcher", "viewer"].includes(role)) {
+    return cors(400, { error: "Invalid role. Use: admin | dispatcher | viewer" });
+  }
+
+  // 1) Send invite email via Admin API (redirects back to your app)
+  const { data: invited, error: inviteErr } = await service.auth.admin.inviteUserByEmail(
+    email,
+    { redirectTo: `${SITE_URL}/auth/callback` },
+  );
+
+  if (inviteErr || !invited?.user) {
+    return cors(400, { error: inviteErr?.message || "Invite failed" });
+  }
+
+  // 2) Ensure app-side profile exists and requires password setup
+  const { data: upserted, error: upsertErr } = await service
+    .from("users")
+    .upsert({
+      id: invited.user.id,         // link to auth.users id
+      email,
+      role,                        // 'dispatcher' by default
+      is_active: true,
+      must_set_password: true,     // <-- gate access until password is set
+      created_by: adminId,
+    }, { onConflict: "id" })
+    .select()
+    .single();
+
+  if (upsertErr) {
+    return cors(400, { error: upsertErr.message || "App user upsert failed" });
+  }
+
+  return cors(200, {
+    ok: true,
+    message: "Invite sent. User must set a password.",
+    invite_user_id: invited.user.id,
+    app_user: upserted,
+  });
 });

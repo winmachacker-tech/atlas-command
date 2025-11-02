@@ -29,13 +29,23 @@ const AdminAudit   = lazy(() => import("./pages/AdminAudit.jsx"));
 const NotFound     = lazy(() => import("./pages/NotFound.jsx"));
 const Login        = lazy(() => import("./pages/Login.jsx"));
 
+/* 🔹 Add this: Invite form component used by /admin/invite */
+const InviteUserForm = lazy(() => import("./components/InviteUserForm.jsx"));
+
+/* ---------------------- Invite/Password Flow Pages ----------------------- */
+const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx"));
+const SetPassword  = lazy(() => import("./pages/SetPassword.jsx"));
+
 /* ---------------------------- Scroll to Top ------------------------------- */
 function ScrollToTop() {
   const { pathname } = useLocation();
-  useEffect(() => { window.scrollTo(0, 0); }, [pathname]);
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
   return null;
 }
 
+/* ------------------------------ App Router ------------------------------- */
 function AppRouter() {
   return (
     <BrowserRouter>
@@ -44,10 +54,13 @@ function AppRouter() {
         <SettingsProvider>
           <Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
             <Routes>
-              {/* Public login route */}
-              <Route path="/login" element={<Login />} />
 
-              {/* Guarded app */}
+              {/* ---------------------- Public / Onboarding Routes ---------------------- */}
+              <Route path="/login" element={<Login />} />
+              <Route path="/auth/callback" element={<AuthCallback />} />
+              <Route path="/set-password" element={<SetPassword />} />
+
+              {/* --------------------------- Guarded App --------------------------- */}
               <Route element={<AuthGuard />}>
                 <Route element={<MainLayout />}>
                   <Route index element={<Dashboard />} />
@@ -62,6 +75,7 @@ function AppRouter() {
                   <Route path="drivers" element={<Drivers />} />
                   <Route path="users" element={<Users />} />
                   <Route path="admin/audit" element={<AdminAudit />} />
+                  <Route path="/admin/invite" element={<InviteUserForm />} />
 
                   {/* Legacy redirect */}
                   <Route path="home" element={<Navigate to="/dashboard" replace />} />
@@ -71,7 +85,7 @@ function AppRouter() {
                 </Route>
               </Route>
 
-              {/* Global 404 */}
+              {/* --------------------------- Global 404 --------------------------- */}
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
@@ -80,9 +94,12 @@ function AppRouter() {
     </BrowserRouter>
   );
 }
+
+/* ---------------------------- Environment Logs ---------------------------- */
 console.log("🔍 SUPABASE_URL =", import.meta.env.VITE_SUPABASE_URL);
 console.log("🔍 FUNCTIONS_URL =", import.meta.env.VITE_FUNCTIONS_URL);
 
+/* ------------------------------- Mount App -------------------------------- */
 ReactDOM.createRoot(document.getElementById("root")).render(
   <StrictMode>
     <AppRouter />
