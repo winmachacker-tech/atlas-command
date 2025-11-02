@@ -1,36 +1,48 @@
 import { useEffect, useState } from "react";
-import { Navigate, Outlet } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import LoadingScreen from "./LoadingScreen";
 
-export default function AuthGuard() {
-  const [status, setStatus] = useState("checking"); // checking | authed | anon
+export default function AuthGuard({ children }) {
+  const [loading, setLoading] = useState(true);
+  const [session, setSession] = useState(null);
+  const loc = useLocation();
 
   useEffect(() => {
     let mounted = true;
 
-    async function check() {
+    (async () => {
       const { data } = await supabase.auth.getSession();
-      if (!mounted) return;
-      setStatus(data?.session ? "authed" : "anon");
-    }
+      if (mounted) setSession(data.session ?? null);
+      setLoading(false);
+    })();
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
-      if (!mounted) return;
-      setStatus(session ? "authed" : "anon");
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+      setLoading(false);
     });
 
-    check();
     return () => {
       mounted = false;
       sub?.subscription?.unsubscribe?.();
     };
   }, []);
 
-  if (status === "checking") {
-    return <div className="p-6 text-center">Loading…</div>;
-  }
-  if (status === "anon") {
+  if (loading) return <LoadingScreen label="Authenticating…" />;
+
+  const path = loc.pathname.toLowerCase();
+  const isAuthRoute =
+    path.startsWith("/login") ||
+    path.startsWith("/auth") ||
+    path.startsWith("/set-password");
+
+  if (!session && !isAuthRoute) {
     return <Navigate to="/login" replace />;
   }
-  return <Outlet />;
+
+  if (session && (path.startsWith("/set-password") || path.startsWith("/auth"))) {
+    return <Navigate to="/" replace />;
+  }
+
+  return children;
 }

@@ -13,6 +13,7 @@ import MainLayout from "./layout/MainLayout.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import { SettingsProvider } from "./context/SettingsProvider.jsx";
 import AuthGuard from "./components/AuthGuard.jsx";
+import LoadingScreen from "./components/LoadingScreen.jsx";
 
 /* ---------------------------- Lazy-loaded pages --------------------------- */
 const Dashboard    = lazy(() => import("./pages/Dashboard.jsx"));
@@ -25,18 +26,12 @@ const Settings     = lazy(() => import("./pages/Settings.jsx"));
 const Trucks       = lazy(() => import("./pages/Trucks.jsx"));
 const Drivers      = lazy(() => import("./pages/Drivers.jsx"));
 const Users        = lazy(() => import("./pages/Users.jsx"));
-const AdminAudit   = lazy(() => import("./pages/AdminAudit.jsx"));
-const NotFound     = lazy(() => import("./pages/NotFound.jsx"));
 const Login        = lazy(() => import("./pages/Login.jsx"));
-
-/* 🔹 Add this: Invite form component used by /admin/invite */
-const InviteUserForm = lazy(() => import("./components/InviteUserForm.jsx"));
-
-/* ---------------------- Invite/Password Flow Pages ----------------------- */
-const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx"));
 const SetPassword  = lazy(() => import("./pages/SetPassword.jsx"));
+const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx"));
+const NotFound     = lazy(() => import("./pages/NotFound.jsx"));
 
-/* ---------------------------- Scroll to Top ------------------------------- */
+/* ------------------------------- Scroll Helper ---------------------------- */
 function ScrollToTop() {
   const { pathname } = useLocation();
   useEffect(() => {
@@ -45,63 +40,68 @@ function ScrollToTop() {
   return null;
 }
 
-/* ------------------------------ App Router ------------------------------- */
-function AppRouter() {
+/* ----------------------------- Env Debug Logs ----------------------------- */
+function PingSupabaseEnv() {
+  useEffect(() => {
+    console.log("🔍 SUPABASE_URL =", import.meta.env.VITE_SUPABASE_URL);
+    console.log("🔍 FUNCTIONS_URL =", import.meta.env.VITE_SUPABASE_FUNCTIONS_URL);
+    console.log("🔍 ANON_KEY detected =", !!import.meta.env.VITE_SUPABASE_ANON_KEY);
+  }, []);
+  return null;
+}
+
+/* ---------------------------------- App ----------------------------------- */
+function AppRoutes() {
   return (
-    <BrowserRouter>
+    <Suspense fallback={<LoadingScreen label="Loading Atlas Command…" />}>
       <ScrollToTop />
-      <ErrorBoundary>
-        <SettingsProvider>
-          <Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-            <Routes>
+      <PingSupabaseEnv />
 
-              {/* ---------------------- Public / Onboarding Routes ---------------------- */}
-              <Route path="/login" element={<Login />} />
-              <Route path="/auth/callback" element={<AuthCallback />} />
-              <Route path="/set-password" element={<SetPassword />} />
+      <Routes>
+        {/* Public / auth routes */}
+        <Route path="/login" element={<Login />} />
+        <Route path="/set-password" element={<SetPassword />} />
+        <Route path="/auth/*" element={<AuthCallback />} />
 
-              {/* --------------------------- Guarded App --------------------------- */}
-              <Route element={<AuthGuard />}>
-                <Route element={<MainLayout />}>
-                  <Route index element={<Dashboard />} />
-                  <Route path="dashboard" element={<Dashboard />} />
-                  <Route path="loads" element={<Loads />} />
-                  <Route path="in-transit" element={<InTransit />} />
-                  <Route path="delivered" element={<Delivered />} />
-                  <Route path="problem-board" element={<ProblemBoard />} />
-                  <Route path="activity" element={<Activity />} />
-                  <Route path="settings" element={<Settings />} />
-                  <Route path="trucks" element={<Trucks />} />
-                  <Route path="drivers" element={<Drivers />} />
-                  <Route path="users" element={<Users />} />
-                  <Route path="admin/audit" element={<AdminAudit />} />
-                  <Route path="/admin/invite" element={<InviteUserForm />} />
+        {/* Protected app routes */}
+        <Route
+          path="/"
+          element={
+            <AuthGuard>
+              <MainLayout />
+            </AuthGuard>
+          }
+        >
+          <Route index element={<Dashboard />} />
+          <Route path="dashboard" element={<Navigate to="/" replace />} />
 
-                  {/* Legacy redirect */}
-                  <Route path="home" element={<Navigate to="/dashboard" replace />} />
+          <Route path="loads" element={<Loads />} />
+          <Route path="in-transit" element={<InTransit />} />
+          <Route path="delivered" element={<Delivered />} />
+          <Route path="problems" element={<ProblemBoard />} />
+          <Route path="activity" element={<Activity />} />
+          <Route path="users" element={<Users />} />
+          <Route path="settings" element={<Settings />} />
+          <Route path="trucks" element={<Trucks />} />
+          <Route path="drivers" element={<Drivers />} />
+        </Route>
 
-                  {/* In-layout 404 */}
-                  <Route path="*" element={<NotFound />} />
-                </Route>
-              </Route>
-
-              {/* --------------------------- Global 404 --------------------------- */}
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </Suspense>
-        </SettingsProvider>
-      </ErrorBoundary>
-    </BrowserRouter>
+        {/* 404 */}
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </Suspense>
   );
 }
 
-/* ---------------------------- Environment Logs ---------------------------- */
-console.log("🔍 SUPABASE_URL =", import.meta.env.VITE_SUPABASE_URL);
-console.log("🔍 FUNCTIONS_URL =", import.meta.env.VITE_FUNCTIONS_URL);
-
-/* ------------------------------- Mount App -------------------------------- */
+/* -------------------------------- Bootstrap ------------------------------- */
 ReactDOM.createRoot(document.getElementById("root")).render(
   <StrictMode>
-    <AppRouter />
+    <SettingsProvider>
+      <BrowserRouter>
+        <ErrorBoundary>
+          <AppRoutes />
+        </ErrorBoundary>
+      </BrowserRouter>
+    </SettingsProvider>
   </StrictMode>
 );
