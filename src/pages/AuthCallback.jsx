@@ -1,102 +1,138 @@
-// src/pages/AuthCallback.jsx
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { Loader2 } from "lucide-react";
 
 /**
- * AuthCallback
- * - Handles Supabase OAuth/email invite redirect.
- * - Guarantees a public.users row for the auth user.
- * - If profile is incomplete (missing full_name), redirects to /onboarding.
- * - Else, redirects to ?redirectTo=... or "/".
+ * Handles ALL Supabase auth callbacks:
+ * - invite / recovery: verifyOtp(token_hash) ➜ upsert users row ➜ /set-password
+ * - code (OAuth/PKCE): exchangeCodeForSession(code) ➜ upsert ➜ /
+ * - hash tokens (access_token in URL hash): setSession ➜ upsert ➜ /
+ *
+ * Make sure you have a route to this page, e.g.:
+ * <Route path="/auth/callback" element={<AuthCallback />} />
  */
 export default function AuthCallback() {
   const navigate = useNavigate();
-  const [params] = useSearchParams();
-  const [err, setErr] = useState("");
+  const [status, setStatus] = useState("Processing sign-in…");
 
   useEffect(() => {
-    let alive = true;
-
     (async () => {
       try {
-        // 1) Ensure we have a session after redirect
-        const { data: sessionData, error: sErr } = await supabase.auth.getSession();
-        if (sErr) throw sErr;
-        const session = sessionData?.session;
-        const user = session?.user;
+        const url = new URL(window.location.href);
+
+        // Params can arrive as search params (?type=invite&token_hash=...)
+        // or in the hash fragment (#access_token=...).
+        const search = url.searchParams;
+        const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
+
+        const type = search.get("type");           // "invite" | "recovery" | "magiclink" | ...
+        const token_hash = search.get("token_hash");
+        const code = search.get("code");           // OAuth/PKCE
+        const access_token = hashParams.get("access_token");
+        const refresh_token = hashParams.get("refresh_token");
+
+        console.log("[AuthCallback] incoming params", { type, token_hash, code, access_token: !!access_token });
+
+        let session = null;
+        let user = null;
+
+        if (type && token_hash) {
+          // Handle invite / recovery / magiclink / email_change via verifyOtp
+          setStatus(`Verifying ${type} link…`);
+          const { data, error } = await supabase.auth.verifyOtp({ type, token_hash });
+          if (error) {
+            console.error("[AuthCallback] verifyOtp error", error);
+            throw error;
+          }
+          session = data.session ?? null;
+          user = data.user ?? session?.user ?? null;
+          console.log("[AuthCallback] verifyOtp ok", { hasSession: !!session, hasUser: !!user });
+
+        } else if (code) {
+          // OAuth/PKCE callback
+          setStatus("Exchanging authorization code…");
+          const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) {
+            console.error("[AuthCallback] exchangeCodeForSession error", error);
+            throw error;
+          }
+          session = data.session;
+          user = data.user ?? session?.user ?? null;
+          console.log("[AuthCallback] exchangeCodeForSession ok");
+
+        } else if (access_token && refresh_token) {
+          // Hash tokens flow
+          setStatus("Restoring session…");
+          const { data, error } = await supabase.auth.setSession({ access_token, refresh_token });
+          if (error) {
+            console.error("[AuthCallback] setSession error", error);
+            throw error;
+          }
+          session = data.session;
+          user = data.user ?? session?.user ?? null;
+          console.log("[AuthCallback] setSession ok");
+
+        } else {
+          // Nothing we can handle — send to login
+          console.warn("[AuthCallback] No recognizable params, redirecting to /login");
+          navigate("/login", { replace: true });
+          return;
+        }
+
         if (!user) {
-          // no session -> go to login
-          navigate("/login");
-          return;
+          // In some cases session exists but user is null; refetch.
+          const { data: usr, error: uerr } = await supabase.auth.getUser();
+          if (uerr) {
+            console.error("[AuthCallback] getUser error", uerr);
+            throw uerr;
+          }
+          user = usr.user;
         }
 
-        // 2) Make sure a public.users row exists for this auth user (id=email sync)
-        //    (If your trigger already creates it, select will just find it.)
-        const { data: row, error: selErr } = await supabase
+        // Upsert the user's row for onboarding (RLS requires id = auth.uid()).
+        // This pairs with the policies we just installed.
+        setStatus("Finalizing account…");
+        const profile = {
+          id: user.id,
+          email: user.email,
+          // add safe defaults; these columns can be optional in your schema
+          full_name: user.user_metadata?.full_name ?? null,
+          is_admin: false, // admins can promote later
+          updated_at: new Date().toISOString(),
+        };
+
+        const { error: upsertErr } = await supabase
           .from("users")
-          .select("id, email, full_name")
-          .eq("id", user.id)
-          .single();
-
-        if (selErr && selErr.code !== "PGRST116") throw selErr; // ignore "not found"
-
-        if (!row) {
-          // Create a minimal row so onboarding can upsert cleanly
-          const seed = {
-            id: user.id,
-            email: user.email,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          };
-          const { error: insErr } = await supabase.from("users").insert(seed);
-          if (insErr && insErr.code !== "23505") throw insErr; // ignore dup
+          .upsert(profile, { onConflict: "id" }); // hits /rest/v1/users?on_conflict=id
+        if (upsertErr) {
+          console.error("[AuthCallback] users upsert error", upsertErr);
+          throw upsertErr;
         }
 
-        // 3) Re-read to check completeness
-        const { data: check, error: checkErr } = await supabase
-          .from("users")
-          .select("full_name")
-          .eq("id", user.id)
-          .single();
-        if (checkErr) throw checkErr;
-
-        const forceOnboard = params.get("onboard") === "1"; // optional escape hatch
-        const needsOnboarding = forceOnboard || !check?.full_name || !String(check.full_name).trim();
-
-        if (!alive) return;
-
-        if (needsOnboarding) {
-          navigate("/onboarding", { replace: true });
-          return;
+        // Routing rules
+        if (type === "invite" || type === "recovery") {
+          // brand-new / password reset: send to Set Password flow
+          setStatus("Redirecting to set your password…");
+          navigate("/set-password", { replace: true });
+        } else {
+          // all other cases
+          setStatus("Signed in. Redirecting…");
+          navigate("/", { replace: true });
         }
-
-        // 4) Otherwise go where they intended (if provided), else dashboard
-        const dest = params.get("redirectTo") || "/";
-        navigate(dest, { replace: true });
-      } catch (e) {
-        console.error(e);
-        if (!alive) return;
-        setErr(e.message || "Authentication callback failed.");
-        // Soft fallback after a short pause
-        setTimeout(() => navigate("/"), 1200);
+      } catch (err) {
+        console.error("[AuthCallback] Fatal error", err);
+        setStatus(err?.message || "Something went wrong during sign-in.");
+        // Give the user an escape hatch
+        setTimeout(() => navigate("/login", { replace: true }), 2500);
       }
     })();
-
-    return () => {
-      alive = false;
-    };
-  }, [navigate, params]);
+  }, [navigate]);
 
   return (
-    <div className="p-6 md:p-8">
-      <div className="mx-auto max-w-md rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-8 text-center">
-        <Loader2 className="size-6 animate-spin inline-block mr-2" />
-        Finishing sign-in…
-        {err ? (
-          <div className="mt-3 text-red-600 dark:text-red-300 text-sm">{err}</div>
-        ) : null}
+    <div className="min-h-screen w-full grid place-items-center">
+      <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/60 p-8 max-w-md w-full">
+        <h1 className="text-xl font-semibold mb-2">Signing you in…</h1>
+        <p className="text-sm text-zinc-300">{status}</p>
       </div>
     </div>
   );
