@@ -1,5 +1,5 @@
 // src/main.jsx
-import React, { StrictMode, Suspense, lazy, useEffect } from "react";
+import React, { StrictMode, Suspense, lazy } from "react";
 import ReactDOM from "react-dom/client";
 import {
   BrowserRouter,
@@ -16,40 +16,75 @@ import { SettingsProvider } from "./context/SettingsProvider.jsx";
 import AuthGuard from "./components/AuthGuard.jsx";
 
 /* ---------------------------- Lazy-loaded pages --------------------------- */
-const Dashboard    = lazy(() => import("./pages/Dashboard.jsx"));
-const Loads        = lazy(() => import("./pages/Loads.jsx"));
-const InTransit    = lazy(() => import("./pages/InTransit.jsx"));
-const Delivered    = lazy(() => import("./pages/Delivered.jsx"));
-const ProblemBoard = lazy(() => import("./pages/ProblemBoard.jsx"));
-const Activity     = lazy(() => import("./pages/Activity.jsx"));
-const Settings     = lazy(() => import("./pages/Settings.jsx"));
-const Trucks       = lazy(() => import("./pages/Trucks.jsx"));
-const Drivers      = lazy(() => import("./pages/Drivers.jsx"));
-const Users        = lazy(() => import("./pages/Users.jsx"));   // your full page we just built
-const AdminAudit   = lazy(() => import("./pages/AdminAudit.jsx").catch(() => ({ default: () => <div className="p-6">Admin Audit temporarily unavailable</div> })));
-const Login        = lazy(() => import("./pages/Login.jsx"));
-const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx")); // just added
-const SetPassword  = lazy(() => import("./pages/SetPassword.jsx"));  // just added
-const NotFound     = lazy(() => import("./pages/NotFound.jsx").catch(() => ({ default: () => <div className="p-6">Not found</div> })));
+const Dashboard     = lazy(() => import("./pages/Dashboard.jsx"));
+const Loads         = lazy(() => import("./pages/Loads.jsx"));
+const InTransit     = lazy(() => import("./pages/InTransit.jsx"));
+const Delivered     = lazy(() => import("./pages/Delivered.jsx"));
+const ProblemBoard  = lazy(() => import("./pages/ProblemBoard.jsx"));
+const Activity      = lazy(() => import("./pages/Activity.jsx"));
+const Settings      = lazy(() => import("./pages/Settings.jsx"));
+const Trucks        = lazy(() => import("./pages/Trucks.jsx"));
+const Drivers       = lazy(() => import("./pages/Drivers.jsx"));
+const Users         = lazy(() => import("./pages/Users.jsx"));
+const Login         = lazy(() => import("./pages/Login.jsx"));
+const SetPassword   = lazy(() => import("./pages/SetPassword.jsx"));
+const AuthCallback  = lazy(() => import("./pages/AuthCallback.jsx"));
+const Onboarding    = lazy(() => import("./pages/Onboarding.jsx"));
+const NotFound      = lazy(() => import("./pages/NotFound.jsx"));
 
-/* ------------------------------ Helpers ---------------------------------- */
+/* ------------------------------- Utilities -------------------------------- */
 function ScrollToTop() {
   const { pathname } = useLocation();
-  useEffect(() => { window.scrollTo(0, 0); }, [pathname]);
+  React.useEffect(() => {
+    try { window.scrollTo({ top: 0, behavior: "instant" }); } catch { window.scrollTo(0, 0); }
+  }, [pathname]);
   return null;
 }
 
+/**
+ * HashAuthBridge
+ * If Supabase drops us on "/#access_token=..." (implicit flow),
+ * immediately forward that hash to "/auth/callback".
+ */
+function HashAuthBridge() {
+  React.useEffect(() => {
+    const { pathname, hash } = window.location;
+    if (
+      pathname === "/" &&
+      hash &&
+      /access_token|refresh_token|type=recovery|code=/i.test(hash)
+    ) {
+      // preserve the entire hash when forwarding
+      window.location.replace(`/auth/callback${hash}`);
+    }
+  }, []);
+  return null;
+}
+
+/* --------------------------------- App ------------------------------------ */
 function AppRoutes() {
   return (
-    <ErrorBoundary>
-      <Suspense fallback={<div className="p-6 text-sm text-zinc-400">Loading…</div>}>
+    <BrowserRouter basename="/">
+      <HashAuthBridge />
+      <ScrollToTop />
+      <ErrorBoundary>
         <Routes>
-          {/* ---------- Public / semi-public routes (NO AuthGuard) ---------- */}
-          <Route path="/login" element={<Login />} />
-          <Route path="/auth/callback" element={<AuthCallback />} />
-          <Route path="/set-password" element={<SetPassword />} />
+          {/* ------------------------ Public / Auth routes ------------------------ */}
+          <Route path="/login" element={<Suspense fallback={null}><Login /></Suspense>} />
+          <Route path="/set-password" element={<Suspense fallback={null}><SetPassword /></Suspense>} />
+          <Route path="/auth/callback" element={<Suspense fallback={null}><AuthCallback /></Suspense>} />
 
-          {/* ----------------------- Protected app ------------------------- */}
+          {/* ---------------- Onboarding (must be authenticated) ----------------- */}
+          <Route
+            path="/onboarding"
+            element={
+              <AuthGuard>
+                <Suspense fallback={null}><Onboarding /></Suspense>
+              </AuthGuard>
+            }
+          />
+
+          {/* -------------------------- Protected app ---------------------------- */}
           <Route
             path="/"
             element={
@@ -58,47 +93,34 @@ function AppRoutes() {
               </AuthGuard>
             }
           >
-            <Route index element={<Dashboard />} />
-            <Route path="loads" element={<Loads />} />
-            <Route path="in-transit" element={<InTransit />} />
-            <Route path="delivered" element={<Delivered />} />
-            <Route path="problem-board" element={<ProblemBoard />} />
-            <Route path="activity" element={<Activity />} />
-            <Route path="settings" element={<Settings />} />
-            <Route path="trucks" element={<Trucks />} />
-            <Route path="drivers" element={<Drivers />} />
-            <Route path="users" element={<Users />} />
-            <Route path="admin/audit" element={<AdminAudit />} />
+            <Route index element={<Suspense fallback={null}><Dashboard /></Suspense>} />
+            <Route path="loads" element={<Suspense fallback={null}><Loads /></Suspense>} />
+            <Route path="in-transit" element={<Suspense fallback={null}><InTransit /></Suspense>} />
+            <Route path="delivered" element={<Suspense fallback={null}><Delivered /></Suspense>} />
+            <Route path="problem-board" element={<Suspense fallback={null}><ProblemBoard /></Suspense>} />
+            <Route path="activity" element={<Suspense fallback={null}><Activity /></Suspense>} />
+            <Route path="settings" element={<Suspense fallback={null}><Settings /></Suspense>} />
+            <Route path="trucks" element={<Suspense fallback={null}><Trucks /></Suspense>} />
+            <Route path="drivers" element={<Suspense fallback={null}><Drivers /></Suspense>} />
+            {/* Users at BOTH /users and /admin/users */}
+            <Route path="users" element={<Suspense fallback={null}><Users /></Suspense>} />
+            <Route path="admin/users" element={<Suspense fallback={null}><Users /></Suspense>} />
           </Route>
 
-          {/* ------------------------ Fallbacks ---------------------------- */}
-          <Route path="/home" element={<Navigate to="/" replace />} />
-          <Route path="*" element={<NotFound />} />
+          {/* ------------------------------- 404 --------------------------------- */}
+          <Route path="/dashboard" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<Suspense fallback={null}><NotFound /></Suspense>} />
         </Routes>
-      </Suspense>
-    </ErrorBoundary>
+      </ErrorBoundary>
+    </BrowserRouter>
   );
 }
 
-function App() {
-  // (optional) small env logger to confirm vars at runtime
-  useEffect(() => {
-    try {
-      console.log("🔍 SUPABASE_URL =", import.meta.env.VITE_SUPABASE_URL);
-      console.log("🔍 ANON_KEY detected =", !!import.meta.env.VITE_SUPABASE_ANON_KEY);
-    } catch {}
-  }, []);
-
-  return (
-    <StrictMode>
-      <SettingsProvider>
-        <BrowserRouter>
-          <ScrollToTop />
-          <AppRoutes />
-        </BrowserRouter>
-      </SettingsProvider>
-    </StrictMode>
-  );
-}
-
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+/* --------------------------------- Mount ---------------------------------- */
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <StrictMode>
+    <SettingsProvider>
+      <AppRoutes />
+    </SettingsProvider>
+  </StrictMode>
+);
