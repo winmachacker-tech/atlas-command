@@ -1,8 +1,8 @@
 // src/pages/Onboarding.jsx
-// v3 – fully null-safe; no direct `.trim()` on unknowns anywhere.
+// v4 – adds requireAuth() before save; fully null-safe everywhere.
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "../lib/supabase";
+import { supabase, requireAuth } from "../lib/supabase";
 import { Loader2, Upload, CheckCircle2, XCircle } from "lucide-react";
 
 /* ------------------------------- safe utils ------------------------------- */
@@ -129,14 +129,20 @@ export default function Onboarding() {
 
   const handleSubmit = async (e) => {
     e?.preventDefault?.();
-    if (!session?.user?.id) return;
-
     setSaving(true);
     setMsg(null);
 
     try {
+      // 🔐 Ensure a valid session/JWT before write (fixes 403 when anon)
+      await requireAuth();
+
+      // Re-check we have the user id
+      const { data: s } = await supabase.auth.getSession();
+      const uid = s?.session?.user?.id;
+      if (!uid) throw new Error("Not authenticated. Please sign in again.");
+
       const payload = {
-        id: session.user.id,
+        id: uid,
         full_name: ST(form.full_name),
         phone: NZ(form.phone) ? ST(form.phone) : null,
         job_title: NZ(form.job_title) ? ST(form.job_title) : null,
@@ -166,7 +172,6 @@ export default function Onboarding() {
     }
   };
 
-  // safe check without .trim()
   const canSave = NZ(form.full_name);
 
   if (loadingAuth || loadingUser) {
