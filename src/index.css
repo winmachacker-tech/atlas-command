@@ -1,4 +1,99 @@
-@import "tailwindcss";
+/* src/index.css */
 
-:root { color-scheme: light dark; }
-html, body, #root { height: 100%; }
+/* ------------------------------ Tailwind core ------------------------------ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------- Foundations ------------------------------ */
+:root {
+  color-scheme: dark;
+  --ac-bg: #0a0a0b;         /* zinc-950-ish */
+  --ac-card: rgba(12, 12, 13, 0.7);
+  --ac-border: rgba(39, 39, 42, 0.8); /* zinc-800/80 */
+  --ac-text: #fafafa;        /* zinc-50 */
+  --ac-muted: #a1a1aa;       /* zinc-400 */
+}
+
+/* Ensure the app always has height so grids/charts resolve > 0 size */
+html, body, #root {
+  height: 100%;
+  min-height: 100dvh;
+}
+
+html, body {
+  background: var(--ac-bg);
+  color: var(--ac-text);
+}
+
+/* Improve text rendering a bit */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Vite mount root should never collapse */
+#root {
+  display: flex;
+  flex-direction: column;
+  background: var(--ac-bg);
+}
+
+/* --------------------------- Enterprise polish ---------------------------- */
+
+/* Subtle scrollbars (non-intrusive, dark friendly) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent; /* zinc-700 on transparent */
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #3f3f46; /* zinc-700 */
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #52525b; /* zinc-600 */
+  background-clip: content-box;
+}
+
+/* Cards & panel base (optional utility if you want to reuse outside Tailwind) */
+.ac-card {
+  background: var(--ac-card);
+  border: 1px solid var(--ac-border);
+  border-radius: 16px;
+  backdrop-filter: blur(6px);
+}
+
+/* Prevent charts/tables from reporting width/height = -1 */
+.recharts-wrapper, .recharts-responsive-container {
+  min-width: 0;    /* allow flex shrink properly */
+  min-height: 200px;
+}
+
+/* Fix for flex children overflowing (common with dashboards) */
+.min-w-0 { min-width: 0 !important; }
+.min-h-0 { min-height: 0 !important; }
+
+/* Typography tweaks for small labels */
+label, small, .muted { color: var(--ac-muted); }
+
+/* Links */
+a { color: inherit; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Safe-area helper */
+.safe-area {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}

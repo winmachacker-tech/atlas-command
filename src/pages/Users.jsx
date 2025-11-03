@@ -1,429 +1,372 @@
 // src/pages/Users.jsx
-// Full drop-in page (401 fix):
-// - Invite modal now uses `supabase.functions.invoke('admin-invite-user', { body })`
-//   so the Authorization/apikey headers are automatically included (no more 401).
-// - Shows invite link, Resend status, copy/open actions.
-// - Users table reading from public.users.
-//
-// Requirements:
-// - src/lib/supabase.js exports an initialized v2 client
-// - VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY set in your env
-// - Edge Function deployed: /functions/v1/admin-invite-user
-
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
-  Loader2, Search, Filter, Plus, RefreshCcw, X, Check, Copy, Mail, Link as LinkIcon, AlertCircle,
-  UserCircle2
+  Loader2,
+  Search,
+  Plus,
+  MailPlus,
+  ShieldCheck,
+  Shield,
+  X,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 
-/* ---------------------------- Utilities & UI bits --------------------------- */
-
+/* --------------------------------- helpers -------------------------------- */
 function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
 
-function EmptyState({ title = "No data", subtitle = "Nothing to show yet." }) {
+function Badge({ tone = "zinc", className = "", children }) {
+  const map = {
+    zinc: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700",
+    green:
+      "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800",
+    red: "bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300 border border-red-200/60 dark:border-red-800",
+    blue: "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800",
+  };
   return (
-    <div className="flex flex-col items-center justify-center py-16 text-center">
-      <UserCircle2 className="mb-3" size={40} />
-      <div className="text-lg font-medium">{title}</div>
-      <div className="text-sm text-zinc-400">{subtitle}</div>
-    </div>
+    <span
+      className={cx(
+        "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs",
+        map[tone] || map.zinc,
+        className
+      )}
+    >
+      {children}
+    </span>
   );
 }
 
-/* -------------------------------- Invite Modal ------------------------------ */
+/* --------------------------------- page ---------------------------------- */
+export default function UsersPage() {
+  const [meIsAdmin, setMeIsAdmin] = useState(false);
+  const [loadingMe, setLoadingMe] = useState(true);
 
-function InviteUserModal({ open, onClose }) {
-  const [email, setEmail] = useState("");
-  const [fullName, setFullName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  const [result, setResult] = useState(null); // success JSON
-  const [err, setErr] = useState(null);       // error JSON/message
-
-  if (!open) return null;
-
-  async function onSubmit(e) {
-    e.preventDefault();
-    setLoading(true);
-    setErr(null);
-    setResult(null);
-    setCopied(false);
-
-    try {
-      const { data, error } = await supabase.functions.invoke("admin-invite-user", {
-        body: {
-          email,
-          full_name: fullName || undefined,
-          phone: phone || undefined,
-        },
-      });
-
-      if (error || data?.ok === false) {
-        // Surface exact details from function
-        setErr(data?.detail || data || error || { message: "Unknown error" });
-      } else {
-        setResult(data);
-      }
-    } catch (e) {
-      setErr({ message: e?.message || String(e) });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function copyLink() {
-    if (!result?.invite_link) return;
-    try {
-      await navigator.clipboard.writeText(result.invite_link);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {}
-  }
-
-  function closeAll() {
-    setEmail("");
-    setFullName("");
-    setPhone("");
-    setResult(null);
-    setErr(null);
-    setCopied(false);
-    onClose?.();
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="w-full max-w-lg rounded-2xl bg-zinc-900 text-zinc-100 shadow-2xl ring-1 ring-white/10">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
-          <h2 className="text-lg font-semibold">Invite User</h2>
-          <button
-            onClick={closeAll}
-            className="p-2 rounded-lg hover:bg-white/5 transition"
-            aria-label="Close"
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        <form onSubmit={onSubmit} className="px-5 py-4 space-y-4">
-          <div>
-            <label className="block text-sm mb-1">Email</label>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="user@company.com"
-              className="w-full rounded-xl bg-zinc-800 border border-white/10 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm mb-1">Full name (optional)</label>
-              <input
-                type="text"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                placeholder="Jane Doe"
-                className="w-full rounded-xl bg-zinc-800 border border-white/10 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm mb-1">Phone (optional)</label>
-              <input
-                type="tel"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="+1 555 123 4567"
-                className="w-full rounded-xl bg-zinc-800 border border-white/10 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between pt-2">
-            <button
-              type="button"
-              onClick={closeAll}
-              className="px-4 py-2 rounded-xl border border-white/10 hover:bg-white/5 transition"
-            >
-              Cancel
-            </button>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60"
-            >
-              {loading ? <Loader2 className="animate-spin" size={18} /> : <Mail size={18} />}
-              Send Invite
-            </button>
-          </div>
-        </form>
-
-        {/* Success */}
-        {result && (
-          <div className="px-5 py-4 border-t border-white/10 space-y-3">
-            <div className="flex items-start gap-3">
-              <div className="mt-0.5 text-green-400">
-                <Check size={18} />
-              </div>
-              <div>
-                <div className="font-medium">Invite generated</div>
-                <div className="text-sm text-zinc-300">
-                  Mode: <span className="font-mono">{result.mode}</span>
-                </div>
-                {"email_sent_via_resend" in result && (
-                  <div className="text-sm text-zinc-300">
-                    Email sent via Resend:{" "}
-                    <span className={result.email_sent_via_resend ? "text-green-400" : "text-zinc-300"}>
-                      {String(!!result.email_sent_via_resend)}
-                    </span>
-                  </div>
-                )}
-                {result.email_error && (
-                  <div className="text-sm text-amber-400">
-                    Email error: {result.email_error}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {result.invite_link && (
-              <div className="rounded-xl bg-zinc-800 border border-white/10 p-3">
-                <div className="flex items-start gap-2">
-                  <LinkIcon size={16} className="mt-1 shrink-0" />
-                  <div className="text-xs break-all">{result.invite_link}</div>
-                </div>
-                <div className="mt-3 flex items-center gap-2">
-                  <button
-                    onClick={copyLink}
-                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/10 hover:bg-white/5"
-                  >
-                    {copied ? <Check size={16} /> : <Copy size={16} />}
-                    {copied ? "Copied" : "Copy Link"}
-                  </button>
-                  <a
-                    href={result.invite_link}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/10 hover:bg-white/5"
-                  >
-                    <LinkIcon size={16} />
-                    Open
-                  </a>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Error */}
-        {err && (
-          <div className="px-5 py-4 border-t border-white/10">
-            <div className="flex items-start gap-3 text-rose-300">
-              <AlertCircle className="mt-0.5 shrink-0" size={18} />
-              <div className="space-y-1">
-                <div className="font-medium text-rose-300">Invite failed</div>
-                <pre className="text-xs whitespace-pre-wrap break-words bg-rose-950/40 border border-rose-900/40 rounded-lg p-2 text-rose-200">
-{JSON.stringify(err, null, 2)}
-                </pre>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* -------------------------------- Users Page -------------------------------- */
-
-export default function Users() {
-  const [inviteOpen, setInviteOpen] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [q, setQ] = useState("");
-  const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
-  const [err, setErr] = useState(null);
+  const [loadingRows, setLoadingRows] = useState(true);
+  const [err, setErr] = useState("");
 
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteSending, setInviteSending] = useState(false);
+  const [inviteMsg, setInviteMsg] = useState(null); // {ok:boolean, text:string}
+
+  /* ----------------------------- load my admin ---------------------------- */
   useEffect(() => {
     let alive = true;
     (async () => {
-      setLoading(true);
-      setErr(null);
+      setLoadingMe(true);
+      try {
+        const { data: session } = await supabase.auth.getSession();
+        const uid = session?.session?.user?.id;
+        if (!uid) throw new Error("Not authenticated.");
+
+        // Your schema: public.users has boolean column is_admin
+        const { data, error } = await supabase
+          .from("users")
+          .select("is_admin")
+          .eq("id", uid)
+          .single();
+
+        if (error) throw error;
+        if (!alive) return;
+        setMeIsAdmin(Boolean(data?.is_admin));
+      } catch (e) {
+        if (!alive) return;
+        console.error(e);
+        // Fail closed: no admin features if we can't confirm
+        setMeIsAdmin(false);
+      } finally {
+        if (alive) setLoadingMe(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /* ------------------------------- load rows ------------------------------ */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoadingRows(true);
+      setErr("");
       try {
         const { data, error } = await supabase
           .from("users")
-          .select("id, email, full_name, phone, role, is_admin, created_at, updated_at")
-          .order("created_at", { ascending: false });
-
+          .select("id,email,full_name,is_admin,created_at,last_sign_in_at")
+          .order("created_at", { ascending: false })
+          .limit(200);
+        if (error) throw error;
         if (!alive) return;
-        if (error) {
-          setErr(error);
-          setRows([]);
-        } else {
-          setRows(Array.isArray(data) ? data : []);
-        }
+        setRows(data || []);
       } catch (e) {
         if (!alive) return;
-        setErr({ message: e?.message || String(e) });
+        console.error(e);
+        setErr(e.message || "Failed to load users.");
       } finally {
-        if (alive) setLoading(false);
+        if (alive) setLoadingRows(false);
       }
     })();
-    return () => { alive = false; };
-  }, [refreshKey]);
+    return () => {
+      alive = false;
+    };
+  }, []);
 
+  /* ---------------------------- invite handling --------------------------- */
+  const openInvite = () => {
+    setInviteMsg(null);
+    setInviteEmail("");
+    setInviteOpen(true);
+  };
+
+  const sendInvite = async (e) => {
+    e?.preventDefault?.();
+    if (!inviteEmail) return;
+
+    setInviteSending(true);
+    setInviteMsg(null);
+    try {
+      // IMPORTANT: this calls your Edge Function. No “configure flow” here.
+      const { data, error } = await supabase.functions.invoke(
+        "admin-invite-user",
+        {
+          body: { email: inviteEmail },
+        }
+      );
+      if (error) throw error;
+
+      // If your function returns a code like {status:'already_configured'} we treat it as success.
+      const msg =
+        data?.message ||
+        data?.status ||
+        "Invite sent. If the user already exists, they will receive an email.";
+
+      setInviteMsg({ ok: true, text: String(msg) });
+      // optionally refresh list after short delay
+      setTimeout(async () => {
+        const { data: refreshed } = await supabase
+          .from("users")
+          .select("id,email,full_name,is_admin,created_at,last_sign_in_at")
+          .order("created_at", { ascending: false })
+          .limit(200);
+        setRows(refreshed || []);
+      }, 600);
+    } catch (e) {
+      console.error(e);
+      // Normalize the “Invite flow already configured” message as non-fatal
+      const txt = String(e?.message || e);
+      if (/already configured/i.test(txt)) {
+        setInviteMsg({
+          ok: true,
+          text: "Invite flow already configured. You can continue inviting users.",
+        });
+      } else {
+        setInviteMsg({ ok: false, text: txt });
+      }
+    } finally {
+      setInviteSending(false);
+    }
+  };
+
+  const [q, setQ] = useState("");
   const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((r) =>
-      (r.email || "").toLowerCase().includes(needle) ||
-      (r.full_name || "").toLowerCase().includes(needle) ||
-      (r.phone || "").toLowerCase().includes(needle) ||
-      (r.role || "").toLowerCase().includes(needle)
+    if (!q) return rows;
+    const s = q.toLowerCase();
+    return rows.filter(
+      (r) =>
+        r.email?.toLowerCase().includes(s) ||
+        r.full_name?.toLowerCase().includes(s)
     );
-  }, [q, rows]);
+  }, [rows, q]);
 
   return (
-    <div className="p-4 md:p-6">
-      {/* Header row */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-        <div className="text-xl font-semibold">Users</div>
+    <div className="p-6 md:p-8 space-y-6">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold">Users</h1>
+          <p className="text-sm text-zinc-500">
+            Manage team members and access.
+          </p>
+        </div>
+
+        {/* Invite button only for admins */}
+        {!loadingMe && meIsAdmin ? (
+          <button
+            onClick={openInvite}
+            className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-4 py-2 text-sm shadow-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
+          >
+            <Plus className="size-4" />
+            Invite User
+          </button>
+        ) : null}
+      </div>
+
+      <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 shadow-sm">
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2 rounded-xl bg-zinc-900 border border-white/10 px-3 py-2">
-            <Search size={16} className="text-zinc-400" />
+          <div className="relative flex-1">
+            <Search className="size-4 absolute left-3 top-2.5 text-zinc-400" />
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search users…"
-              className="bg-transparent outline-none text-sm w-56"
+              placeholder="Search by name or email"
+              className="w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent pl-9 pr-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500/30"
             />
-            <button
-              className="px-2 py-1 rounded-lg hover:bg-white/5 transition"
-              title="Filters (placeholder)"
-            >
-              <Filter size={16} />
-            </button>
           </div>
-          <button
-            onClick={() => setRefreshKey((x) => x + 1)}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-white/10 hover:bg-white/5"
-            title="Refresh"
-          >
-            <RefreshCcw size={16} />
-            Refresh
-          </button>
-          <button
-            onClick={() => setInviteOpen(true)}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500"
-            title="Invite user"
-          >
-            <Plus size={16} />
-            Invite
-          </button>
         </div>
-      </div>
 
-      {/* Content */}
-      <div className="rounded-2xl bg-zinc-900 border border-white/10 overflow-hidden">
-        <div className="w-full overflow-x-auto">
+        <div className="mt-4 overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-zinc-950/40 border-b border-white/10 text-zinc-300">
-              <tr>
-                <th className="text-left font-medium px-4 py-3">Email</th>
-                <th className="text-left font-medium px-4 py-3">Name</th>
-                <th className="text-left font-medium px-4 py-3">Phone</th>
-                <th className="text-left font-medium px-4 py-3">Role</th>
-                <th className="text-left font-medium px-4 py-3">Admin</th>
-                <th className="text-left font-medium px-4 py-3">Created</th>
+            <thead>
+              <tr className="text-left text-zinc-500">
+                <th className="py-2 pr-3">Name</th>
+                <th className="py-2 pr-3">Email</th>
+                <th className="py-2 pr-3">Role</th>
+                <th className="py-2 pr-3">Created</th>
+                <th className="py-2 pr-3">Last sign-in</th>
               </tr>
             </thead>
             <tbody>
-              {loading && (
+              {loadingRows ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-zinc-400">
-                    <div className="inline-flex items-center gap-2">
-                      <Loader2 className="animate-spin" size={16} />
-                      Loading…
-                    </div>
+                  <td colSpan={5} className="py-8 text-center">
+                    <Loader2 className="size-5 animate-spin inline-block mr-2" />
+                    Loading users…
                   </td>
                 </tr>
-              )}
-
-              {!loading && err && (
+              ) : err ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8">
-                    <div className="rounded-xl border border-rose-900/40 bg-rose-950/40 p-4 text-rose-200">
-                      <div className="flex items-start gap-2">
-                        <AlertCircle className="mt-0.5" size={18} />
-                        <div className="space-y-1">
-                          <div className="font-medium">Error loading users</div>
-                          <pre className="text-xs whitespace-pre-wrap break-words">
-{JSON.stringify(err, null, 2)}
-                          </pre>
-                        </div>
-                      </div>
-                    </div>
+                  <td colSpan={5} className="py-4 text-red-600">
+                    {err}
                   </td>
                 </tr>
-              )}
-
-              {!loading && !err && filtered.length === 0 && (
+              ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8">
-                    <EmptyState
-                      title="No users found"
-                      subtitle={q ? `No results for “${q}”.` : "Invite your first teammate."}
-                    />
+                  <td colSpan={5} className="py-6 text-center text-zinc-500">
+                    No users found.
                   </td>
                 </tr>
-              )}
-
-              {!loading && !err && filtered.map((u) => (
-                <tr key={u.id} className="border-b border-white/5">
-                  <td className="px-4 py-3">{u.email || "—"}</td>
-                  <td className="px-4 py-3">{u.full_name || "—"}</td>
-                  <td className="px-4 py-3">{u.phone || "—"}</td>
-                  <td className="px-4 py-3">{u.role || "—"}</td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={cx(
-                        "inline-flex items-center px-2 py-0.5 rounded-md text-xs",
-                        u.is_admin
-                          ? "bg-emerald-500/15 text-emerald-300 border border-emerald-400/20"
-                          : "bg-zinc-700/30 text-zinc-300 border border-white/10"
+              ) : (
+                filtered.map((u) => (
+                  <tr
+                    key={u.id}
+                    className="border-t border-zinc-100 dark:border-zinc-800"
+                  >
+                    <td className="py-2 pr-3">{u.full_name || "—"}</td>
+                    <td className="py-2 pr-3">{u.email}</td>
+                    <td className="py-2 pr-3">
+                      {u.is_admin ? (
+                        <Badge tone="blue">
+                          <ShieldCheck className="size-3" />
+                          Admin
+                        </Badge>
+                      ) : (
+                        <Badge tone="zinc">
+                          <Shield className="size-3" />
+                          User
+                        </Badge>
                       )}
-                    >
-                      {u.is_admin ? "Yes" : "No"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    {u.created_at
-                      ? new Date(u.created_at).toLocaleString()
-                      : "—"}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {u.created_at
+                        ? new Date(u.created_at).toLocaleString()
+                        : "—"}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {u.last_sign_in_at
+                        ? new Date(u.last_sign_in_at).toLocaleString()
+                        : "—"}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Invite Modal */}
-      <InviteUserModal
-        open={inviteOpen}
-        onClose={() => {
-          setInviteOpen(false);
-          // After invite, refresh; if the user completes sign-up later you still have minimal row
-          setTimeout(() => setRefreshKey((x) => x + 1), 500);
-        }}
-      />
+      {/* ---------------------------- Invite Modal ---------------------------- */}
+      {inviteOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setInviteOpen(false)}
+          />
+          <div className="relative w-full max-w-md rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-xl">
+            <div className="flex items-center justify-between">
+              <div className="text-base font-semibold">Invite a user</div>
+              <button
+                className="rounded-lg p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                onClick={() => setInviteOpen(false)}
+                aria-label="Close"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <form onSubmit={sendInvite} className="mt-4 space-y-3">
+              <label className="block text-sm">
+                Email
+                <input
+                  type="email"
+                  required
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  placeholder="user@company.com"
+                  className="mt-1 w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500/30"
+                />
+              </label>
+
+              {inviteMsg ? (
+                <div
+                  className={cx(
+                    "flex items-center gap-2 rounded-lg px-3 py-2 text-sm border",
+                    inviteMsg.ok
+                      ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 border-emerald-200/60 dark:border-emerald-800"
+                      : "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border-red-200/60 dark:border-red-800"
+                  )}
+                >
+                  {inviteMsg.ok ? (
+                    <CheckCircle2 className="size-4" />
+                  ) : (
+                    <XCircle className="size-4" />
+                  )}
+                  <span>{inviteMsg.text}</span>
+                </div>
+              ) : null}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setInviteOpen(false)}
+                  className="rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-4 py-2 text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={inviteSending}
+                  className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-blue-600 text-white px-4 py-2 text-sm hover:bg-blue-700 disabled:opacity-60"
+                >
+                  {inviteSending ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Sending…
+                    </>
+                  ) : (
+                    <>
+                      <MailPlus className="size-4" />
+                      Send invite
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

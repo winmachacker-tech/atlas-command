@@ -1,133 +1,266 @@
-import { useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+// src/pages/Onboarding.jsx
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-
-function phoneMask(v) {
-  // lightweight masking: digits only -> (xxx) xxx-xxxx
-  const d = (v || "").replace(/\D/g, "").slice(0, 10);
-  const p1 = d.slice(0,3), p2 = d.slice(3,6), p3 = d.slice(6,10);
-  if (d.length <= 3) return p1;
-  if (d.length <= 6) return `(${p1}) ${p2}`;
-  return `(${p1}) ${p2}-${p3}`;
-}
+import { Loader2, Upload, CheckCircle2, XCircle } from "lucide-react";
 
 export default function Onboarding() {
-  const [fullName, setFullName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [employeeId, setEmployeeId] = useState("");
-  const [busy, setBusy] = useState(false);
-  const nav = useNavigate();
-  const location = useLocation();
-  const backTo = location.state?.from?.pathname || "/";
+  const navigate = useNavigate();
 
+  const [session, setSession] = useState(null);
+  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [loadingUser, setLoadingUser] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const [form, setForm] = useState({
+    full_name: "",
+    phone: "",
+    job_title: "",
+    department: "",
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+    avatar_url: "",
+  });
+
+  /* ----------------------------- Auth check ----------------------------- */
   useEffect(() => {
     let alive = true;
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { nav("/login", { replace: true }); return; }
-
-      const { data, error } = await supabase
-        .from("users")
-        .select("full_name, phone, employee_id")
-        .eq("id", session.user.id)
-        .single();
-
-      if (!alive) return;
-      if (error) {
-        console.error("load profile error:", error);
-        return;
+      setLoadingAuth(true);
+      try {
+        const { data } = await supabase.auth.getSession();
+        const s = data?.session;
+        if (!s?.user) {
+          navigate("/login");
+          return;
+        }
+        if (alive) setSession(s);
+      } catch (e) {
+        console.error(e);
+        if (alive) navigate("/login");
+      } finally {
+        if (alive) setLoadingAuth(false);
       }
-      setFullName(data?.full_name ?? "");
-      setPhone(data?.phone ?? "");
-      setEmployeeId(data?.employee_id ?? "");
     })();
-    return () => { alive = false; };
-  }, [nav]);
+    return () => {
+      alive = false;
+    };
+  }, [navigate]);
 
-  async function onSave(e) {
-    e.preventDefault();
-    if (busy) return;
+  /* ------------------------- Load existing profile ---------------------- */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!session?.user?.id) return;
+      setLoadingUser(true);
+      try {
+        const { data, error } = await supabase
+          .from("users")
+          .select(
+            "full_name,phone,job_title,department,timezone,avatar_url"
+          )
+          .eq("id", session.user.id)
+          .single();
 
-    const name = fullName.trim();
-    const ph = phone.replace(/\D/g, "");
-    const emp = employeeId.trim();
+        if (error && error.code !== "PGRST116") throw error; // not found ok
+        if (data && alive) setForm((f) => ({ ...f, ...data }));
+      } catch (e) {
+        console.error(e);
+        if (alive) setMsg({ ok: false, text: e.message });
+      } finally {
+        if (alive) setLoadingUser(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [session?.user?.id]);
 
-    if (!name) return alert("Please enter your full name.");
-    if (ph.length < 10) return alert("Please enter a valid phone number.");
-    if (!emp) return alert("Please enter your employee ID.");
+  /* ----------------------------- Handlers ------------------------------ */
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setForm((f) => ({ ...f, [name]: value }));
+  };
 
+  const handleAvatarPick = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !session?.user?.id) return;
     try {
-      setBusy(true);
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not logged in.");
-
-      const { error } = await supabase
-        .from("users")
-        .update({ full_name: name, phone: ph, employee_id: emp })
-        .eq("id", session.user.id);
-
-      if (error) throw error;
-      nav(backTo, { replace: true });
+      const ext = file.name.split(".").pop();
+      const path = `avatars/${session.user.id}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("public")
+        .upload(path, file, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from("public").getPublicUrl(path);
+      setForm((f) => ({ ...f, avatar_url: pub?.publicUrl || "" }));
+      setMsg({ ok: true, text: "Avatar uploaded." });
     } catch (err) {
-      console.error("onboarding save failed:", err);
-      alert(err.message || "Failed to save profile.");
-    } finally {
-      setBusy(false);
+      console.error(err);
+      setMsg({ ok: false, text: err.message || "Avatar upload failed." });
     }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!session?.user?.id) return;
+    setSaving(true);
+    setMsg(null);
+    try {
+      const payload = {
+        id: session.user.id,
+        full_name: form.full_name.trim(),
+        phone: form.phone.trim(),
+        job_title: form.job_title.trim(),
+        department: form.department.trim(),
+        timezone: form.timezone.trim(),
+        avatar_url: form.avatar_url.trim() || null,
+        updated_at: new Date().toISOString(),
+      };
+      const { error } = await supabase.from("users").upsert(payload, {
+        onConflict: "id",
+        ignoreDuplicates: false,
+      });
+      if (error) throw error;
+      setMsg({ ok: true, text: "Profile saved successfully!" });
+      setTimeout(() => navigate("/"), 700);
+    } catch (err) {
+      console.error(err);
+      setMsg({ ok: false, text: err.message || "Could not save profile." });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const canSave = useMemo(() => form.full_name.trim().length > 1, [form.full_name]);
+
+  if (loadingAuth || loadingUser) {
+    return (
+      <div className="p-6 md:p-8 text-center">
+        <Loader2 className="size-6 animate-spin inline-block mr-2" />
+        Loading…
+      </div>
+    );
   }
 
+  /* ------------------------------- Render ------------------------------- */
   return (
-    <div className="min-h-screen grid place-items-center p-6">
-      <div className="w-full max-w-xl rounded-2xl border p-6 shadow-sm bg-white/70 dark:bg-zinc-900/70">
-        <h1 className="text-2xl font-semibold mb-1">Complete your profile</h1>
-        <p className="text-sm text-zinc-500 mb-6">
-          We’ll use this info for your Atlas Command account.
-        </p>
+    <div className="p-6 md:p-8">
+      <div className="mx-auto max-w-2xl rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm">
+        <div className="px-6 py-5 border-b border-zinc-200 dark:border-zinc-800">
+          <h1 className="text-lg font-semibold">Welcome! Let’s set up your profile</h1>
+          <p className="text-sm text-zinc-500">
+            Please complete a few details before getting started.
+          </p>
+        </div>
 
-        <form onSubmit={onSave} className="space-y-4">
+        <form onSubmit={handleSubmit} className="px-6 py-5 space-y-5">
           <div>
-            <label className="text-sm block mb-1">Full name</label>
+            <label className="block text-sm font-medium">Full Name *</label>
             <input
-              className="w-full border rounded-lg px-3 py-2"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
+              name="full_name"
+              required
+              minLength={2}
+              value={form.full_name}
+              onChange={handleChange}
               placeholder="Jane Doe"
-              required
+              className="mt-1 w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/30"
             />
           </div>
 
           <div>
-            <label className="text-sm block mb-1">Phone</label>
+            <label className="block text-sm font-medium">Phone</label>
             <input
-              className="w-full border rounded-lg px-3 py-2"
-              value={phoneMask(phone)}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="(555) 123-4567"
-              inputMode="tel"
-              required
+              name="phone"
+              value={form.phone}
+              onChange={handleChange}
+              placeholder="+1 555 123 4567"
+              className="mt-1 w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/30"
             />
-            <p className="text-xs text-zinc-500 mt-1">
-              Digits only are stored (e.g., 5551234567).
-            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium">Job Title</label>
+              <input
+                name="job_title"
+                value={form.job_title}
+                onChange={handleChange}
+                placeholder="Dispatcher, Ops Manager…"
+                className="mt-1 w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/30"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium">Department</label>
+              <input
+                name="department"
+                value={form.department}
+                onChange={handleChange}
+                placeholder="Operations, Sales…"
+                className="mt-1 w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/30"
+              />
+            </div>
           </div>
 
           <div>
-            <label className="text-sm block mb-1">Employee ID</label>
+            <label className="block text-sm font-medium">Timezone</label>
             <input
-              className="w-full border rounded-lg px-3 py-2"
-              value={employeeId}
-              onChange={(e) => setEmployeeId(e.target.value)}
-              placeholder="E-1027"
-              required
+              name="timezone"
+              value={form.timezone}
+              onChange={handleChange}
+              placeholder="America/Los_Angeles"
+              className="mt-1 w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/30"
             />
           </div>
 
-          <button
-            disabled={busy}
-            className="w-full rounded-xl border py-2 font-medium hover:shadow"
-          >
-            {busy ? "Saving…" : "Save & continue"}
-          </button>
+          <div>
+            <label className="block text-sm font-medium">Avatar</label>
+            <div className="mt-1 flex items-center gap-3">
+              <div className="size-12 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
+                {form.avatar_url && (
+                  <img
+                    src={form.avatar_url}
+                    alt="avatar"
+                    className="w-full h-full object-cover"
+                  />
+                )}
+              </div>
+              <label className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-sm cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800">
+                <Upload className="size-4" />
+                <span>Upload</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleAvatarPick}
+                />
+              </label>
+            </div>
+          </div>
+
+          {msg && (
+            <div
+              className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm border ${
+                msg.ok
+                  ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 border-emerald-200/60 dark:border-emerald-800"
+                  : "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border-red-200/60 dark:border-red-800"
+              }`}
+            >
+              {msg.ok ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
+              <span>{msg.text}</span>
+            </div>
+          )}
+
+          <div className="flex justify-end pt-2">
+            <button
+              type="submit"
+              disabled={!canSave || saving}
+              className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-blue-600 text-white px-4 py-2 text-sm hover:bg-blue-700 disabled:opacity-60"
+            >
+              {saving && <Loader2 className="size-4 animate-spin" />}
+              Save & Continue
+            </button>
+          </div>
         </form>
       </div>
     </div>
