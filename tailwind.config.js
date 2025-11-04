@@ -1,7 +1,10 @@
 // tailwind.config.js
 /** @type {import('tailwindcss').Config} */
 export default {
-  // Make sure Tailwind scans ALL your templates
+  // ✅ Enables class-based dark mode (controlled by ThemeProvider)
+  darkMode: "class",
+
+  // ✅ Make sure Tailwind scans all relevant files
   content: [
     "./index.html",
     "./src/**/*.{js,jsx,ts,tsx}",
@@ -27,6 +30,7 @@ export default {
         card: "0 1px 2px rgba(0,0,0,0.2), 0 8px 24px rgba(0,0,0,0.25)",
       },
       colors: {
+        // ✅ Your brand palette remains intact
         brand: {
           50: "#e7f8f1",
           100: "#c4efde",

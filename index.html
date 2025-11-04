@@ -11,6 +11,89 @@
   </head>
   <body>
     <div id="root"></div>
+    <style id="dark-bridge-inline">
+  /* Soft-dark variables (not pitch black) */
+  html[data-theme="dark"] {
+    --bg-base:      #0f131a;
+    --bg-surface:   #171c26;
+    --text-base:    #eaecef;
+    --text-muted:   #a2a9b3;
+    --border-weak:  #222630;
+    --border-strong:#2b303b;
+    color-scheme: dark;
+  }
+
+  /* Force page background & text even if Tailwind has bg-white */
+  html[data-theme="dark"] body {
+    background: var(--bg-base) !important;
+    color: var(--text-base) !important;
+  }
+
+  /* Card/tile styling with brand outline */
+  html[data-theme="dark"] main .surface-card,
+  html[data-theme="dark"] main .rounded-2xl.border {
+    background-color: var(--bg-surface) !important;
+    border-color: var(--ac-primary-400) !important;
+    box-shadow: inset 0 0 0 1px var(--ac-primary-200), 0 6px 16px rgba(0,0,0,.30);
+  }
+
+  /* Tile icons pick up brand */
+  html[data-theme="dark"] main .surface-card .lucide,
+  html[data-theme="dark"] main .rounded-2xl.border .lucide {
+    stroke: var(--ac-primary-500) !important;
+    border: 1px solid var(--ac-primary-300);
+    border-radius: 12px;
+    padding: 6px;
+    background: rgba(0,0,0,.08);
+  }
+
+  /* Sidebar hover/active in soft-dark using brand */
+  html[data-theme="dark"] aside nav a:hover {
+    background-color: #1b2130 !important;
+    border-color: var(--ac-primary-300) !important;
+  }
+  html[data-theme="dark"] aside nav a.active,
+  html[data-theme="dark"] aside nav a[aria-current="page"] {
+    background-color: #1b2130 !important;
+    border-color: var(--ac-primary-400) !important;
+    box-shadow: inset 0 0 0 1px var(--ac-primary-300);
+  }
+  html[data-theme="dark"] aside nav a .lucide {
+    stroke: var(--ac-primary-500) !important;
+  }
+
+  /* Table readability */
+  html[data-theme="dark"] table thead th {
+    color: var(--text-base) !important;
+    background-color: var(--bg-surface) !important;
+  }
+  html[data-theme="dark"] table tbody td {
+    color: var(--text-base) !important;
+  }
+
+  /* Readability shims for common light-only classes */
+  html[data-theme="dark"] .text-black,
+  html[data-theme="dark"] .text-zinc-900,
+  html[data-theme="dark"] .text-gray-900,
+  html[data-theme="dark"] .text-neutral-900 {
+    color: var(--text-base) !important;
+  }
+  html[data-theme="dark"] .bg-white,
+  html[data-theme="dark"] .bg-zinc-50,
+  html[data-theme="dark"] .bg-gray-50,
+  html[data-theme="dark"] .bg-neutral-50 {
+    background-color: var(--bg-surface) !important;
+  }
+  html[data-theme="dark"] .border-zinc-200,
+  html[data-theme="dark"] .border-gray-200,
+  html[data-theme="dark"] .border-neutral-200,
+  html[data-theme="dark"] .divide-zinc-200 > :not([hidden]) ~ :not([hidden]),
+  html[data-theme="dark"] .divide-gray-200 > :not([hidden]) ~ :not([hidden]),
+  html[data-theme="dark"] .divide-neutral-200 > :not([hidden]) ~ :not([hidden]) {
+    border-color: #262b36 !important;
+  }
+</style>
+
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

@@ -1,126 +1,185 @@
-// src/main.jsx
-import React, { StrictMode, Suspense, lazy } from "react";
+import React, { StrictMode, useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import {
   BrowserRouter,
   Routes,
   Route,
   Navigate,
-  useLocation,
 } from "react-router-dom";
 
 import "./index.css";
 import MainLayout from "./layout/MainLayout.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import { SettingsProvider } from "./context/SettingsProvider.jsx";
+import { ThemeProvider } from "./context/ThemeProvider.jsx";
 import AuthGuard from "./components/AuthGuard.jsx";
+import { supabase } from './lib/supabase.js';
 
-/* ---------------------------- Lazy-loaded pages --------------------------- */
-const Dashboard     = lazy(() => import("./pages/Dashboard.jsx"));
-const Loads         = lazy(() => import("./pages/Loads.jsx"));
-const InTransit     = lazy(() => import("./pages/InTransit.jsx"));
-const Delivered     = lazy(() => import("./pages/Delivered.jsx"));
-const ProblemBoard  = lazy(() => import("./pages/ProblemBoard.jsx"));
-const Activity      = lazy(() => import("./pages/Activity.jsx"));
-const Settings      = lazy(() => import("./pages/Settings.jsx"));
-const Trucks        = lazy(() => import("./pages/Trucks.jsx"));
-const Drivers       = lazy(() => import("./pages/Drivers.jsx"));
-const Users         = lazy(() => import("./pages/Users.jsx"));
-const Login         = lazy(() => import("./pages/Login.jsx"));
-const SetPassword   = lazy(() => import("./pages/SetPassword.jsx"));
-const AuthCallback  = lazy(() => import("./pages/AuthCallback.jsx"));
-const Onboarding    = lazy(() => import("./pages/Onboarding.jsx"));
-const NotFound      = lazy(() => import("./pages/NotFound.jsx"));
+/* ---------------------------- Direct imports (no lazy) -------------------- */
+import Dashboard from "./pages/Dashboard.jsx";
+import Loads from "./pages/Loads.jsx";
+import InTransit from "./pages/InTransit.jsx";
+import Delivered from "./pages/Delivered.jsx";
+import ProblemBoard from "./pages/ProblemBoard.jsx";
+import Activity from "./pages/Activity.jsx";
+import Settings from "./pages/Settings.jsx";
+import Trucks from "./pages/Trucks.jsx";
+import Drivers from "./pages/Drivers.jsx";
+import Users from "./pages/Users.jsx";
+import Login from "./pages/Login.jsx";
+import AuthCallback from "./pages/AuthCallback.jsx";
+import SetPassword from "./pages/SetPassword.jsx";
 
-/* ------------------------------- Utilities -------------------------------- */
-function ScrollToTop() {
-  const { pathname } = useLocation();
-  React.useEffect(() => {
-    try { window.scrollTo({ top: 0, behavior: "instant" }); } catch { window.scrollTo(0, 0); }
-  }, [pathname]);
-  return null;
-}
+/* ----------------------------- Auth Context ------------------------------- */
+export const AuthContext = React.createContext({ session: null, loading: true });
 
-/**
- * HashAuthBridge
- * If Supabase drops us on "/#access_token=..." (implicit flow),
- * immediately forward that hash to "/auth/callback".
- */
-function HashAuthBridge() {
-  React.useEffect(() => {
-    const { pathname, hash } = window.location;
-    if (
-      pathname === "/" &&
-      hash &&
-      /access_token|refresh_token|type=recovery|code=/i.test(hash)
-    ) {
-      // preserve the entire hash when forwarding
-      window.location.replace(`/auth/callback${hash}`);
-    }
+function AuthProvider({ children }) {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
-  return null;
-}
 
-/* --------------------------------- App ------------------------------------ */
-function AppRoutes() {
   return (
-    <BrowserRouter basename="/">
-      <HashAuthBridge />
-      <ScrollToTop />
-      <ErrorBoundary>
-        <Routes>
-          {/* ------------------------ Public / Auth routes ------------------------ */}
-          <Route path="/login" element={<Suspense fallback={null}><Login /></Suspense>} />
-          <Route path="/set-password" element={<Suspense fallback={null}><SetPassword /></Suspense>} />
-          <Route path="/auth/callback" element={<Suspense fallback={null}><AuthCallback /></Suspense>} />
-
-          {/* ---------------- Onboarding (must be authenticated) ----------------- */}
-          <Route
-            path="/onboarding"
-            element={
-              <AuthGuard>
-                <Suspense fallback={null}><Onboarding /></Suspense>
-              </AuthGuard>
-            }
-          />
-
-          {/* -------------------------- Protected app ---------------------------- */}
-          <Route
-            path="/"
-            element={
-              <AuthGuard>
-                <MainLayout />
-              </AuthGuard>
-            }
-          >
-            <Route index element={<Suspense fallback={null}><Dashboard /></Suspense>} />
-            <Route path="loads" element={<Suspense fallback={null}><Loads /></Suspense>} />
-            <Route path="in-transit" element={<Suspense fallback={null}><InTransit /></Suspense>} />
-            <Route path="delivered" element={<Suspense fallback={null}><Delivered /></Suspense>} />
-            <Route path="problem-board" element={<Suspense fallback={null}><ProblemBoard /></Suspense>} />
-            <Route path="activity" element={<Suspense fallback={null}><Activity /></Suspense>} />
-            <Route path="settings" element={<Suspense fallback={null}><Settings /></Suspense>} />
-            <Route path="trucks" element={<Suspense fallback={null}><Trucks /></Suspense>} />
-            <Route path="drivers" element={<Suspense fallback={null}><Drivers /></Suspense>} />
-            {/* Users at BOTH /users and /admin/users */}
-            <Route path="users" element={<Suspense fallback={null}><Users /></Suspense>} />
-            <Route path="admin/users" element={<Suspense fallback={null}><Users /></Suspense>} />
-          </Route>
-
-          {/* ------------------------------- 404 --------------------------------- */}
-          <Route path="/dashboard" element={<Navigate to="/" replace />} />
-          <Route path="*" element={<Suspense fallback={null}><NotFound /></Suspense>} />
-        </Routes>
-      </ErrorBoundary>
-    </BrowserRouter>
+    <AuthContext.Provider value={{ session, loading }}>
+      {children}
+    </AuthContext.Provider>
   );
 }
 
-/* --------------------------------- Mount ---------------------------------- */
+/* ----------------------------- Render to DOM ------------------------------ */
 ReactDOM.createRoot(document.getElementById("root")).render(
   <StrictMode>
-    <SettingsProvider>
-      <AppRoutes />
-    </SettingsProvider>
+    <AuthProvider>
+      <ThemeProvider>
+        <SettingsProvider>
+          <BrowserRouter>
+            <ErrorBoundary>
+              <Routes>
+                {/* Public routes */}
+                <Route path="/login" element={<Login />} />
+                <Route path="/auth/callback" element={<AuthCallback />} />
+                <Route path="/set-password" element={<SetPassword />} />
+                
+                {/* Temporary onboarding placeholder */}
+                <Route 
+                  path="/onboarding" 
+                  element={
+                    <div className="p-6">
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-900 dark:bg-amber-950">
+                        <h2 className="text-lg font-semibold mb-2">Onboarding Required</h2>
+                        <p className="text-sm mb-4">Your profile is missing a full_name.</p>
+                        <p className="text-sm font-mono text-xs">
+                          Run: UPDATE users SET full_name = 'Your Name' WHERE id = 'your-user-id';
+                        </p>
+                      </div>
+                    </div>
+                  } 
+                />
+
+                {/* Protected routes with MainLayout */}
+                <Route element={<MainLayout />}>
+                  <Route
+                    path="/"
+                    element={
+                      <AuthGuard>
+                        <Dashboard />
+                      </AuthGuard>
+                    }
+                  />
+                  <Route
+                    path="/loads"
+                    element={
+                      <AuthGuard>
+                        <Loads />
+                      </AuthGuard>
+                    }
+                  />
+                  <Route
+                    path="/in-transit"
+                    element={
+                      <AuthGuard>
+                        <InTransit />
+                      </AuthGuard>
+                    }
+                  />
+                  <Route
+                    path="/delivered"
+                    element={
+                      <AuthGuard>
+                        <Delivered />
+                      </AuthGuard>
+                    }
+                  />
+                  <Route
+                    path="/problem-board"
+                    element={
+                      <AuthGuard>
+                        <ProblemBoard />
+                      </AuthGuard>
+                    }
+                  />
+                  <Route
+                    path="/activity"
+                    element={
+                      <AuthGuard>
+                        <Activity />
+                      </AuthGuard>
+                    }
+                  />
+                  <Route
+                    path="/settings"
+                    element={
+                      <AuthGuard>
+                        <Settings />
+                      </AuthGuard>
+                    }
+                  />
+                  <Route
+                    path="/trucks"
+                    element={
+                      <AuthGuard>
+                        <Trucks />
+                      </AuthGuard>
+                    }
+                  />
+                  <Route
+                    path="/drivers"
+                    element={
+                      <AuthGuard>
+                        <Drivers />
+                      </AuthGuard>
+                    }
+                  />
+                  <Route
+                    path="/users"
+                    element={
+                      <AuthGuard>
+                        <Users />
+                      </AuthGuard>
+                    }
+                  />
+                </Route>
+
+                {/* Fallback */}
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </ErrorBoundary>
+          </BrowserRouter>
+        </SettingsProvider>
+      </ThemeProvider>
+    </AuthProvider>
   </StrictMode>
 );

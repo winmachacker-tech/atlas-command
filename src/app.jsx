@@ -1,28 +1,67 @@
+// src/App.jsx
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import MainLayout from "./layout/MainLayout";
-import Dashboard from "./pages/Dashboard";
-import Loads from "./pages/Loads";
-import ActivityFeed from "./pages/ActivityFeed";
-import Settings from "./pages/Settings";
-import NotFound from "./pages/NotFound";
-import UsersPage from "./pages/Users"; // <-- Capital U, default export
+import { SessionContextProvider } from "@supabase/auth-helpers-react";
+import { supabase } from "./lib/supabase";
 
+import MainLayout from "./layout/MainLayout.jsx";
+import ErrorBoundary from "./components/ErrorBoundary.jsx";
+import AuthGuard from "./components/AuthGuard.jsx";
+
+/* ---------------------------- Page Imports ---------------------------- */
+import Dashboard from "./pages/Dashboard.jsx";
+import Loads from "./pages/Loads.jsx";
+import InTransit from "./pages/InTransit.jsx";
+import Delivered from "./pages/Delivered.jsx";
+import ProblemBoard from "./pages/ProblemBoard.jsx";
+import Activity from "./pages/Activity.jsx";
+import Settings from "./pages/Settings.jsx";
+import Users from "./pages/Users.jsx";
+
+/* ------------------------------- App ---------------------------------- */
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route element={<MainLayout />}>
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/loads" element={<Loads />} />
-          <Route path="/activity" element={<ActivityFeed />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/users" element={<UsersPage />} /> {/* <-- here */}
-        </Route>
-        {/* temporary smoke test */}
-        <Route path="/test" element={<div style={{padding:24}}>Test works</div>} />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
-    </BrowserRouter>
+    <SessionContextProvider supabaseClient={supabase}>
+      <BrowserRouter>
+        <ErrorBoundary>
+          <Routes>
+            {/* Redirect root */}
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+
+            {/* Auth-protected app frame */}
+            <Route
+              element={
+                <AuthGuard>
+                  <MainLayout />
+                </AuthGuard>
+              }
+            >
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/loads" element={<Loads />} />
+              <Route path="/in-transit" element={<InTransit />} />
+              <Route path="/delivered" element={<Delivered />} />
+              <Route path="/problem-board" element={<ProblemBoard />} />
+              <Route path="/activity" element={<Activity />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/users" element={<Users />} />
+            </Route>
+
+            {/* 404 fallback */}
+            <Route
+              path="*"
+              element={
+                <div className="p-6">
+                  <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                    Page not found
+                  </h1>
+                  <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                    The page you’re looking for doesn’t exist.
+                  </p>
+                </div>
+              }
+            />
+          </Routes>
+        </ErrorBoundary>
+      </BrowserRouter>
+    </SessionContextProvider>
   );
 }

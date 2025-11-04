@@ -1,54 +1,56 @@
 // src/lib/supabase.js
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+/* ------------------------------ Env + Logging ------------------------------ */
+const SUPABASE_URL   = import.meta.env.VITE_SUPABASE_URL;
+const ANON_KEY       = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const FUNCTIONS_URL  =
+  import.meta.env.VITE_SUPABASE_FUNCTIONS_URL ||
+  (SUPABASE_URL ? `${new URL(SUPABASE_URL).origin}/functions/v1` : undefined);
 
-// Basic sanity logs (don't remove; helps verify prod bundle config)
-console.log("🔍 SUPABASE_URL =", SUPABASE_URL);
-console.log("🔍 FUNCTIONS_URL = (derived from URL)");
-console.log("🔍 ANON_KEY detected =", !!ANON_KEY);
-
-if (!SUPABASE_URL || !ANON_KEY) {
-  // Make failures obvious
-  throw new Error("Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY");
+if (typeof window !== "undefined") {
+  console.log("🔍 SUPABASE_URL =", SUPABASE_URL);
+  console.log("🔍 FUNCTIONS_URL =", FUNCTIONS_URL ? "(derived from URL)" : "undefined");
+  console.log("🔍 ANON_KEY detected =", Boolean(ANON_KEY));
 }
 
-// Use localStorage for auth; detect sessions coming from #hash (invite/magic links)
+/* --------------------------------- Guards --------------------------------- */
+if (!SUPABASE_URL) throw new Error("VITE_SUPABASE_URL is missing");
+if (!ANON_KEY)     throw new Error("VITE_SUPABASE_ANON_KEY is missing");
+
+/* ------------------------------- Create client ----------------------------- */
 export const supabase = createClient(SUPABASE_URL, ANON_KEY, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
-    flowType: "pkce",
+  },
+  global: {
+    headers: {
+      "x-client-info": "atlas-command-web",
+    },
   },
 });
 
-// Optional: small helper to guarantee we have a JWT before sensitive calls
-export async function requireAuth() {
-  const { data, error } = await supabase.auth.getSession();
-  if (error) {
-    console.warn("⚠️ getSession error:", error);
-    throw error;
-  }
-  const session = data?.session;
-  const token = session?.access_token;
-  console.log("🔐 requireAuth() token present =", !!token);
-  if (!token) {
-    throw new Error("Not authenticated. Please sign in again.");
-  }
-  // no-op: supabase-js automatically attaches the token for PostgREST calls
-  return session;
-}
-
-// Dev aid: log changes so we know when a user becomes authenticated
-try {
-  const { data: initial } = await supabase.auth.getSession();
-  console.log("🔑 initial session present =", !!initial?.session);
-} catch (e) {
-  console.warn("getSession failed at init:", e);
-}
-
-supabase.auth.onAuthStateChange((_event, s) => {
-  console.log("🔄 auth state =", _event, "token present =", !!s?.access_token);
+/* ---------------------------- Auth state logging --------------------------- */
+supabase.auth.onAuthStateChange((event, session) => {
+  const hasToken = Boolean(session?.access_token);
+  console.log("🔄 auth state =", event, "token present =", hasToken);
 });
+
+/* ----------------------------- Dev-only global ----------------------------- */
+/** Expose client in dev so you can use it in the browser console */
+if (typeof window !== "undefined" && import.meta.env.DEV) {
+  // eslint-disable-next-line no-underscore-dangle
+  window.__sb = supabase;
+  console.info("🧰 Dev helper: window.__sb is available for console use");
+}
+
+/* --------------------------- Helper (optional) ----------------------------- */
+export async function getAccessToken() {
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
+}
+
+/* ------------------------------- Functions URL ----------------------------- */
+export const functionsUrl = FUNCTIONS_URL;

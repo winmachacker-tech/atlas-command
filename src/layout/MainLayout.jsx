@@ -1,231 +1,216 @@
 // src/layout/MainLayout.jsx
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
-  LayoutGrid,
-  PackageSearch,
-  Truck,
-  Route,
-  CheckCircle2,
-  AlertTriangle,
-  Activity,
-  Settings as SettingsIcon,
-  Users,
   ShieldCheck,
-  Menu,
-  X,
+  LayoutDashboard,
+  Boxes,
+  Truck,
+  CheckCircle2,
+  TriangleAlert,
+  Activity as ActivityIcon,
+  Settings as SettingsIcon,
+  Users as UsersIcon,
   LogOut,
 } from "lucide-react";
-import { supabase } from "../lib/supabase";
 
+import { supabase } from "../lib/supabase";
+import GlobalThemeFix from "../GlobalThemeFix.jsx";
+import ThemeSwitcher from "../components/ThemeSwitcher.jsx";
+import DiagnosticsOverlay from "../components/DiagnosticsOverlay.jsx";
+
+/* -------------------------------- Utilities ------------------------------- */
 function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
-
-function NavItem({ to, icon: Icon, label, onClick }) {
-  return (
-    <NavLink
-      to={to}
-      onClick={onClick}
-      className={({ isActive }) =>
-        cx(
-          "group flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition",
-          "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/70",
-          isActive && "bg-zinc-900/80 text-zinc-100"
-        )
-      }
-    >
-      <Icon className="size-4" />
-      <span className="truncate">{label}</span>
-    </NavLink>
-  );
+function useActive(path) {
+  const location = useLocation();
+  const exact = location.pathname === path;
+  const starts = location.pathname.startsWith(path + "/");
+  return exact || starts;
 }
 
-function Sidebar({ onNavigate }) {
-  return (
-    <aside
-      className={cx(
-        "hidden lg:flex",
-        "h-full w-64 shrink-0 flex-col gap-4",
-        "border-r border-zinc-800/80 bg-zinc-950/60 backdrop-blur"
-      )}
-    >
-      {/* Brand */}
-      <div className="flex items-center gap-2 px-4 pt-4">
-        <div className="flex size-8 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/60">
-          <LayoutGrid className="size-4 text-emerald-400" />
-        </div>
-        <div className="text-sm font-semibold text-zinc-100">
-          Atlas Command
-        </div>
-      </div>
-
-      {/* Nav */}
-      <nav className="mt-2 flex flex-1 flex-col gap-1 px-2 pb-4">
-        <div className="px-2 pb-2 pt-3 text-xs uppercase tracking-wide text-zinc-500">
-          Overview
-        </div>
-        <NavItem to="/dashboard" icon={LayoutGrid} label="Dashboard" onClick={onNavigate} />
-
-        <div className="px-2 pb-2 pt-4 text-xs uppercase tracking-wide text-zinc-500">
-          Operations
-        </div>
-        <NavItem to="/loads" icon={PackageSearch} label="All Loads" onClick={onNavigate} />
-        <NavItem to="/in-transit" icon={Route} label="In Transit" onClick={onNavigate} />
-        <NavItem to="/delivered" icon={CheckCircle2} label="Delivered" onClick={onNavigate} />
-        <NavItem to="/problem-board" icon={AlertTriangle} label="Problem Board" onClick={onNavigate} />
-        <NavItem to="/trucks" icon={Truck} label="Trucks" onClick={onNavigate} />
-        <NavItem to="/drivers" icon={Activity} label="Drivers" onClick={onNavigate} />
-
-        <div className="px-2 pb-2 pt-4 text-xs uppercase tracking-wide text-zinc-500">
-          Admin
-        </div>
-        <NavItem to="/users" icon={Users} label="Users" onClick={onNavigate} />
-        <NavItem to="/settings" icon={SettingsIcon} label="Settings" onClick={onNavigate} />
-        <NavItem to="/admin/audit" icon={ShieldCheck} label="Admin Audit" onClick={onNavigate} />
-      </nav>
-
-      {/* Footer */}
-      <div className="border-t border-zinc-800/80 p-3">
-        <SmallProfile />
-      </div>
-    </aside>
-  );
+/* ---------------------------------- API ----------------------------------- */
+async function fetchIsAdmin(userId) {
+  if (!userId) return false;
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .select("is_admin")
+      .eq("id", userId)
+      .maybeSingle(); // never throws; returns null if not found
+    if (error) return false;
+    return Boolean(data?.is_admin);
+  } catch {
+    return false;
+  }
 }
 
-function MobileDrawer({ open, setOpen }) {
-  const close = () => setOpen(false);
-  return (
-    <div
-      className={cx(
-        "lg:hidden",
-        open ? "fixed inset-0 z-50" : "hidden"
-      )}
-    >
-      <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-        onClick={close}
-      />
-      <div className="absolute inset-y-0 left-0 w-72 border-r border-zinc-800 bg-zinc-950 p-3">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex size-8 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/60">
-              <LayoutGrid className="size-4 text-emerald-400" />
-            </div>
-            <div className="text-sm font-semibold text-zinc-100">
-              Atlas Command
-            </div>
-          </div>
-          <button
-            onClick={close}
-            className="rounded-lg border border-zinc-800 p-1.5 text-zinc-300 hover:bg-zinc-900"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-        <nav className="flex flex-col gap-1">
-          <NavItem to="/dashboard" icon={LayoutGrid} label="Dashboard" onClick={close} />
-          <div className="mt-3 text-xs uppercase tracking-wide text-zinc-500">Operations</div>
-          <NavItem to="/loads" icon={PackageSearch} label="All Loads" onClick={close} />
-          <NavItem to="/in-transit" icon={Route} label="In Transit" onClick={close} />
-          <NavItem to="/delivered" icon={CheckCircle2} label="Delivered" onClick={close} />
-          <NavItem to="/problem-board" icon={AlertTriangle} label="Problem Board" onClick={close} />
-          <NavItem to="/trucks" icon={Truck} label="Trucks" onClick={close} />
-          <NavItem to="/drivers" icon={Activity} label="Drivers" onClick={close} />
-
-          <div className="mt-3 text-xs uppercase tracking-wide text-zinc-500">Admin</div>
-          <NavItem to="/users" icon={Users} label="Users" onClick={close} />
-          <NavItem to="/settings" icon={SettingsIcon} label="Settings" onClick={close} />
-          <NavItem to="/admin/audit" icon={ShieldCheck} label="Admin Audit" onClick={close} />
-        </nav>
-        <div className="mt-4 border-t border-zinc-800 pt-3">
-          <SmallProfile />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SmallProfile() {
+/* ------------------------------- MainLayout ------------------------------- */
+export default function MainLayout() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      const e = data?.user?.email ?? "";
-      setEmail(e);
-    });
+    let isMounted = true;
+
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      const user = data?.user ?? null;
+
+      if (!isMounted) return;
+      setEmail(user?.email ?? "");
+
+      if (user?.id) {
+        const admin = await fetchIsAdmin(user.id);
+        if (isMounted) setIsAdmin(admin);
+      } else {
+        setIsAdmin(false);
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  async function signOut() {
-    await supabase.auth.signOut();
-    navigate("/login", { replace: true });
-  }
+  const handleSignOut = async () => {
+    try {
+      await supabase.auth.signOut();
+    } finally {
+      navigate("/login", { replace: true });
+    }
+  };
 
-  return (
-    <div className="flex items-center justify-between rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-2">
-      <div className="min-w-0">
-        <div className="truncate text-xs text-zinc-400">{email || "Signed in"}</div>
-        <div className="text-[10px] uppercase tracking-wide text-zinc-500">Admin</div>
-      </div>
-      <button
-        onClick={signOut}
-        className="inline-flex items-center gap-1 rounded-lg border border-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-900"
-      >
-        <LogOut className="size-3.5" />
-        Logout
-      </button>
-    </div>
+  const mainNav = useMemo(
+    () => [
+      { to: "/", label: "Dashboard", icon: LayoutDashboard },
+      { to: "/loads", label: "Loads", icon: Boxes },
+      { to: "/in-transit", label: "In Transit", icon: Truck },
+      { to: "/delivered", label: "Delivered", icon: CheckCircle2 },
+      { to: "/problem-board", label: "Problem Board", icon: TriangleAlert },
+      { to: "/activity", label: "Activity", icon: ActivityIcon },
+      { to: "/settings", label: "Settings", icon: SettingsIcon },
+    ],
+    []
   );
-}
-
-export default function MainLayout() {
-  const [open, setOpen] = useState(false);
-  const loc = useLocation();
-
-  // Close drawer on route change
-  useEffect(() => {
-    setOpen(false);
-  }, [loc.pathname]);
 
   return (
-    <div className="flex min-h-dvh w-full bg-zinc-950 text-zinc-100">
-      {/* Desktop Sidebar */}
-      <Sidebar onNavigate={() => {}} />
+    <>
+      {/* Mount theme vars (safe no-op if already handled) */}
+      <GlobalThemeFix />
 
-      {/* Mobile Drawer */}
-      <MobileDrawer open={open} setOpen={setOpen} />
+      {/* Provide **fallback colors first**, then var() so invalid vars don't hide content */}
+      <div className={cx(
+        "flex h-screen",
+        "bg-white dark:bg-zinc-950",             // fallback background
+        "text-zinc-900 dark:text-zinc-100",      // fallback text
+        "bg-[var(--bg-base)] text-[var(--text-base)]" // preferred via CSS vars
+      )}>
+        {/* ------------------------------- Sidebar ------------------------------- */}
+        <aside className={cx(
+          "hidden md:flex md:w-80 lg:w-80 xl:w-80 flex-col",
+          "border-r border-zinc-200 dark:border-zinc-800",
+          "bg-white dark:bg-zinc-900",                 // fallback
+          "bg-[var(--bg-surface)]"                    // var preferred
+        )}>
+          {/* Brand */}
+          <div className="flex items-center gap-2 px-4 py-4 border-b border-zinc-200 dark:border-zinc-800">
+            <ShieldCheck className="h-5 w-5 text-[var(--accent-600)]" />
+            <span className="font-semibold">Atlas Command</span>
+          </div>
 
-      {/* Content Column */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* Topbar */}
-        <header className="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-zinc-800/80 bg-zinc-950/70 px-3 backdrop-blur">
-          <div className="flex items-center gap-2">
+          {/* Nav */}
+          <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
+            {mainNav.map((item) => (
+              <NavItem key={item.to} to={item.to} icon={item.icon} label={item.label} />
+            ))}
+
+            {isAdmin && (
+              <>
+                <div className="mt-6 px-3 text-xs uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                  Admin
+                </div>
+                <NavItem to="/users" icon={UsersIcon} label="User Management" />
+              </>
+            )}
+          </nav>
+
+          {/* Footer */}
+          <div className="mt-auto border-t border-zinc-200 dark:border-zinc-800 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate text-sm text-zinc-600 dark:text-zinc-400" title={email}>
+                {email}
+              </span>
+              <ThemeSwitcher />
+            </div>
+
             <button
-              className="lg:hidden rounded-lg border border-zinc-800 p-1.5 text-zinc-300 hover:bg-zinc-900"
-              onClick={() => setOpen(true)}
+              onClick={handleSignOut}
+              className={cx(
+                "w-full inline-flex items-center justify-center gap-2",
+                "rounded-xl px-3 py-2 text-sm",
+                "bg-[var(--accent-600)] hover:bg-[var(--accent-700)] text-white",
+                "transition-colors"
+              )}
             >
-              <Menu className="size-5" />
+              <LogOut className="h-4 w-4" />
+              <span>Sign out</span>
             </button>
-            <div className="hidden pl-1 text-sm text-zinc-400 lg:block">
-              {loc.pathname}
-            </div>
           </div>
-          <div className="flex items-center gap-2">
-            {/* room for notifications, search, theme toggle */}
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs text-zinc-300">
-              Enterprise
-            </div>
-          </div>
-        </header>
+        </aside>
 
-        {/* Scrollable page area */}
-        <main className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-[1400px] p-4 sm:p-6 lg:p-8">
+        {/* ------------------------------ Main area ------------------------------ */}
+        <main className="flex-1 min-w-0">
+          {/* Top bar for small screens */}
+          <div className={cx(
+            "md:hidden flex items-center justify-between px-4 py-3",
+            "border-b border-zinc-200 dark:border-zinc-800",
+            "bg-white dark:bg-zinc-900",        // fallback
+            "bg-[var(--bg-surface)]"            // var preferred
+          )}>
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5 text-[var(--accent-600)]" />
+              <span className="font-semibold">Atlas Command</span>
+            </div>
+            <ThemeSwitcher />
+          </div>
+
+          {/* Diagnostics overlay button/panel */}
+          <DiagnosticsOverlay />
+
+          {/* Page content outlet */}
+          <div className={cx(
+            "h-[calc(100vh-0px)] overflow-auto",
+            "bg-white dark:bg-zinc-950",       // fallback
+            "bg-[var(--bg-base)]"
+          )}>
             <Outlet />
           </div>
         </main>
       </div>
-    </div>
+    </>
+  );
+}
+
+/* -------------------------------- Nav Item -------------------------------- */
+function NavItem({ to, icon: Icon, label }) {
+  const active = useActive(to);
+  return (
+    <NavLink
+      to={to}
+      className={cx(
+        "flex items-center gap-3 w-full px-3 py-2 rounded-2xl text-sm",
+        "transition-colors border border-transparent",
+        active
+          ? "bg-zinc-50 dark:bg-zinc-900/60 border-zinc-200 dark:border-zinc-800"
+          : "hover:bg-zinc-100 dark:hover:bg-zinc-800",
+      )}
+      end={to === "/"} // make "/" exact
+    >
+      <Icon className={cx("h-4 w-4", active ? "text-[var(--accent-600)]" : "text-zinc-500 dark:text-zinc-400")} />
+      <span>{label}</span>
+    </NavLink>
   );
 }

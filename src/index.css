@@ -1,99 +1,271 @@
 /* src/index.css */
-
-/* ------------------------------ Tailwind core ------------------------------ */
+/* Tailwind layers */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* ------------------------------- Foundations ------------------------------ */
+/* ----------------------------------------------------------------------------
+   Atlas Command — Global Theme System (light/dark + accent)
+   -------------------------------------------------------------------------- */
+
 :root {
-  color-scheme: dark;
-  --ac-bg: #0a0a0b;         /* zinc-950-ish */
-  --ac-card: rgba(12, 12, 13, 0.7);
-  --ac-border: rgba(39, 39, 42, 0.8); /* zinc-800/80 */
-  --ac-text: #fafafa;        /* zinc-50 */
-  --ac-muted: #a1a1aa;       /* zinc-400 */
+  /* Base surfaces & text (LIGHT) */
+  --bg-base:    #ffffff;
+  --bg-surface: #f8f9fa;  /* subtle card/table background */
+  --text-base:  #0f172a;  /* slate-900 */
+  --text-muted: #6b7280;  /* gray-500 */
+
+  /* Default accent = Emerald */
+  --accent-50:  #ecfdf5;
+  --accent-100: #d1fae5;
+  --accent-200: #a7f3d0;
+  --accent-300: #6ee7b7;
+  --accent-400: #34d399;
+  --accent-500: #10b981;
+  --accent-600: #059669; /* primary */
+  --accent-700: #047857;
+  --accent-800: #065f46;
+  --accent-900: #064e3b;
+
+  /* Borders / outlines */
+  --border-weak:  #e5e7eb; /* gray-200 */
+  --border-strong:#d1d5db; /* gray-300 */
 }
 
-/* Ensure the app always has height so grids/charts resolve > 0 size */
-html, body, #root {
-  height: 100%;
-  min-height: 100dvh;
+html.dark {
+  /* Base surfaces & text (DARK) */
+  --bg-base:    #0b0b0c;   /* near black */
+  --bg-surface: #161618;   /* card/table bg */
+  --text-base:  #f9fafb;   /* gray-50 */
+  --text-muted: #9ca3af;   /* gray-400 */
+
+  /* Keep emerald accent in dark; tune low tones for contrast */
+  --accent-50:  #06261b;
+  --accent-100: #083625;
+  --accent-200: #0b4a33;
+  --accent-300: #0e6143;
+  --accent-400: #117a56;
+  --accent-500: #10b981;
+  --accent-600: #0ea371;
+  --accent-700: #0b8d62;
+  --accent-800: #097354;
+  --accent-900: #075a44;
+
+  --border-weak:  #26272b;
+  --border-strong:#313238;
 }
 
-html, body {
-  background: var(--ac-bg);
-  color: var(--ac-text);
+/* ----------------------------- Optional accents --------------------------- */
+/* Switch by setting <html data-accent="blue|violet|amber|rose|sky|zinc"> */
+
+html[data-accent="zinc"] {
+  --accent-50:#fafafa; --accent-100:#f4f4f5; --accent-200:#e4e4e7; --accent-300:#d4d4d8;
+  --accent-400:#a1a1aa; --accent-500:#71717a; --accent-600:#52525b; --accent-700:#3f3f46;
+  --accent-800:#27272a; --accent-900:#18181b;
+}
+html[data-accent="blue"] {
+  --accent-50:#eff6ff; --accent-100:#dbeafe; --accent-200:#bfdbfe; --accent-300:#93c5fd;
+  --accent-400:#60a5fa; --accent-500:#3b82f6; --accent-600:#2563eb; --accent-700:#1d4ed8;
+  --accent-800:#1e40af; --accent-900:#1e3a8a;
+}
+html[data-accent="violet"] {
+  --accent-50:#f5f3ff; --accent-100:#ede9fe; --accent-200:#ddd6fe; --accent-300:#c4b5fd;
+  --accent-400:#a78bfa; --accent-500:#8b5cf6; --accent-600:#7c3aed; --accent-700:#6d28d9;
+  --accent-800:#5b21b6; --accent-900:#4c1d95;
+}
+html[data-accent="amber"] {
+  --accent-50:#fffbeb; --accent-100:#fef3c7; --accent-200:#fde68a; --accent-300:#fcd34d;
+  --accent-400:#fbbf24; --accent-500:#f59e0b; --accent-600:#d97706; --accent-700:#b45309;
+  --accent-800:#92400e; --accent-900:#78350f;
+}
+html[data-accent="rose"] {
+  --accent-50:#fff1f2; --accent-100:#ffe4e6; --accent-200:#fecdd3; --accent-300:#fda4af;
+  --accent-400:#fb7185; --accent-500:#f43f5e; --accent-600:#e11d48; --accent-700:#be123c;
+  --accent-800:#9f1239; --accent-900:#881337;
+}
+html[data-accent="sky"] {
+  --accent-50:#f0f9ff; --accent-100:#e0f2fe; --accent-200:#bae6fd; --accent-300:#7dd3fc;
+  --accent-400:#38bdf8; --accent-500:#0ea5e9; --accent-600:#0284c7; --accent-700:#0369a1;
+  --accent-800:#075985; --accent-900:#0c4a6e;
 }
 
-/* Improve text rendering a bit */
+/* ------------------------------- App scaffolds ---------------------------- */
+
+html, body, #root { height: 100%; }
+
 body {
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
+  background-color: var(--bg-base);
+  color: var(--text-base);
 }
 
-/* Vite mount root should never collapse */
-#root {
-  display: flex;
-  flex-direction: column;
-  background: var(--ac-bg);
-}
-
-/* --------------------------- Enterprise polish ---------------------------- */
-
-/* Subtle scrollbars (non-intrusive, dark friendly) */
+/* Smooth theme transitions (kept subtle for enterprise look) */
 * {
-  scrollbar-width: thin;
-  scrollbar-color: #3f3f46 transparent; /* zinc-700 on transparent */
-}
-*::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-*::-webkit-scrollbar-track {
-  background: transparent;
-}
-*::-webkit-scrollbar-thumb {
-  background: #3f3f46; /* zinc-700 */
-  border-radius: 8px;
-  border: 2px solid transparent;
-  background-clip: content-box;
-}
-*::-webkit-scrollbar-thumb:hover {
-  background: #52525b; /* zinc-600 */
-  background-clip: content-box;
+  transition: color .18s ease, background-color .18s ease, border-color .18s ease;
 }
 
-/* Cards & panel base (optional utility if you want to reuse outside Tailwind) */
-.ac-card {
-  background: var(--ac-card);
-  border: 1px solid var(--ac-border);
-  border-radius: 16px;
-  backdrop-filter: blur(6px);
+/* ------------------------------- Utility helpers -------------------------- */
+
+.bg-surface { background-color: var(--bg-surface); }
+.text-muted { color: var(--text-muted); }
+
+/* Cards / panels */
+.surface-card {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-weak);
+  border-radius: 1rem; /* 2xl */
 }
 
-/* Prevent charts/tables from reporting width/height = -1 */
-.recharts-wrapper, .recharts-responsive-container {
-  min-width: 0;    /* allow flex shrink properly */
-  min-height: 200px;
+/* Accent button helper (example usage in components) */
+.btn-accent {
+  background-color: var(--accent-600);
+  color: #fff;
+}
+.btn-accent:hover { background-color: var(--accent-700); }
+
+/* Borders */
+.border-weak   { border-color: var(--border-weak); }
+.border-strong { border-color: var(--border-strong); }
+
+/* Scrollbars (WebKit) */
+*::-webkit-scrollbar        { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track  { background: transparent; }
+*::-webkit-scrollbar-thumb  { background: rgba(120, 120, 128, .35); border-radius: 8px; }
+html.dark *::-webkit-scrollbar-thumb { background: rgba(120, 120, 128, .45); }
+
+/* ---------------------- Dark-mode compatibility shims --------------------- */
+/* Helps legacy light-only utilities remain readable without refactors.      */
+.dark .text-black,
+.dark .text-zinc-900,
+.dark .text-gray-900,
+.dark .text-neutral-900 { color: var(--text-base) !important; }
+
+.dark .bg-white,
+.dark .bg-zinc-50,
+.dark .bg-gray-50 { background-color: var(--bg-surface) !important; }
+
+.dark .border-zinc-200,
+.dark .border-gray-200,
+.dark .border-neutral-200 { border-color: var(--border-weak) !important; }
+/* ==========================================================================
+   Atlas Command — Accent outlines for tiles & icons (non-breaking)
+   Paste at the very bottom of src/index.css
+   Uses your existing --ac-primary scale injected by ThemeProvider.
+   ========================================================================== */
+
+/* 1) Dashboard / content “tiles” (cards) — pastel fill + accent outline */
+main .rounded-2xl.border,
+main .surface-card {
+  /* outline in main color */
+  border-color: var(--ac-primary-300) !important;
+
+  /* soft, light pastel fill of the main color */
+  background-color: var(--ac-primary-50) !important;
 }
 
-/* Fix for flex children overflowing (common with dashboards) */
-.min-w-0 { min-width: 0 !important; }
-.min-h-0 { min-height: 0 !important; }
-
-/* Typography tweaks for small labels */
-label, small, .muted { color: var(--ac-muted); }
-
-/* Links */
-a { color: inherit; text-decoration: none; }
-a:hover { text-decoration: underline; }
-
-/* Safe-area helper */
-.safe-area {
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
+/* 1a) Tile icons inside those cards */
+main .rounded-2xl.border .lucide,
+main .surface-card .lucide {
+  stroke: var(--ac-primary-600) !important;
 }
+
+/* Optional: give the little icon badge a soft capsule look */
+main .rounded-2xl.border .lucide,
+main .surface-card .lucide {
+  border: 1px solid var(--ac-primary-200);
+  border-radius: 12px;
+  padding: 6px; /* looks like your badge size from screenshots */
+  background: var(--ac-primary-50);
+}
+
+/* 2) Sidebar items — make icons use the main color */
+aside nav a .lucide {
+  stroke: var(--ac-primary-600) !important;
+}
+
+/* 2a) Hover / active feedback matches the pastel family */
+aside nav a:hover {
+  background-color: var(--ac-primary-50) !important;
+  border-color: var(--ac-primary-200) !important;
+}
+aside nav a.active,
+aside nav a[aria-current="page"] {
+  background-color: var(--ac-primary-50) !important;
+  border-color: var(--ac-primary-300) !important;
+  box-shadow: inset 0 0 0 1px var(--ac-primary-100);
+}
+
+/* 3) Generic icon tint in the main content area */
+main svg.lucide {
+  stroke: var(--ac-primary-600);
+}
+
+/* 4) Dark-mode safety (keep it gentle but readable)
+   If you want darker cards in dark mode, comment this out. */
+html.dark main .rounded-2xl.border,
+html.dark main .surface-card {
+  background-color: var(--ac-primary-50) !important; /* still light pastel */
+  border-color: var(--ac-primary-300) !important;
+}/* ==========================================================================
+   Soft-Dark global theme (keeps brand color accents)
+   ========================================================================== */
+
+/* Softer dark neutrals (not pure black) */
+html.dark {
+  --bg-base:      #0f131a;   /* page background */
+  --bg-surface:   #171c26;   /* cards / panels */
+  --text-base:    #eaecef;   /* high-contrast text */
+  --text-muted:   #a2a9b3;   /* secondary text */
+
+  --border-weak:  #222630;
+  --border-strong:#2b303b;
+}
+
+/* Cards / tiles: subtle elevation + brand outline (no heavy pastel fill) */
+html.dark main .surface-card,
+html.dark main .rounded-2xl.border {
+  background-color: var(--bg-surface) !important;
+  border-color: var(--ac-primary-400) !important;
+  box-shadow:
+    inset 0 0 0 1px var(--ac-primary-200),
+    0 6px 16px rgba(0,0,0,.30);
+}
+
+/* Tile header icon (the little rounded square icon) picks up brand color */
+html.dark main .surface-card .lucide,
+html.dark main .rounded-2xl.border .lucide {
+  stroke: var(--ac-primary-500) !important;
+  /* keep the soft capsule, but darker to match soft-dark */
+  border: 1px solid var(--ac-primary-300);
+  border-radius: 12px;
+  padding: 6px;
+  background: rgba(0,0,0,.08); /* faint tint instead of bright pastel */
+}
+
+/* Sidebar: calm hover and active using brand color, with soft dark neutrals */
+html.dark aside nav a:hover {
+  background-color: #1b2130 !important;     /* soft hover */
+  border-color: var(--ac-primary-300) !important;
+}
+html.dark aside nav a.active,
+html.dark aside nav a[aria-current="page"] {
+  background-color: #1b2130 !important;
+  border-color: var(--ac-primary-400) !important;
+  box-shadow: inset 0 0 0 1px var(--ac-primary-300);
+}
+/* Sidebar icons always in brand color */
+html.dark aside nav a .lucide { stroke: var(--ac-primary-500) !important; }
+
+/* Buttons that use your accent helper keep good contrast in soft-dark */
+html.dark .btn-accent {
+  background-color: var(--ac-primary-600);
+  color: #fff;
+}
+html.dark .btn-accent:hover { background-color: var(--ac-primary-700); }
+
+/* Tables / separators + readability shims to match the softer dark */
+html.dark .divide-zinc-200 > :not([hidden]) ~ :not([hidden]),
+html.dark .divide-neutral-200 > :not([hidden]) ~ :not([hidden]),
+html.dark .divide-gray-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #262b36 !important;
+}
+@import "./styles/dark-bridge.css";

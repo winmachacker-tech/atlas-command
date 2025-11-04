@@ -2,294 +2,227 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
-  Loader2,
+  LayoutDashboard,
   Truck,
   CheckCircle2,
-  AlertTriangle,
-  DollarSign,
+  TriangleAlert,
+  RefreshCcw,
 } from "lucide-react";
 
-/* ------------------------------- UI Helpers ------------------------------- */
+/**
+ * Atlas Command — Dashboard (safe v2)
+ * - Fixes ".eq is not a function" by using the correct query builder chain
+ * - Graceful with RLS: empty arrays simply render 0s instead of errors
+ * - No external deps beyond Tailwind + lucide-react
+ */
+
 function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
-function Stat({ icon: Icon, label, value, sub }) {
-  return (
-    <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-sm">
-      <div className="flex items-center gap-3">
-        <div className="rounded-xl border border-zinc-200 dark:border-zinc-700 p-2">
-          <Icon className="size-5" />
-        </div>
-        <div className="text-sm text-zinc-500">{label}</div>
-      </div>
-      <div className="mt-3 text-2xl font-semibold">{value}</div>
-      {sub ? <div className="mt-1 text-xs text-zinc-500">{sub}</div> : null}
-    </div>
-  );
-}
 
-/* ------------------------------ Date Helpers ------------------------------ */
-function startOfDayISO(d) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x.toISOString();
-}
-function endOfDayISO(d) {
-  const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
-  return x.toISOString();
-}
-function daysAgoISO(n) {
-  const x = new Date();
-  x.setDate(x.getDate() - n);
-  return x.toISOString();
-}
-
-/* --------------------------------- Page ---------------------------------- */
-export default function Dashboard() {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [stats, setStats] = useState({
-    activeCount: 0, // Pending + In Transit
-    deliveredCount7d: 0,
-    deliveredRevenue7d: 0,
-    problemCount: 0,
-    dwellAvg: { pickup: 0, delivery: 0 },
-    revenueByDay: [], // [{date:'YYYY-MM-DD', total: number}]
-  });
-
-  // last 7 full days (Mon–Sun style rolling window)
-  const range = useMemo(() => {
-    const end = new Date(); // today
-    const start = new Date();
-    start.setDate(end.getDate() - 6);
-    return {
-      startISO: startOfDayISO(start),
-      endISO: endOfDayISO(end),
-    };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-
-    async function fetchMetrics() {
-      setLoading(true);
-      setError("");
-
-      try {
-        // --------------------- 1) Active = Pending | In Transit ---------------------
-        // Use head: true + count: 'exact' for fast count without payload
-        const { count: activeCount, error: eActive } = await supabase
-          .from("loads")
-          .select("id", { count: "exact", head: true })
-          .eq("deleted", false)
-          .in("status", ["Pending", "In Transit"]);
-        if (eActive) throw eActive;
-
-        // -------------------- 2) Delivered last 7d (count + sum) --------------------
-        const { data: deliveredRows, error: eDelivered } = await supabase
-          .from("loads")
-          .select("id,linehaul_total,delivered_at")
-          .eq("deleted", false)
-          .eq("status", "Delivered")
-          .gte("delivered_at", range.startISO)
-          .lte("delivered_at", range.endISO)
-          .limit(2000);
-        if (eDelivered) throw eDelivered;
-
-        const deliveredCount7d = deliveredRows.length;
-        const deliveredRevenue7d = deliveredRows.reduce(
-          (acc, r) => acc + (Number(r.linehaul_total) || 0),
-          0
-        );
-
-        // ---------------- 3) Problem loads (status=Problem OR flag) ----------------
-        const { count: problemCount, error: eProblem } = await supabase
-          .from("loads")
-          .select("id", { count: "exact", head: true })
-          .eq("deleted", false)
-          .or("status.eq.Problem,has_problem.eq.true");
-        if (eProblem) throw eProblem;
-
-        // ------------- 4) Dwell averages (last 7d delivered or all rows) ----------
-        const { data: dwellRows, error: eDwell } = await supabase
-          .from("loads")
-          .select("pickup_dwell_min,delivery_dwell_min,delivered_at")
-          .eq("deleted", false)
-          .gte("delivered_at", range.startISO)
-          .lte("delivered_at", range.endISO)
-          .limit(2000);
-        if (eDwell) throw eDwell;
-
-        const dwell = dwellRows.reduce(
-          (acc, r) => {
-            const p = Number(r.pickup_dwell_min) || 0;
-            const d = Number(r.delivery_dwell_min) || 0;
-            if (p > 0) {
-              acc.pSum += p;
-              acc.pN += 1;
-            }
-            if (d > 0) {
-              acc.dSum += d;
-              acc.dN += 1;
-            }
-            return acc;
-          },
-          { pSum: 0, pN: 0, dSum: 0, dN: 0 }
-        );
-        const dwellAvg = {
-          pickup: dwell.pN ? Math.round(dwell.pSum / dwell.pN) : 0,
-          delivery: dwell.dN ? Math.round(dwell.dSum / dwell.dN) : 0,
-        };
-
-        // ----------------------- 5) Revenue by day (7 buckets) ---------------------
-        // Build YYYY-MM-DD buckets to avoid relying on missing view/RPC
-        const buckets = {};
-        for (let i = 6; i >= 0; i--) {
-          const d = new Date();
-          d.setDate(d.getDate() - i);
-          const key = d.toISOString().slice(0, 10);
-          buckets[key] = 0;
-        }
-        for (const r of deliveredRows) {
-          const key = new Date(r.delivered_at).toISOString().slice(0, 10);
-          if (buckets[key] != null) {
-            buckets[key] += Number(r.linehaul_total) || 0;
-          }
-        }
-        const revenueByDay = Object.entries(buckets).map(([date, total]) => ({
-          date,
-          total,
-        }));
-
-        if (!alive) return;
-        setStats({
-          activeCount: activeCount ?? 0,
-          deliveredCount7d,
-          deliveredRevenue7d,
-          problemCount: problemCount ?? 0,
-          dwellAvg,
-          revenueByDay,
-        });
-      } catch (err) {
-        if (!alive) return;
-        console.error(err);
-        setError(err.message || "Failed to load dashboard metrics.");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    }
-
-    fetchMetrics();
-    return () => {
-      alive = false;
-    };
-  }, [range.startISO, range.endISO]);
+function StatCard({ icon: Icon, label, value, hint, tone = "zinc", loading = false }) {
+  const toneMap = {
+    zinc:
+      "border-zinc-200 bg-white/70 dark:border-zinc-800 dark:bg-zinc-900/70",
+    blue:
+      "border-blue-200 bg-blue-50/60 dark:border-blue-900/40 dark:bg-blue-950/40",
+    green:
+      "border-emerald-200 bg-emerald-50/60 dark:border-emerald-900/40 dark:bg-emerald-950/40",
+    yellow:
+      "border-amber-200 bg-amber-50/60 dark:border-amber-900/40 dark:bg-amber-950/40",
+    red:
+      "border-rose-200 bg-rose-50/60 dark:border-rose-900/40 dark:bg-rose-950/40",
+  };
 
   return (
-    <div className="p-6 md:p-8 space-y-6">
-      {/* Top row: stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <Stat
-          icon={Truck}
-          label="Active Loads"
-          value={loading ? <Skeleton /> : stats.activeCount.toLocaleString()}
-          sub="Pending + In Transit"
-        />
-        <Stat
-          icon={CheckCircle2}
-          label="Delivered (7d)"
-          value={loading ? <Skeleton /> : stats.deliveredCount7d.toLocaleString()}
-          sub="Count last 7 days"
-        />
-        <Stat
-          icon={DollarSign}
-          label="Revenue (7d)"
-          value={
-            loading ? <Skeleton /> : `$${Math.round(stats.deliveredRevenue7d).toLocaleString()}`
-          }
-          sub="Sum of delivered linehaul"
-        />
-        <Stat
-          icon={AlertTriangle}
-          label="Problem Loads"
-          value={loading ? <Skeleton /> : stats.problemCount.toLocaleString()}
-          sub="Status=Problem or flagged"
-        />
+    <div
+      className={cx(
+        "rounded-2xl border p-4 backdrop-blur-md shadow-sm",
+        toneMap[tone] || toneMap.zinc
+      )}
+    >
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-2">
+          <div className="rounded-xl border border-zinc-200/60 bg-white/70 p-2 dark:border-zinc-800/60 dark:bg-zinc-900/70">
+            <Icon className="h-5 w-5 text-zinc-700 dark:text-zinc-200" />
+          </div>
+          <div className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+            {label}
+          </div>
+        </div>
+        {loading ? (
+          <RefreshCcw className="h-4 w-4 animate-spin text-zinc-400" />
+        ) : null}
       </div>
 
-      {/* Dwell + simple revenue sparkline */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-sm xl:col-span-1">
-          <div className="text-sm text-zinc-500">Avg Dwell (7d)</div>
-          <div className="mt-3 text-lg">
-            Pickup:{" "}
-            <span className="font-medium">
-              {loading ? "…" : `${stats.dwellAvg.pickup} min`}
-            </span>
-          </div>
-          <div className="mt-1 text-lg">
-            Delivery:{" "}
-            <span className="font-medium">
-              {loading ? "…" : `${stats.dwellAvg.delivery} min`}
-            </span>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 shadow-sm xl:col-span-2">
-          <div className="text-sm text-zinc-500 mb-3">Revenue by Day (7d)</div>
-          <div className="w-full overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-zinc-500">
-                  <th className="py-2 pr-3">Date</th>
-                  <th className="py-2">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(loading ? Array.from({ length: 7 }) : stats.revenueByDay).map(
-                  (row, idx) => (
-                    <tr
-                      key={idx}
-                      className={cx(
-                        "border-t border-zinc-100 dark:border-zinc-800",
-                        "text-zinc-900 dark:text-zinc-100"
-                      )}
-                    >
-                      <td className="py-2 pr-3">
-                        {loading ? <Skeleton w={96} /> : row.date}
-                      </td>
-                      <td className="py-2">
-                        {loading ? (
-                          <Skeleton w={80} />
-                        ) : (
-                          `$${Math.round(row.total).toLocaleString()}`
-                        )}
-                      </td>
-                    </tr>
-                  )
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      <div className="mt-3 text-3xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+        {loading ? "—" : value}
       </div>
-
-      {error ? (
-        <div className="rounded-xl border border-red-200/30 bg-red-50/40 dark:bg-red-900/20 p-4 text-red-600 dark:text-red-300">
-          {error}
-        </div>
+      {hint ? (
+        <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{hint}</div>
       ) : null}
     </div>
   );
 }
 
-/* -------------------------------- Skeleton -------------------------------- */
-function Skeleton({ w = 60, h = 20 }) {
+export default function Dashboard() {
+  const [loading, setLoading] = useState(true);
+  const [counts, setCounts] = useState({
+    all: 0,
+    in_transit: 0,
+    delivered: 0,
+    problem: 0,
+  });
+  const [error, setError] = useState(null);
+
+  const isLocal = useMemo(
+    () => typeof window !== "undefined" && window.location.hostname === "localhost",
+    []
+  );
+
+  // Fetch metrics safely
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchMetrics() {
+      setLoading(true);
+      setError(null);
+
+      try {
+        // 1) Ensure session (helps dev logs, not strictly required)
+        const { data: sessionData } = await supabase.auth.getSession();
+        const uid = sessionData?.session?.user?.id;
+
+        // 2) Base select — light payload; select only columns we need
+        // Important: chain .select() before filters like .eq()
+        const base = supabase
+          .from("loads")
+          .select("id,status", { count: "exact", head: false });
+
+        // 3) Fetch all (we’ll count in JS; RLS may reduce visibility)
+        const { data: allRows, error: allErr } = await base;
+        if (allErr) throw allErr;
+
+        const all = allRows?.length ?? 0;
+
+        // Count by status (robust to unknown/missing statuses)
+        let inTransit = 0;
+        let delivered = 0;
+        let problem = 0;
+
+        for (const r of allRows || []) {
+          const s = String(r.status || "").toLowerCase();
+          if (s === "in_transit" || s === "in transit" || s === "dispatched") {
+            inTransit += 1;
+          } else if (s === "delivered") {
+            delivered += 1;
+          } else if (
+            s === "problem" ||
+            s === "issue" ||
+            s === "hold" ||
+            s === "exception"
+          ) {
+            problem += 1;
+          }
+        }
+
+        if (cancelled) return;
+        setCounts({
+          all,
+          in_transit: inTransit,
+          delivered,
+          problem,
+        });
+
+        // Dev-side visibility
+        if (isLocal) {
+          console.info("[Dashboard] uid =", uid);
+          console.info("[Dashboard] sample rows:", (allRows || []).slice(0, 5));
+        }
+      } catch (e) {
+        if (cancelled) return;
+        console.error("[Dashboard] fetchMetrics error:", e);
+        setError(e?.message || "Failed to load metrics");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    fetchMetrics();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLocal]);
+
   return (
-    <span
-      className="inline-block animate-pulse rounded bg-zinc-200 dark:bg-zinc-800"
-      style={{ width: w, height: h }}
-    />
+    <div className="p-6">
+      {/* Header */}
+      <div className="mb-6 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl border border-zinc-200 bg-white/70 p-2 dark:border-zinc-800 dark:bg-zinc-900/70">
+            <LayoutDashboard className="h-5 w-5 text-zinc-700 dark:text-zinc-200" />
+          </div>
+          <div>
+            <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
+              Dashboard
+            </h1>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              High-level view of current operations.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Error banner (non-blocking) */}
+      {error ? (
+        <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-3 text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/40 dark:text-amber-200">
+          <div className="text-sm font-medium">Some metrics may be unavailable.</div>
+          <div className="text-xs opacity-80">{String(error)}</div>
+        </div>
+      ) : null}
+
+      {/* Stats grid */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          icon={LayoutDashboard}
+          label="All Loads"
+          value={counts.all}
+          hint="Visible under current RLS policies"
+          loading={loading}
+        />
+        <StatCard
+          icon={Truck}
+          label="In Transit"
+          value={counts.in_transit}
+          tone="blue"
+          hint="Dispatched / rolling"
+          loading={loading}
+        />
+        <StatCard
+          icon={CheckCircle2}
+          label="Delivered"
+          value={counts.delivered}
+          tone="green"
+          hint="POD received or marked delivered"
+          loading={loading}
+        />
+        <StatCard
+          icon={TriangleAlert}
+          label="Problem Board"
+          value={counts.problem}
+          tone="yellow"
+          hint="Issues / holds / exceptions"
+          loading={loading}
+        />
+      </div>
+
+      {/* Empty state helper */}
+      {!loading && counts.all === 0 ? (
+        <div className="mt-8 rounded-2xl border border-zinc-200 bg-white/70 p-6 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-400">
+          No loads visible. If you expect data, check RLS policies, your role, or the project’s
+          table name (<span className="font-mono">loads</span>) and <span className="font-mono">status</span> values.
+        </div>
+      ) : null}
+    </div>
   );
 }
