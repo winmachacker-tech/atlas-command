@@ -12,11 +12,10 @@ import {
   Settings as SettingsIcon,
   Users as UsersIcon,
   LogOut,
-  User as UserIcon,
+  Receipt, // ✅ Added Billing icon
 } from "lucide-react";
 
 import { supabase } from "../lib/supabase";
-import { getProfile } from "../lib/userSettings";
 import GlobalThemeFix from "../GlobalThemeFix.jsx";
 import ThemeSwitcher from "../components/ThemeSwitcher.jsx";
 import DiagnosticsOverlay from "../components/DiagnosticsOverlay.jsx";
@@ -34,267 +33,240 @@ function useActive(path) {
 
 /* ---------------------------------- API ----------------------------------- */
 async function fetchIsAdmin(userId) {
-  if (!userId) return false;
   try {
     const { data, error } = await supabase
       .from("users")
-      .select("is_admin")
+      .select("role")
       .eq("id", userId)
       .maybeSingle();
-    if (error) return false;
-    return Boolean(data?.is_admin);
-  } catch {
+    if (error) throw error;
+    return (data?.role || "").toUpperCase() === "ADMIN";
+  } catch (e) {
+    console.warn("[MainLayout] fetchIsAdmin error:", e?.message || e);
     return false;
   }
 }
 
-/* ------------------------------- MainLayout ------------------------------- */
+/* --------------------------------- Layout --------------------------------- */
 export default function MainLayout() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [avatarUrl, setAvatarUrl] = useState(""); // ✅ new
+  const location = useLocation();
+  const [session, setSession] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // Initial load of session + profile
   useEffect(() => {
-    let isMounted = true;
+    let mounted = true;
 
-    (async () => {
-      const { data } = await supabase.auth.getUser();
-      const user = data?.user ?? null;
-      if (!isMounted) return;
-
-      const userEmail = user?.email ?? "";
-      setEmail(userEmail);
-
-      try {
-        const prof = await getProfile(); // pulls metadata incl. avatar_path -> signed URL
-        if (!isMounted) return;
-        const name =
-          prof?.fullName?.trim() ||
-          (userEmail ? userEmail.split("@")[0] : "") ||
-          "";
-        setDisplayName(name);
-        if (prof?.avatar_url) setAvatarUrl(prof.avatar_url);
-      } catch {
-        if (!isMounted) return;
-        const fallback = userEmail ? userEmail.split("@")[0] : "";
-        setDisplayName(fallback);
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setSession(data.session ?? null);
+      if (data.session?.user?.id) {
+        fetchIsAdmin(data.session.user.id).then((a) => mounted && setIsAdmin(a));
       }
+    });
 
-      if (user?.id) {
-        const admin = await fetchIsAdmin(user.id);
-        if (isMounted) setIsAdmin(admin);
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
+      setSession(sess ?? null);
+      if (sess?.user?.id) {
+        fetchIsAdmin(sess.user.id).then(setIsAdmin);
       } else {
         setIsAdmin(false);
       }
-    })();
+    });
 
     return () => {
-      isMounted = false;
+      mounted = false;
+      sub?.subscription?.unsubscribe?.();
     };
   }, []);
 
-  // 🔔 Live updates from ProfileSettings (name + avatar)
-  useEffect(() => {
-    const handler = (e) => {
-      const full = e?.detail?.fullName?.trim() || "";
-      const mail = e?.detail?.email || "";
-      const nextName =
-        full || (typeof mail === "string" && mail.includes("@") ? mail.split("@")[0] : "");
-      if (nextName) setDisplayName(nextName);
-
-      if (typeof e?.detail?.avatar_url === "string") {
-        setAvatarUrl(e.detail.avatar_url);
-      }
-    };
-    window.addEventListener("profile:updated", handler);
-    return () => window.removeEventListener("profile:updated", handler);
-  }, []);
-
-  const handleSignOut = async () => {
+  async function signOut() {
     try {
       await supabase.auth.signOut();
-    } finally {
-      navigate("/login", { replace: true });
+      navigate("/login");
+    } catch (e) {
+      console.error("signOut error:", e);
     }
-  };
-
-  const mainNav = useMemo(
-    () => [
-      { to: "/", label: "Dashboard", icon: LayoutDashboard },
-      { to: "/loads", label: "Loads", icon: Boxes },
-      { to: "/in-transit", label: "In Transit", icon: Truck },
-      { to: "/delivered", label: "Delivered", icon: CheckCircle2 },
-      { to: "/problem-board", label: "Problem Board", icon: TriangleAlert },
-      { to: "/activity", label: "Activity", icon: ActivityIcon },
-      { to: "/settings", label: "Settings", icon: SettingsIcon },
-    ],
-    []
-  );
+  }
 
   return (
-    <>
+    <div className="min-h-screen" data-brand-applied>
       <GlobalThemeFix />
 
-      <div
-        className={cx(
-          "flex h-screen",
-          "bg-white dark:bg-zinc-950",
-          "text-zinc-900 dark:text-zinc-100",
-          "bg-[var(--bg-base)] text-[var(--text-base)]"
-        )}
-      >
-        {/* ------------------------------- Sidebar ------------------------------- */}
-        <aside
-          className={cx(
-            "hidden md:flex md:w-80 lg:w-80 xl:w-80 flex-col",
-            "border-r border-zinc-200 dark:border-zinc-800",
-            "bg-white dark:bg-zinc-900",
-            "bg-[var(--bg-surface)]"
-          )}
-        >
-          {/* Brand + user chip */}
-          <div className="flex items-center justify-between px-4 py-4 border-b border-zinc-200 dark:border-zinc-800">
-            <div className="flex items-center gap-2 min-w-0">
-              <ShieldCheck className="h-5 w-5 text-[var(--accent-600)]" />
-              <h1 className="font-semibold text-lg flex items-center gap-1 min-w-0">
-                <span className="truncate">Atlas Command</span>
-                {displayName ? (
-                  <span className="text-sm text-zinc-500 dark:text-zinc-400 font-normal truncate max-w-[140px]">
-                    {" "}
-                    | {displayName}
-                  </span>
-                ) : null}
-              </h1>
+      <div className="mx-auto grid min-h-screen w-full grid-cols-[260px_1fr] lg:grid-cols-[280px_1fr]">
+        {/* --------------------------- Sidebar --------------------------- */}
+        <aside className="hidden h-screen flex-col border-r border-white/10 bg-[var(--bg-surface,#171c26)] p-4 md:flex">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-indigo-400" />
+              <div className="text-lg font-semibold">Atlas Command</div>
             </div>
-
-            <div className="shrink-0 w-8 h-8 rounded-xl bg-zinc-800/40 border border-zinc-700/50 overflow-hidden grid place-items-center">
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt="User avatar"
-                  className="w-full h-full object-cover"
-                  loading="lazy"
-                />
-              ) : (
-                <UserIcon className="w-4 h-4 text-zinc-400" />
-              )}
-            </div>
+            <ThemeSwitcher />
           </div>
 
-          {/* Nav */}
-          <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-            {mainNav.map((item) => (
-              <NavItem key={item.to} to={item.to} icon={item.icon} label={item.label} />
-            ))}
-            {isAdmin && (
-              <>
-                <div className="mt-6 px-3 text-xs uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-                  Admin
-                </div>
-                <NavItem to="/users" icon={UsersIcon} label="User Management" />
-              </>
-            )}
-          </nav>
+          <nav className="mt-6 flex-1 space-y-1">
+            <NavLink
+              to="/"
+              className={({ isActive }) =>
+                cx(
+                  "group flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition",
+                  isActive
+                    ? "bg-white/10 text-white"
+                    : "text-white/80 hover:bg-white/5 hover:text-white"
+                )
+              }
+              end
+            >
+              <LayoutDashboard className="h-4 w-4 opacity-90" />
+              <span>Dashboard</span>
+            </NavLink>
 
-          {/* Footer */}
-          <div className="mt-auto border-t border-zinc-200 dark:border-zinc-800 p-4 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <span className="truncate text-sm text-zinc-600 dark:text-zinc-400" title={email}>
-                {email}
-              </span>
-              <ThemeSwitcher />
+            <NavLink
+              to="/loads"
+              className={({ isActive }) =>
+                cx(
+                  "group flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition",
+                  isActive
+                    ? "bg-white/10 text-white"
+                    : "text-white/80 hover:bg-white/5 hover:text-white"
+                )
+              }
+            >
+              <Boxes className="h-4 w-4 opacity-90" />
+              <span>Loads</span>
+            </NavLink>
+
+            <NavLink
+              to="/in-transit"
+              className={({ isActive }) =>
+                cx(
+                  "group flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition",
+                  isActive
+                    ? "bg-white/10 text-white"
+                    : "text-white/80 hover:bg-white/5 hover:text-white"
+                )
+              }
+            >
+              <Truck className="h-4 w-4 opacity-90" />
+              <span>In Transit</span>
+            </NavLink>
+
+            <NavLink
+              to="/delivered"
+              className={({ isActive }) =>
+                cx(
+                  "group flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition",
+                  isActive
+                    ? "bg-white/10 text-white"
+                    : "text-white/80 hover:bg-white/5 hover:text-white"
+                )
+              }
+            >
+              <CheckCircle2 className="h-4 w-4 opacity-90" />
+              <span>Delivered</span>
+            </NavLink>
+
+            {/* ✅ Added Billing link */}
+            <NavLink
+              to="/billing"
+              className={({ isActive }) =>
+                cx(
+                  "group flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition",
+                  isActive
+                    ? "bg-white/10 text-white"
+                    : "text-white/80 hover:bg-white/5 hover:text-white"
+                )
+              }
+            >
+              <Receipt className="h-4 w-4 opacity-90" />
+              <span>Billing</span>
+            </NavLink>
+
+            <NavLink
+              to="/problem-board"
+              className={({ isActive }) =>
+                cx(
+                  "group flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition",
+                  isActive
+                    ? "bg-white/10 text-white"
+                    : "text-white/80 hover:bg-white/5 hover:text-white"
+                )
+              }
+            >
+              <TriangleAlert className="h-4 w-4 opacity-90" />
+              <span>Problem Board</span>
+            </NavLink>
+
+            <NavLink
+              to="/activity"
+              className={({ isActive }) =>
+                cx(
+                  "group flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition",
+                  isActive
+                    ? "bg-white/10 text-white"
+                    : "text-white/80 hover:bg-white/5 hover:text-white"
+                )
+              }
+            >
+              <ActivityIcon className="h-4 w-4 opacity-90" />
+              <span>Activity</span>
+            </NavLink>
+
+            <NavLink
+              to="/settings"
+              className={({ isActive }) =>
+                cx(
+                  "group flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition",
+                  isActive
+                    ? "bg-white/10 text-white"
+                    : "text-white/80 hover:bg-white/5 hover:text-white"
+                )
+              }
+            >
+              <SettingsIcon className="h-4 w-4 opacity-90" />
+              <span>Settings</span>
+            </NavLink>
+
+            <div className="mt-6 text-xs font-semibold uppercase opacity-50">
+              Admin
             </div>
 
+            <NavLink
+              to="/user-management"
+              className={({ isActive }) =>
+                cx(
+                  "group flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition",
+                  isActive
+                    ? "bg-white/10 text-white"
+                    : "text-white/80 hover:bg-white/5 hover:text-white"
+                )
+              }
+            >
+              <UsersIcon className="h-4 w-4 opacity-90" />
+              <span>User Management</span>
+            </NavLink>
+          </nav>
+
+          <div className="mt-auto pt-4">
             <button
-              onClick={handleSignOut}
-              className={cx(
-                "w-full inline-flex items-center justify-center gap-2",
-                "rounded-xl px-3 py-2 text-sm",
-                "bg-[var(--accent-600)] hover:bg-[var(--accent-700)] text-white",
-                "transition-colors"
-              )}
+              onClick={signOut}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-sm text-white/80 hover:bg-white/5 hover:text-white"
+              title="Sign out"
             >
               <LogOut className="h-4 w-4" />
-              <span>Sign out</span>
+              Sign out
             </button>
           </div>
         </aside>
 
-        {/* ------------------------------ Main area ------------------------------ */}
-        <main className="flex-1 min-w-0">
-          {/* Top bar for small screens */}
-          <div
-            className={cx(
-              "md:hidden flex items-center justify-between px-4 py-3",
-              "border-b border-zinc-200 dark:border-zinc-800",
-              "bg-white dark:bg-zinc-900",
-              "bg-[var(--bg-surface)]"
-            )}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <ShieldCheck className="h-5 w-5 text-[var(--accent-600)]" />
-              <span className="font-semibold flex items-center gap-1 min-w-0">
-                <span className="truncate">Atlas Command</span>
-                {displayName ? (
-                  <span className="text-sm text-zinc-500 dark:text-zinc-400 font-normal truncate max-w-[120px]">
-                    {" "}
-                    | {displayName}
-                  </span>
-                ) : null}
-              </span>
-            </div>
-
-            <div className="shrink-0 w-8 h-8 rounded-xl bg-zinc-800/40 border border-zinc-700/50 overflow-hidden grid place-items-center">
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt="User avatar"
-                  className="w-full h-full object-cover"
-                  loading="lazy"
-                />
-              ) : (
-                <UserIcon className="w-4 h-4 text-zinc-400" />
-              )}
-            </div>
-          </div>
-
+        {/* ---------------------------- Main ---------------------------- */}
+        <main className="min-h-screen bg-[var(--bg-base,#0f131a)] p-4">
           <DiagnosticsOverlay />
-
-          <div
-            className={cx(
-              "h-[calc(100vh-0px)] overflow-auto",
-              "bg-white dark:bg-zinc-950",
-              "bg-[var(--bg-base)]"
-            )}
-          >
+          <div className="mx-auto max-w-[1600px]">
             <Outlet />
           </div>
         </main>
       </div>
-    </>
-  );
-}
-
-/* -------------------------------- Nav Item -------------------------------- */
-function NavItem({ to, icon: Icon, label }) {
-  const active = useActive(to);
-  return (
-    <NavLink
-      to={to}
-      className={cx(
-        "flex items-center gap-3 w-full px-3 py-2 rounded-2xl text-sm",
-        "transition-colors border border-transparent",
-        active
-          ? "bg-zinc-50 dark:bg-zinc-900/60 border-zinc-200 dark:border-zinc-800"
-          : "hover:bg-zinc-100 dark:hover:bg-zinc-800"
-      )}
-      end={to === "/"}
-    >
-      <Icon className={cx("h-4 w-4", active ? "text-[var(--accent-600)]" : "text-zinc-500 dark:text-zinc-400")} />
-      <span>{label}</span>
-    </NavLink>
+    </div>
   );
 }

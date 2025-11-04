@@ -28,6 +28,7 @@ const Users        = lazy(() => import("./pages/Users.jsx"));
 const Login        = lazy(() => import("./pages/Login.jsx"));
 const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx"));
 const SetPassword  = lazy(() => import("./pages/SetPassword.jsx"));
+const Billing      = lazy(() => import("./pages/Billing.jsx")); // ✅ NEW
 
 /* -------------------------- Settings nested layout ------------------------- */
 /* NOTE: extensionless + lowercase folder name to avoid case/URL issues */
@@ -78,6 +79,7 @@ function AppRoutes() {
           <Route path="loads" element={<ErrorBoundary><Loads /></ErrorBoundary>} />
           <Route path="in-transit" element={<ErrorBoundary><InTransit /></ErrorBoundary>} />
           <Route path="delivered" element={<ErrorBoundary><Delivered /></ErrorBoundary>} />
+          <Route path="billing" element={<ErrorBoundary><Billing /></ErrorBoundary>} /> {/* ✅ NEW */}
           <Route path="problems" element={<ErrorBoundary><ProblemBoard /></ErrorBoundary>} />
           <Route path="activity" element={<ErrorBoundary><Activity /></ErrorBoundary>} />
           <Route path="trucks" element={<ErrorBoundary><Trucks /></ErrorBoundary>} />
@@ -133,7 +135,7 @@ function AppRoutes() {
 ReactDOM.createRoot(document.getElementById("root")).render(
   <StrictMode>
     <SettingsProvider>
-      {/* ✅ Wrap app with ThemeProvider so Light/Dark/System works everywhere */}
+      {/* ✅ ThemeProvider keeps your CSS/variables intact */}
       <ThemeProvider>
         <BrowserRouter>
           <AppRoutes />

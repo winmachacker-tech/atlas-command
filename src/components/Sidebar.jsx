@@ -15,7 +15,7 @@ export const SIDEBAR_ITEMS = [
   { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
   { label: "Loads", path: "/loads", icon: Boxes },
   { label: "Activity", path: "/activity", icon: Activity },
-  { label: "Users & Roles", path: "/users", icon: Shield }, // 👈 new
+  { label: "Users & Roles", path: "/users", icon: Shield }, 
   { label: "Settings", path: "/settings", icon: SettingsIcon },
 ];
 
