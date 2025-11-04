@@ -96,6 +96,8 @@ html, body, #root { height: 100%; }
 body {
   background-color: var(--bg-base);
   color: var(--text-base);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-weight: 400;
 }
 
 /* Smooth theme transitions (kept subtle for enterprise look) */
@@ -152,7 +154,7 @@ html.dark *::-webkit-scrollbar-thumb { background: rgba(120, 120, 128, .45); }
    Uses your existing --ac-primary scale injected by ThemeProvider.
    ========================================================================== */
 
-/* 1) Dashboard / content “tiles” (cards) — pastel fill + accent outline */
+/* 1) Dashboard / content "tiles" (cards) — pastel fill + accent outline */
 main .rounded-2xl.border,
 main .surface-card {
   /* outline in main color */

@@ -2,19 +2,18 @@
 import React, { StrictMode, Suspense, lazy } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-
 import "./index.css";
 
-/* ---------------------- App shell / providers / guards --------------------- */
+/* Shell / providers / guards */
 import MainLayout from "./layout/MainLayout.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import { SettingsProvider } from "./context/SettingsProvider.jsx";
 import AuthGuard from "./components/AuthGuard.jsx";
-
-/* ✅ Theme (fixes Light/Dark/System and keeps 'resolved' accurate) */
+import InvoiceDraft from "./pages/InvoiceDraft.jsx";
+/* Theme */
 import { ThemeProvider } from "./context/ThemeProvider.jsx";
 
-/* ---------------------------- Lazy-loaded pages --------------------------- */
+/* Lazy pages */
 const Dashboard    = lazy(() => import("./pages/Dashboard.jsx"));
 const Loads        = lazy(() => import("./pages/Loads.jsx"));
 const InTransit    = lazy(() => import("./pages/InTransit.jsx"));
@@ -28,14 +27,13 @@ const Users        = lazy(() => import("./pages/Users.jsx"));
 const Login        = lazy(() => import("./pages/Login.jsx"));
 const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx"));
 const SetPassword  = lazy(() => import("./pages/SetPassword.jsx"));
-const Billing      = lazy(() => import("./pages/Billing.jsx")); // ✅ NEW
+const Billing      = lazy(() => import("./pages/Billing.jsx"));
 
-/* -------------------------- Settings nested layout ------------------------- */
-/* NOTE: extensionless + lowercase folder name to avoid case/URL issues */
+/* Settings nested layout */
 import SettingsLayout from "./components/settings/SettingsLayout";
 const ProfileSettings = lazy(() => import("./pages/settings/ProfileSettings"));
 
-/* --------------------------------- Fallback -------------------------------- */
+/* Fallback */
 const Loader = () => (
   <div className="min-h-screen grid place-items-center bg-[#0f1419] text-white">
     <div className="flex items-center gap-3">
@@ -77,9 +75,10 @@ function AppRoutes() {
 
           {/* Primary sections */}
           <Route path="loads" element={<ErrorBoundary><Loads /></ErrorBoundary>} />
+          <Route path="invoices/new/:loadId" element={<ErrorBoundary><InvoiceDraft /></ErrorBoundary>} />
           <Route path="in-transit" element={<ErrorBoundary><InTransit /></ErrorBoundary>} />
           <Route path="delivered" element={<ErrorBoundary><Delivered /></ErrorBoundary>} />
-          <Route path="billing" element={<ErrorBoundary><Billing /></ErrorBoundary>} /> {/* ✅ NEW */}
+          <Route path="billing" element={<ErrorBoundary><Billing /></ErrorBoundary>} />
           <Route path="problems" element={<ErrorBoundary><ProblemBoard /></ErrorBoundary>} />
           <Route path="activity" element={<ErrorBoundary><Activity /></ErrorBoundary>} />
           <Route path="trucks" element={<ErrorBoundary><Trucks /></ErrorBoundary>} />
@@ -97,31 +96,11 @@ function AppRoutes() {
               </ErrorBoundary>
             }
           >
-            {/* Redirect /settings -> /settings/profile */}
             <Route index element={<Navigate to="profile" replace />} />
-
-            {/* Profile & Account */}
-            <Route
-              path="profile"
-              element={
-                <ErrorBoundary>
-                  <ProfileSettings />
-                </ErrorBoundary>
-              }
-            />
-
-            {/*
-              Future routes:
-              <Route path="appearance" element={<AppearanceSettings />} />
-              <Route path="notifications" element={<NotificationSettings />} />
-              <Route path="integrations" element={<IntegrationSettings />} />
-              <Route path="billing" element={<BillingSettings />} />
-              <Route path="security" element={<SecuritySettings />} />
-              <Route path="team" element={<TeamSettings />} />
-            */}
+            <Route path="profile" element={<ErrorBoundary><ProfileSettings /></ErrorBoundary>} />
           </Route>
 
-          {/* (Optional) Legacy settings page */}
+          {/* Optional legacy settings route */}
           <Route path="settings-legacy" element={<ErrorBoundary><Settings /></ErrorBoundary>} />
         </Route>
 
@@ -135,7 +114,6 @@ function AppRoutes() {
 ReactDOM.createRoot(document.getElementById("root")).render(
   <StrictMode>
     <SettingsProvider>
-      {/* ✅ ThemeProvider keeps your CSS/variables intact */}
       <ThemeProvider>
         <BrowserRouter>
           <AppRoutes />
