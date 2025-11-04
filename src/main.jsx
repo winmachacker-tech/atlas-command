@@ -1,185 +1,144 @@
-import React, { StrictMode, useEffect, useState } from "react";
+// src/main.jsx
+import React, { StrictMode, Suspense, lazy } from "react";
 import ReactDOM from "react-dom/client";
-import {
-  BrowserRouter,
-  Routes,
-  Route,
-  Navigate,
-} from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
 import "./index.css";
+
+/* ---------------------- App shell / providers / guards --------------------- */
 import MainLayout from "./layout/MainLayout.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import { SettingsProvider } from "./context/SettingsProvider.jsx";
-import { ThemeProvider } from "./context/ThemeProvider.jsx";
 import AuthGuard from "./components/AuthGuard.jsx";
-import { supabase } from './lib/supabase.js';
 
-/* ---------------------------- Direct imports (no lazy) -------------------- */
-import Dashboard from "./pages/Dashboard.jsx";
-import Loads from "./pages/Loads.jsx";
-import InTransit from "./pages/InTransit.jsx";
-import Delivered from "./pages/Delivered.jsx";
-import ProblemBoard from "./pages/ProblemBoard.jsx";
-import Activity from "./pages/Activity.jsx";
-import Settings from "./pages/Settings.jsx";
-import Trucks from "./pages/Trucks.jsx";
-import Drivers from "./pages/Drivers.jsx";
-import Users from "./pages/Users.jsx";
-import Login from "./pages/Login.jsx";
-import AuthCallback from "./pages/AuthCallback.jsx";
-import SetPassword from "./pages/SetPassword.jsx";
+/* ✅ Theme (fixes Light/Dark/System and keeps 'resolved' accurate) */
+import { ThemeProvider } from "./context/ThemeProvider.jsx";
 
-/* ----------------------------- Auth Context ------------------------------- */
-export const AuthContext = React.createContext({ session: null, loading: true });
+/* ---------------------------- Lazy-loaded pages --------------------------- */
+const Dashboard    = lazy(() => import("./pages/Dashboard.jsx"));
+const Loads        = lazy(() => import("./pages/Loads.jsx"));
+const InTransit    = lazy(() => import("./pages/InTransit.jsx"));
+const Delivered    = lazy(() => import("./pages/Delivered.jsx"));
+const ProblemBoard = lazy(() => import("./pages/ProblemBoard.jsx"));
+const Activity     = lazy(() => import("./pages/Activity.jsx"));
+const Settings     = lazy(() => import("./pages/Settings.jsx"));
+const Trucks       = lazy(() => import("./pages/Trucks.jsx"));
+const Drivers      = lazy(() => import("./pages/Drivers.jsx"));
+const Users        = lazy(() => import("./pages/Users.jsx"));
+const Login        = lazy(() => import("./pages/Login.jsx"));
+const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx"));
+const SetPassword  = lazy(() => import("./pages/SetPassword.jsx"));
 
-function AuthProvider({ children }) {
-  const [session, setSession] = useState(null);
-  const [loading, setLoading] = useState(true);
+/* -------------------------- Settings nested layout ------------------------- */
+/* NOTE: extensionless + lowercase folder name to avoid case/URL issues */
+import SettingsLayout from "./components/settings/SettingsLayout";
+const ProfileSettings = lazy(() => import("./pages/settings/ProfileSettings"));
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setLoading(false);
-    });
+/* --------------------------------- Fallback -------------------------------- */
+const Loader = () => (
+  <div className="min-h-screen grid place-items-center bg-[#0f1419] text-white">
+    <div className="flex items-center gap-3">
+      <span className="inline-block w-3 h-3 rounded-full animate-pulse" />
+      <span className="inline-block w-3 h-3 rounded-full animate-pulse" />
+      <span className="inline-block w-3 h-3 rounded-full animate-pulse" />
+      <p className="ml-3 text-sm text-gray-400">Loading…</p>
+    </div>
+  </div>
+);
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
+function AppRoutes() {
   return (
-    <AuthContext.Provider value={{ session, loading }}>
-      {children}
-    </AuthContext.Provider>
+    <Suspense fallback={<Loader />}>
+      <Routes>
+        {/* Auth */}
+        <Route path="/login" element={<Login />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/set-password" element={<SetPassword />} />
+
+        {/* App */}
+        <Route
+          path="/"
+          element={
+            <AuthGuard>
+              <MainLayout />
+            </AuthGuard>
+          }
+        >
+          {/* Dashboard (default) */}
+          <Route
+            index
+            element={
+              <ErrorBoundary>
+                <Dashboard />
+              </ErrorBoundary>
+            }
+          />
+
+          {/* Primary sections */}
+          <Route path="loads" element={<ErrorBoundary><Loads /></ErrorBoundary>} />
+          <Route path="in-transit" element={<ErrorBoundary><InTransit /></ErrorBoundary>} />
+          <Route path="delivered" element={<ErrorBoundary><Delivered /></ErrorBoundary>} />
+          <Route path="problems" element={<ErrorBoundary><ProblemBoard /></ErrorBoundary>} />
+          <Route path="activity" element={<ErrorBoundary><Activity /></ErrorBoundary>} />
+          <Route path="trucks" element={<ErrorBoundary><Trucks /></ErrorBoundary>} />
+          <Route path="drivers" element={<ErrorBoundary><Drivers /></ErrorBoundary>} />
+          <Route path="users" element={<ErrorBoundary><Users /></ErrorBoundary>} />
+
+          {/* Settings (nested) */}
+          <Route
+            path="settings"
+            element={
+              <ErrorBoundary>
+                <AuthGuard>
+                  <SettingsLayout />
+                </AuthGuard>
+              </ErrorBoundary>
+            }
+          >
+            {/* Redirect /settings -> /settings/profile */}
+            <Route index element={<Navigate to="profile" replace />} />
+
+            {/* Profile & Account */}
+            <Route
+              path="profile"
+              element={
+                <ErrorBoundary>
+                  <ProfileSettings />
+                </ErrorBoundary>
+              }
+            />
+
+            {/*
+              Future routes:
+              <Route path="appearance" element={<AppearanceSettings />} />
+              <Route path="notifications" element={<NotificationSettings />} />
+              <Route path="integrations" element={<IntegrationSettings />} />
+              <Route path="billing" element={<BillingSettings />} />
+              <Route path="security" element={<SecuritySettings />} />
+              <Route path="team" element={<TeamSettings />} />
+            */}
+          </Route>
+
+          {/* (Optional) Legacy settings page */}
+          <Route path="settings-legacy" element={<ErrorBoundary><Settings /></ErrorBoundary>} />
+        </Route>
+
+        {/* 404 -> Dashboard */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
   );
 }
 
-/* ----------------------------- Render to DOM ------------------------------ */
 ReactDOM.createRoot(document.getElementById("root")).render(
   <StrictMode>
-    <AuthProvider>
+    <SettingsProvider>
+      {/* ✅ Wrap app with ThemeProvider so Light/Dark/System works everywhere */}
       <ThemeProvider>
-        <SettingsProvider>
-          <BrowserRouter>
-            <ErrorBoundary>
-              <Routes>
-                {/* Public routes */}
-                <Route path="/login" element={<Login />} />
-                <Route path="/auth/callback" element={<AuthCallback />} />
-                <Route path="/set-password" element={<SetPassword />} />
-                
-                {/* Temporary onboarding placeholder */}
-                <Route 
-                  path="/onboarding" 
-                  element={
-                    <div className="p-6">
-                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-900 dark:bg-amber-950">
-                        <h2 className="text-lg font-semibold mb-2">Onboarding Required</h2>
-                        <p className="text-sm mb-4">Your profile is missing a full_name.</p>
-                        <p className="text-sm font-mono text-xs">
-                          Run: UPDATE users SET full_name = 'Your Name' WHERE id = 'your-user-id';
-                        </p>
-                      </div>
-                    </div>
-                  } 
-                />
-
-                {/* Protected routes with MainLayout */}
-                <Route element={<MainLayout />}>
-                  <Route
-                    path="/"
-                    element={
-                      <AuthGuard>
-                        <Dashboard />
-                      </AuthGuard>
-                    }
-                  />
-                  <Route
-                    path="/loads"
-                    element={
-                      <AuthGuard>
-                        <Loads />
-                      </AuthGuard>
-                    }
-                  />
-                  <Route
-                    path="/in-transit"
-                    element={
-                      <AuthGuard>
-                        <InTransit />
-                      </AuthGuard>
-                    }
-                  />
-                  <Route
-                    path="/delivered"
-                    element={
-                      <AuthGuard>
-                        <Delivered />
-                      </AuthGuard>
-                    }
-                  />
-                  <Route
-                    path="/problem-board"
-                    element={
-                      <AuthGuard>
-                        <ProblemBoard />
-                      </AuthGuard>
-                    }
-                  />
-                  <Route
-                    path="/activity"
-                    element={
-                      <AuthGuard>
-                        <Activity />
-                      </AuthGuard>
-                    }
-                  />
-                  <Route
-                    path="/settings"
-                    element={
-                      <AuthGuard>
-                        <Settings />
-                      </AuthGuard>
-                    }
-                  />
-                  <Route
-                    path="/trucks"
-                    element={
-                      <AuthGuard>
-                        <Trucks />
-                      </AuthGuard>
-                    }
-                  />
-                  <Route
-                    path="/drivers"
-                    element={
-                      <AuthGuard>
-                        <Drivers />
-                      </AuthGuard>
-                    }
-                  />
-                  <Route
-                    path="/users"
-                    element={
-                      <AuthGuard>
-                        <Users />
-                      </AuthGuard>
-                    }
-                  />
-                </Route>
-
-                {/* Fallback */}
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </ErrorBoundary>
-          </BrowserRouter>
-        </SettingsProvider>
+        <BrowserRouter>
+          <AppRoutes />
+        </BrowserRouter>
       </ThemeProvider>
-    </AuthProvider>
+    </SettingsProvider>
   </StrictMode>
 );
