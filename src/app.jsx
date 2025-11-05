@@ -1,44 +1,46 @@
-// src/app.jsx
+// src/App.jsx
 import { Suspense, lazy } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import MainLayout from "./layout/MainLayout.jsx";
 import AuthGuard from "./components/AuthGuard.jsx";
 
-const Dashboard    = lazy(() => import("./pages/Dashboard.jsx"));
-const Loads        = lazy(() => import("./pages/Loads.jsx"));
-const InTransit    = lazy(() => import("./pages/InTransit.jsx"));
-const Delivered    = lazy(() => import("./pages/Delivered.jsx"));
-const Billing      = lazy(() => import("./pages/Billing.jsx"));
-const Settings     = lazy(() => import("./pages/Settings.jsx"));
+/** Lazy pages */
+const Dashboard      = lazy(() => import("./pages/Dashboard.jsx"));
+const Loads          = lazy(() => import("./pages/Loads.jsx"));
+const InTransit      = lazy(() => import("./pages/InTransit.jsx"));
+const Delivered      = lazy(() =>
+  import("./pages/Delivered.jsx").catch(() => ({
+    default: () => <div className="p-6">Delivered</div>,
+  }))
+);
+const Billing        = lazy(() => import("./pages/Billing.jsx"));
+const Drivers        = lazy(() =>
+  import("./pages/Drivers.jsx").catch(() => ({
+    default: () => <div className="p-6">Drivers</div>,
+  }))
+);
+const Trucks         = lazy(() =>
+  import("./pages/Trucks.jsx").catch(() => ({
+    default: () => <div className="p-6">Trucks</div>,
+  }))
+);
+const Settings       = lazy(() => import("./pages/Settings.jsx")); // ✅ single source of truth
+const TeamManagement = lazy(() => import("./pages/TeamManagement.jsx"));
+const Login          = lazy(() =>
+  import("./pages/Login.jsx").catch(() => ({
+    default: () => <div className="p-6">Login</div>,
+  }))
+);
 
-const Login        = lazy(() => import("./pages/Login.jsx"));
-const Signup       = lazy(() => import("./pages/Signup.jsx"));
-const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx"));
-const SetPassword  = lazy(() => import("./pages/SetPassword.jsx")); // if you have it
-
-function Fallback() {
+export default function App() {
   return (
-    <div className="min-h-screen grid place-items-center text-white/80">
-      <div className="rounded-2xl border border-white/10 bg-black/40 backdrop-blur-md px-6 py-4">
-        Loading…
-      </div>
-    </div>
-  );
-}
-
-export default function AppRoutes() {
-  return (
-    <Suspense fallback={<Fallback />}>
+    <Suspense fallback={<div className="p-6 text-sm">Loading…</div>}>
       <Routes>
-        {/* PUBLIC */}
+        {/* Public routes */}
         <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<Signup />} />
-        <Route path="/auth/callback" element={<AuthCallback />} />
-        <Route path="/set-password" element={<SetPassword />} />
 
-        {/* PROTECTED */}
+        {/* Protected layout + routes */}
         <Route
-          path="/"
           element={
             <AuthGuard>
               <MainLayout />
@@ -50,10 +52,22 @@ export default function AppRoutes() {
           <Route path="in-transit" element={<InTransit />} />
           <Route path="delivered" element={<Delivered />} />
           <Route path="billing" element={<Billing />} />
+          <Route path="drivers" element={<Drivers />} />
+          <Route path="trucks" element={<Trucks />} />
+
+          {/* ✅ Settings lives as a nested route under the protected layout */}
           <Route path="settings" element={<Settings />} />
+
+          {/* ✅ Team Management canonical route */}
+          <Route path="teammanagement" element={<TeamManagement />} />
+
+          {/* (Optional) Old settings paths → redirect */}
+          <Route path="settings/team" element={<Navigate to="/teammanagement" replace />} />
+          <Route path="settings/team-management" element={<Navigate to="/teammanagement" replace />} />
+          <Route path="settings/teams" element={<Navigate to="/teammanagement" replace />} />
         </Route>
 
-        {/* CATCH-ALL */}
+        {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>

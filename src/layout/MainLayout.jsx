@@ -1,6 +1,6 @@
 // src/layout/MainLayout.jsx
-import { Suspense, useCallback } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Home,
   Truck,
@@ -9,25 +9,27 @@ import {
   DollarSign,
   UserRound,
   ClipboardList,
-  Settings as SettingsIcon,
   Menu,
   ShieldCheck,
   LogOut,
+  ChevronDown,
+  FolderKanban,
+  Palette,
+  Bell,
+  Plug,
+  Shield,
+  CreditCard,
 } from "lucide-react";
 import ThemeMenu from "../components/ThemeMenu.jsx";
 import { supabase } from "../lib/supabase";
 
-/**
- * Utility: cx() to join classNames conditionally
- */
+/* -------------------------- tiny class joiner -------------------------- */
 function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
 
-/**
- * Sidebar link component to keep styles consistent
- */
-function SideLink({ to, icon: Icon, children, end = false }) {
+/* ------------------------- Reusable side link -------------------------- */
+function SideLink({ to, icon: Icon, children, end = false, onClick }) {
   return (
     <NavLink
       to={to}
@@ -37,149 +39,254 @@ function SideLink({ to, icon: Icon, children, end = false }) {
           "flex items-center gap-3 px-3 py-2 rounded-xl transition",
           isActive
             ? "bg-[var(--bg-active)] text-[var(--text-base)]"
-            : "text-[var(--text-muted)] hover:bg-white/5"
+            : "text-[var(--text-muted)] hover:text-[var(--text-base)] hover:bg-[var(--bg-hover)]"
         )
       }
+      onClick={onClick}
     >
-      <Icon className="h-5 w-5" />
+      {Icon && <Icon className="h-4 w-4 shrink-0" />}
       <span className="truncate">{children}</span>
     </NavLink>
   );
 }
 
+/* --------------------- Collapsible group container --------------------- */
+function SideGroup({ id, title, icon: Icon, children, defaultOpen }) {
+  const STORAGE_KEY = "atlas.sidebar.open";
+  const [open, setOpen] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      return stored[id] ?? !!defaultOpen;
+    } catch {
+      return !!defaultOpen;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      stored[id] = open;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+    } catch {}
+  }, [id, open]);
+
+  return (
+    <div className="mb-2">
+      <button
+        type="button"
+        onClick={() => setOpen((s) => !s)}
+        className={cx(
+          "w-full flex items-center justify-between px-3 py-2 rounded-xl",
+          "text-[var(--text-muted)] hover:text-[var(--text-base)] hover:bg-[var(--bg-hover)]",
+          "transition"
+        )}
+        aria-expanded={open}
+      >
+        <div className="flex items-center gap-3">
+          {Icon && <Icon className="h-4 w-4" />}
+          <span className="text-sm font-medium">{title}</span>
+        </div>
+        <ChevronDown
+          className={cx(
+            "h-4 w-4 transition-transform",
+            open ? "rotate-180" : "rotate-0"
+          )}
+        />
+      </button>
+
+      <div
+        className={cx(
+          "grid overflow-hidden transition-all",
+          open ? "grid-rows-[1fr] opacity-100 mt-1" : "grid-rows-[0fr] opacity-0"
+        )}
+      >
+        <div className="min-h-0">
+          <div className="ml-2 pl-2 border-l border-[var(--border-subtle)] space-y-1">
+            {children}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------- Layout -------------------------------- */
 export default function MainLayout() {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+
+  // Auto-open groups if a child route is active
+  const activeGroupByPath = useMemo(() => {
+    if (pathname.startsWith("/billing")) return "accounting";
+    if (
+      ["/", "/loads", "/in-transit", "/delivered", "/drivers", "/trucks"].some(
+        (p) => (p === "/" ? pathname === "/" : pathname.startsWith(p))
+      )
+    )
+      return "operations";
+    if (
+      [
+        "/settings",
+        "/settings/profile",
+        "/settings/appearance",
+        "/settings/notifications",
+        "/settings/integrations",
+        "/settings/security",
+        "/teammanagement",
+      ].some((p) => pathname.startsWith(p))
+    )
+      return "admin";
+    return null;
+  }, [pathname]);
+
+  useEffect(() => {
+    const key = "atlas.sidebar.open";
+    try {
+      const stored = JSON.parse(localStorage.getItem(key) || "{}");
+      if (activeGroupByPath && !stored[activeGroupByPath]) {
+        stored[activeGroupByPath] = true;
+        localStorage.setItem(key, JSON.stringify(stored));
+      }
+    } catch {}
+  }, [activeGroupByPath]);
 
   const signOut = useCallback(async () => {
     try {
       await supabase.auth.signOut();
-    } catch (err) {
-      // Non-blocking: keep UX smooth even if signOut throws
-      console.error("[MainLayout] signOut error:", err);
-    } finally {
-      navigate("/login");
+      navigate("/login", { replace: true });
+    } catch (e) {
+      console.error("Sign out error:", e);
     }
   }, [navigate]);
 
   return (
-    <div className="min-h-dvh bg-[var(--bg-base)] text-[var(--text-base)]">
-      {/* ======= App Shell ======= */}
-      <div className="grid grid-cols-1 md:grid-cols-[280px_minmax(0,1fr)]">
-        {/* ======= Sidebar ======= */}
-        <aside className="hidden md:block border-r border-white/10 min-h-dvh">
-          <div className="flex h-full flex-col">
-            {/* Brand / Title */}
-            <div className="flex items-center gap-2 px-4 py-4 border-b border-white/10">
-              <ShieldCheck className="h-5 w-5 opacity-80" />
-              <div className="flex flex-col leading-tight">
-                <span className="font-semibold">Atlas Command</span>
-                <span className="text-xs text-[var(--text-muted)]">
-                  Operations Console
-                </span>
+    <div className="min-h-screen bg-[var(--bg-app)] text-[var(--text-base)]">
+      <div className="grid grid-cols-[260px,1fr] md:grid-cols-[260px,1fr]">
+        {/* Sidebar */}
+        <aside className="hidden md:block h-screen sticky top-0 border-r border-[var(--border)] bg-[var(--bg-panel)]">
+          <div className="h-full flex flex-col p-3">
+            {/* Brand / Header */}
+            <div className="flex items-center justify-between px-2 py-3">
+              <div className="flex items-center gap-2">
+                <FolderKanban className="h-5 w-5 text-emerald-400" />
+                <span className="font-semibold tracking-wide">Atlas Command</span>
               </div>
             </div>
 
-            {/* Navigation */}
-            <nav className="flex flex-col gap-1 px-2 py-3">
-              <SideLink to="/" end icon={Home}>
-                Dashboard
-              </SideLink>
-              <SideLink to="/loads" icon={Truck}>
-                Loads
-              </SideLink>
-              <SideLink to="/in-transit" icon={Send}>
-                In Transit
-              </SideLink>
-              <SideLink to="/delivered" icon={CheckCircle2}>
-                Delivered
-              </SideLink>
-              <SideLink to="/billing" icon={DollarSign}>
-                Billing
-              </SideLink>
-              <SideLink to="/drivers" icon={UserRound}>
-                Drivers
-              </SideLink>
-              <SideLink to="/trucks" icon={ClipboardList}>
-                Trucks
-              </SideLink>
-              <SideLink to="/settings" icon={SettingsIcon}>
-                Settings
-              </SideLink>
+            {/* Groups */}
+            <nav className="mt-2 space-y-1 overflow-y-auto">
+              {/* Operations */}
+              <SideGroup
+                id="operations"
+                title="Operations"
+                icon={ShieldCheck}
+                defaultOpen={activeGroupByPath === "operations"}
+              >
+                <SideLink to="/" end icon={Home}>
+                  Dashboard
+                </SideLink>
+                <SideLink to="/loads" icon={ClipboardList}>
+                  Loads
+                </SideLink>
+                <SideLink to="/in-transit" icon={Send}>
+                  In Transit
+                </SideLink>
+                <SideLink to="/delivered" icon={CheckCircle2}>
+                  Delivered
+                </SideLink>
+                <SideLink to="/drivers" icon={UserRound}>
+                  Drivers
+                </SideLink>
+                <SideLink to="/trucks" icon={Truck}>
+                  Trucks
+                </SideLink>
+              </SideGroup>
 
-              {/* Theme menu restored */}
-              <div className="border-t border-white/10 my-3" />
-              <div className="flex items-center justify-between px-2">
-                <span className="text-sm text-[var(--text-muted)]">Theme</span>
-                <ThemeMenu />
-              </div>
+              {/* Accounting */}
+              <SideGroup
+                id="accounting"
+                title="Accounting"
+                icon={DollarSign}
+                defaultOpen={activeGroupByPath === "accounting"}
+              >
+                {/* Settings → Billing moved here */}
+                <SideLink to="/billing" icon={CreditCard}>
+                  Billing
+                </SideLink>
+              </SideGroup>
+
+              {/* Admin */}
+              <SideGroup
+                id="admin"
+                title="Admin"
+                icon={Shield}
+                defaultOpen={activeGroupByPath === "admin"}
+              >
+                {/* Settings items moved here */}
+                <SideLink to="/settings/profile" icon={UserRound}>
+                  Profile &amp; Account
+                </SideLink>
+                <SideLink to="/settings/appearance" icon={Palette}>
+                  Appearance
+                </SideLink>
+                <SideLink to="/settings/notifications" icon={Bell}>
+                  Notifications
+                </SideLink>
+                <SideLink to="/settings/integrations" icon={Plug}>
+                  Integrations
+                </SideLink>
+                <SideLink to="/settings/security" icon={Shield}>
+                  Security
+                </SideLink>
+
+                {/* TM2 → Team Management (already updated path) */}
+                <SideLink to="/teammanagement" icon={UserRound}>
+                  Team Management
+                </SideLink>
+              </SideGroup>
             </nav>
 
-            {/* Sidebar footer */}
-            <div className="mt-auto p-3 border-t border-white/10">
+            {/* Footer actions */}
+            <div className="mt-auto pt-3 space-y-2">
+              <div className="px-2">
+                <ThemeMenu />
+              </div>
               <button
                 onClick={signOut}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-sm hover:bg-white/5"
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-base)] hover:bg-[var(--bg-hover)] transition"
               >
                 <LogOut className="h-4 w-4" />
-                Sign out
+                <span>Sign out</span>
               </button>
             </div>
           </div>
         </aside>
 
-        {/* ======= Main Area ======= */}
-        <main className="min-h-dvh">
-          {/* Top bar (mobile + desktop) */}
-          <header className="sticky top-0 z-30 border-b border-white/10 backdrop-blur bg-[color-mix(in_oklab,var(--bg-base),transparent_12%)]">
-            <div className="flex h-14 items-center justify-between px-3 md:px-5">
-              {/* Left side: mobile menu (non-functional placeholder) + title */}
+        {/* Main content */}
+        <main className="min-h-screen">
+          {/* Mobile top bar */}
+          <div className="md:hidden sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg-panel)]/80 backdrop-blur">
+            <div className="flex items-center justify-between px-3 py-2">
+              <button
+                onClick={() => {
+                  // Optional: hook up a mobile drawer in the future
+                }}
+                className="p-2 rounded-lg hover:bg-[var(--bg-hover)]"
+                aria-label="Open menu"
+              >
+                <Menu className="h-5 w-5" />
+              </button>
+              <span className="font-semibold">Atlas Command</span>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="md:hidden inline-flex items-center justify-center rounded-lg p-2 hover:bg-white/5"
-                  aria-label="Open Menu"
-                  title="Open Menu"
-                >
-                  <Menu className="h-5 w-5" />
-                </button>
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="h-5 w-5 opacity-80 md:hidden" />
-                  <span className="font-semibold">Atlas Command</span>
-                </div>
-              </div>
-
-              {/* Right side: quick theme + sign out */}
-              <div className="flex items-center gap-2">
-                {/* Optional quick ThemeMenu in header for convenience */}
-                <div className="md:hidden">
-                  <ThemeMenu />
-                </div>
-                <button
-                  onClick={signOut}
-                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm hover:bg-white/5"
-                >
-                  <LogOut className="h-4 w-4" />
-                  <span className="hidden sm:inline">Sign out</span>
-                </button>
+                <ThemeMenu />
               </div>
             </div>
-          </header>
+          </div>
 
           {/* Routed content */}
-          <section className="p-3 md:p-6">
-            <Suspense
-              fallback={
-                <div className="grid place-items-center py-20 text-[var(--text-muted)]">
-                  <div className="flex items-center gap-3">
-                    <ShieldCheck className="h-5 w-5 animate-pulse" />
-                    <span>Loading…</span>
-                  </div>
-                </div>
-              }
-            >
-              <Outlet />
-            </Suspense>
-          </section>
+          <div className="p-4 md:p-6">
+            <Outlet />
+          </div>
         </main>
       </div>
     </div>

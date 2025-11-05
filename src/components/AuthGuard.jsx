@@ -1,166 +1,117 @@
 // src/components/AuthGuard.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
 /**
  * AuthGuard
- * - Prevents redirect loops by separating "checking" vs "unauthenticated".
- * - Defers redirect until initial session stabilizes (grace window).
- * - Restores the intended route via ?redirect=...
- * - 🔹PLUS: tiny bridge → if Supabase sends hash/search tokens to "/", forward to /auth/callback.
+ * - Defers any redirect until the initial auth check completes.
+ * - Preserves the user's intended route via ?redirect=...
+ * - Avoids loops by never redirecting while "checking".
+ *
+ * Usage:
+ *   <AuthGuard><MainLayout /></AuthGuard>
+ *
+ * Optional props:
+ *   - requireAuth (default: true)
+ *   - loginPath   (default: "/login")
+ *   - graceMs     (default: 600)  // time to allow session to load
  */
 export default function AuthGuard({
   children,
   requireAuth = true,
   loginPath = "/login",
+  graceMs = 600,
 }) {
-  const navigate = useNavigate();
+  const nav = useNavigate();
   const location = useLocation();
 
-  // Where we are & whether we should ever redirect
-  const pathname = location.pathname + location.search + location.hash;
-  const isLogin = location.pathname === loginPath;
-  const isCallback =
-    location.pathname.startsWith("/auth/callback") ||
-    location.pathname.startsWith("/set-password"); // allow your auth callback pages
-
-  // Session state machine
-  const [session, setSession] = useState(null);
   const [checking, setChecking] = useState(true);
+  const [hasSession, setHasSession] = useState(false);
 
-  // Guards against duplicate navigations
-  const lastNavRef = useRef("");
-  const didInitialEventRef = useRef(false);
+  // prevent multiple redirects
+  const redirectedRef = useRef(false);
+  // start time for a tiny grace window (avoids flicker/loops)
+  const mountAtRef = useRef(Date.now());
 
-  // Small grace window so "INITIAL_SESSION" → "SIGNED_IN" doesn't cause a flash redirect
-  const GRACE_MS = 900;
-  const graceTimerRef = useRef(null);
+  const intendedPath = useMemo(() => {
+    // Use full path+query so we can return precisely
+    const qp = location.search || "";
+    return `${location.pathname}${qp}`;
+  }, [location.pathname, location.search]);
 
-  /* ---------- NEW: very small, safe bridge to /auth/callback ---------- */
   useEffect(() => {
-    if (isCallback) return;
-    const hash = window.location.hash || "";
-    const hasHashTokens =
-      hash.includes("access_token=") || hash.includes("refresh_token=");
-    const qs = new URLSearchParams(location.search || "");
-    const hasSearchTokens = qs.has("code") || qs.has("token_hash") || qs.has("type");
-
-    if (hasHashTokens) {
-      // Preserve the exact hash so AuthCallback can read tokens
-      navigate(`/auth/callback${hash}`, { replace: true });
-    } else if (hasSearchTokens) {
-      // Preserve the search params exactly
-      navigate(`/auth/callback${location.search}`, { replace: true });
-    }
-  }, [isCallback, location.search, navigate]);
-  /* ------------------------------------------------------------------- */
-
-  // Initial session fetch
-  useEffect(() => {
-    let active = true;
+    let unsub = () => {};
 
     (async () => {
+      // 1) Initial session check
       const { data, error } = await supabase.auth.getSession();
-      if (!active) return;
-
-      if (error) {
-        console.warn("[AuthGuard] getSession error:", error);
+      if (!error && data?.session) {
+        setHasSession(true);
+      } else {
+        setHasSession(false);
       }
 
-      setSession(data?.session ?? null);
-      setChecking(true); // still "checking" until we either get an auth event or grace passes
+      // 2) Subscribe to auth changes
+      const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+        setHasSession(!!session);
+      });
+      unsub = () => sub.subscription.unsubscribe();
 
-      // Start grace window
-      clearTimeout(graceTimerRef.current);
-      graceTimerRef.current = setTimeout(() => {
-        setChecking(false);
-      }, GRACE_MS);
+      // 3) After grace window, we consider checking done
+      const elapsed = Date.now() - mountAtRef.current;
+      const delay = Math.max(0, graceMs - elapsed);
+      const t = setTimeout(() => setChecking(false), delay);
+      return () => clearTimeout(t);
     })();
 
-    // Subscribe to auth changes
-    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
-      // Mark that we've seen an auth event
-      didInitialEventRef.current = true;
-
-      setSession(s ?? null);
-
-      // When we get any event, we can stop "checking"
-      clearTimeout(graceTimerRef.current);
-      setChecking(false);
-
-      // Handle sign-out immediately (avoid stale screens)
-      if (event === "SIGNED_OUT") {
-        safeNavigate(loginPathWithRedirect(loginPath, pathname));
-      }
-
-      // Handle sign-in from login page: send them to redirect or dashboard/root
-      if (event === "SIGNED_IN" && isLogin) {
-        const search = new URLSearchParams(location.search);
-        const dest = search.get("redirect") || "/";
-        safeNavigate(dest);
-      }
-    });
-
-    return () => {
-      active = false;
-      clearTimeout(graceTimerRef.current);
-      sub?.subscription?.unsubscribe?.();
-    };
+    return () => unsub();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // run once
+  }, []);
 
-  // Helper: build login path with redirect param
-  const loginPathWithRedirect = (base, target) => {
-    try {
-      const u = new URL(window.location.origin + base);
-      // If already includes redirect, keep it; else set it
-      if (!u.searchParams.get("redirect")) {
-        u.searchParams.set("redirect", target || "/");
-      }
-      return u.pathname + "?" + u.searchParams.toString();
-    } catch {
-      // fallback
-      const enc = encodeURIComponent(target || "/");
-      return `${base}?redirect=${enc}`;
+  useEffect(() => {
+    if (!requireAuth) return;
+
+    // Don't redirect while we're still checking
+    if (checking) return;
+
+    // Only redirect once
+    if (redirectedRef.current) return;
+
+    if (!hasSession) {
+      redirectedRef.current = true;
+
+      // Preserve intended destination
+      const params = new URLSearchParams();
+      params.set("redirect", intendedPath);
+
+      nav(`${loginPath}?${params.toString()}`, { replace: true });
     }
-  };
+  }, [checking, hasSession, requireAuth, nav, intendedPath, loginPath]);
 
-  // Helper: navigate only if target differs from current
-  const safeNavigate = (to) => {
-    if (!to) return;
-    const current = location.pathname + location.search + location.hash;
-    if (to === current || lastNavRef.current === to) return;
-    lastNavRef.current = to;
-    navigate(to, { replace: true });
-  };
-
-  // Decide what to render / where to redirect
-  const shouldGuard = requireAuth && !isLogin && !isCallback;
-
-  // If guarding, while checking auth, render nothing (or a tiny placeholder)
-  if (shouldGuard && checking) {
+  // While checking, render a neutral shell (no redirects)
+  if (requireAuth && checking) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-zinc-500">
-        Checking authentication…
+      <div className="min-h-dvh grid place-items-center bg-[var(--bg-base)] text-[var(--text-muted)]">
+        <div className="flex items-center gap-3 opacity-80">
+          <svg
+            className="h-5 w-5 animate-spin"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" strokeWidth="4" />
+          </svg>
+          <span>Checking access…</span>
+        </div>
       </div>
     );
   }
 
-  // If guarding and unauthenticated after checking → send to login with redirect
-  if (shouldGuard && !session) {
-    safeNavigate(loginPathWithRedirect(loginPath, pathname));
-    return null;
-  }
+  // If auth is required and no session after checking, we already navigated.
+  if (requireAuth && !hasSession) return null;
 
-  // If on /login but already authenticated → bounce to redirect or home
-  if (isLogin && session) {
-    const search = new URLSearchParams(location.search);
-    const dest = search.get("redirect") || "/";
-    safeNavigate(dest);
-    return null;
-  }
-
-  // Otherwise render children
+  // Auth ok → render app
   return <>{children}</>;
 }

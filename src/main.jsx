@@ -15,21 +15,22 @@ import AuthGuard from "./components/AuthGuard.jsx";
 import { ThemeProvider } from "./context/ThemeProvider.jsx";
 
 /* Lazy pages */
-const Dashboard    = lazy(() => import("./pages/Dashboard.jsx"));
-const Loads        = lazy(() => import("./pages/Loads.jsx"));
-const InTransit    = lazy(() => import("./pages/InTransit.jsx"));
-const Delivered    = lazy(() => import("./pages/Delivered.jsx"));
-const Activity     = lazy(() => import("./pages/Activity.jsx"));
-const Settings     = lazy(() => import("./pages/Settings.jsx"));
-const Trucks       = lazy(() => import("./pages/Trucks.jsx"));
-const Drivers      = lazy(() => import("./pages/Drivers.jsx"));
-const Users        = lazy(() => import("./pages/Users.jsx"));
-const Login        = lazy(() => import("./pages/Login.jsx"));
-const Signup       = lazy(() => import("./pages/Signup.jsx"));        // ✅ added
-const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx"));
-const SetPassword  = lazy(() => import("./pages/SetPassword.jsx"));
-const Billing      = lazy(() => import("./pages/Billing.jsx"));
-const InvoiceDraft = lazy(() => import("./pages/InvoiceDraft.jsx"));
+const Dashboard      = lazy(() => import("./pages/Dashboard.jsx"));
+const Loads          = lazy(() => import("./pages/Loads.jsx"));
+const InTransit      = lazy(() => import("./pages/InTransit.jsx"));
+const Delivered      = lazy(() => import("./pages/Delivered.jsx"));
+const Activity       = lazy(() => import("./pages/Activity.jsx"));
+const Settings       = lazy(() => import("./pages/Settings.jsx"));
+const Trucks         = lazy(() => import("./pages/Trucks.jsx"));
+const Drivers        = lazy(() => import("./pages/Drivers.jsx"));
+const Users          = lazy(() => import("./pages/Users.jsx"));
+const Login          = lazy(() => import("./pages/Login.jsx"));
+const Signup         = lazy(() => import("./pages/Signup.jsx"));
+const AuthCallback   = lazy(() => import("./pages/AuthCallback.jsx"));
+const SetPassword    = lazy(() => import("./pages/SetPassword.jsx"));
+const Billing        = lazy(() => import("./pages/Billing.jsx"));
+const InvoiceDraft   = lazy(() => import("./pages/InvoiceDraft.jsx"));
+const TeamManagement = lazy(() => import("./pages/TeamManagement.jsx")); // ✅ ADDED
 
 /* Settings nested layout */
 import SettingsLayout from "./components/settings/SettingsLayout";
@@ -53,7 +54,7 @@ function AppRoutes() {
       <Routes>
         {/* PUBLIC */}
         <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<Signup />} />            {/* ✅ added */}
+        <Route path="/signup" element={<Signup />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/set-password" element={<SetPassword />} />
 
@@ -86,6 +87,9 @@ function AppRoutes() {
           <Route path="trucks" element={<ErrorBoundary><Trucks /></ErrorBoundary>} />
           <Route path="drivers" element={<ErrorBoundary><Drivers /></ErrorBoundary>} />
           <Route path="users" element={<ErrorBoundary><Users /></ErrorBoundary>} />
+          
+          {/* ✅ TEAM MANAGEMENT ROUTE - ADDED */}
+          <Route path="teammanagement" element={<ErrorBoundary><TeamManagement /></ErrorBoundary>} />
 
           {/* Settings (nested) */}
           <Route
