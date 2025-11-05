@@ -9,8 +9,11 @@ import {
   Pencil,
   StickyNote,
   AlertTriangle,
+  FileText, // 🆕
 } from "lucide-react";
+import { Link } from "react-router-dom"; // 🆕
 import { supabase } from "../lib/supabase";
+import AddLoadModal from "../components/AddLoadModal";
 
 /** MUST match DB enum/check */
 const STATUS_CHOICES = [
@@ -22,11 +25,24 @@ const STATUS_CHOICES = [
   { label: "Problem", value: "PROBLEM" },
 ];
 
+const EQUIPMENT_OPTIONS = [
+  "Dry Van",
+  "Reefer",
+  "Flatbed",
+  "Step Deck",
+  "Conestoga",
+  "Power Only",
+  "Hotshot",
+  "Tanker",
+  "Other",
+];
+
 function fromLocalInputValue(s) {
   if (!s) return null;
   const dt = new Date(s);
   return isNaN(dt.getTime()) ? null : dt.toISOString();
 }
+
 function toLocalInputValue(d) {
   if (!d) return "";
   const dt = new Date(d);
@@ -46,6 +62,7 @@ export default function Loads() {
 
   // Add modal
   const [showAddModal, setShowAddModal] = useState(false);
+  const [openCreate, setOpenCreate] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [lastErr, setLastErr] = useState("");
 
@@ -77,6 +94,7 @@ export default function Loads() {
     pickup_local: "",
     delivery_local: "",
     notes: "",
+    equipment_type: "",
   });
 
   // Add form
@@ -89,6 +107,7 @@ export default function Loads() {
     rate: "",
     pickup_local: "",
     delivery_local: "",
+    equipment_type: "",
   });
 
   useEffect(() => {
@@ -101,7 +120,7 @@ export default function Loads() {
       setNotesMissing(false);
 
       const baseCols =
-        "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, created_at";
+        "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, created_at, equipment_type";
       let { data, error } = await supabase
         .from("loads")
         .select(`${baseCols}, notes`)
@@ -142,6 +161,11 @@ export default function Loads() {
       return;
     }
 
+    if (!newLoad.equipment_type) {
+      alert("Please select an equipment type.");
+      return;
+    }
+
     const rateNumber =
       newLoad.rate === "" || newLoad.rate === null ? 0 : Number(newLoad.rate);
     if (Number.isNaN(rateNumber) || rateNumber < 0) {
@@ -158,13 +182,14 @@ export default function Loads() {
       rate: rateNumber,
       pickup_at: fromLocalInputValue(newLoad.pickup_local),
       delivery_at: fromLocalInputValue(newLoad.delivery_local),
+      equipment_type: newLoad.equipment_type,
     };
 
     setSubmitting(true);
     try {
       const selectCols = notesMissing
-        ? "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, created_at"
-        : "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, notes, created_at";
+        ? "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, created_at, equipment_type"
+        : "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, notes, created_at, equipment_type";
       const { data, error } = await supabase
         .from("loads")
         .insert([payload])
@@ -182,6 +207,7 @@ export default function Loads() {
         rate: "",
         pickup_local: "",
         delivery_local: "",
+        equipment_type: "",
       });
     } catch (err) {
       console.error("[Loads] add error:", err);
@@ -257,12 +283,14 @@ export default function Loads() {
     setNotesText(load.notes || "");
     setShowNotesModal(true);
   }
+
   function closeNotes() {
     setShowNotesModal(false);
     setNotesLoad(null);
     setNotesText("");
     setNotesSaving(false);
   }
+
   async function saveNotes() {
     if (!notesLoad?.id) return;
     setNotesSaving(true);
@@ -299,9 +327,11 @@ export default function Loads() {
       pickup_local: toLocalInputValue(load.pickup_at),
       delivery_local: toLocalInputValue(load.delivery_at),
       notes: notesMissing ? "" : load.notes || "",
+      equipment_type: load.equipment_type || "",
     });
     setShowEditModal(true);
   }
+
   function closeEdit() {
     setShowEditModal(false);
     setEditSaving(false);
@@ -316,14 +346,20 @@ export default function Loads() {
       pickup_local: "",
       delivery_local: "",
       notes: "",
+      equipment_type: "",
     });
   }
+
   async function saveEdit(e) {
     e.preventDefault();
     if (!editLoad.id) return;
 
     if (!editLoad.shipper || !editLoad.origin || !editLoad.destination) {
       alert("Please fill shipper, origin, and destination.");
+      return;
+    }
+    if (!editLoad.equipment_type) {
+      alert("Please select an equipment type.");
       return;
     }
     const rateNumber =
@@ -342,6 +378,7 @@ export default function Loads() {
       rate: rateNumber,
       pickup_at: fromLocalInputValue(editLoad.pickup_local),
       delivery_at: fromLocalInputValue(editLoad.delivery_local),
+      equipment_type: editLoad.equipment_type,
       ...(notesMissing ? {} : { notes: editLoad.notes }),
     };
 
@@ -353,8 +390,8 @@ export default function Loads() {
         .eq("id", editLoad.id)
         .select(
           notesMissing
-            ? "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, created_at"
-            : "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, notes, created_at"
+            ? "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, created_at, equipment_type"
+            : "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, notes, created_at, equipment_type"
         );
       if (error) throw error;
 
@@ -466,6 +503,12 @@ export default function Loads() {
                   {load.origin} → {load.destination}
                 </p>
 
+                {load.equipment_type && (
+                  <p className="text-[11px] text-blue-400 mt-1">
+                    Equipment: {load.equipment_type}
+                  </p>
+                )}
+
                 {(load.pickup_at || load.delivery_at) && (
                   <p className="text-[11px] text-gray-500 mt-1">
                     {load.pickup_at && <>PU: {new Date(load.pickup_at).toLocaleString()} </>}
@@ -486,7 +529,7 @@ export default function Loads() {
                   ))}
               </div>
 
-              {/* Inline status + delete */}
+              {/* Inline status + actions */}
               <div className="flex items-center gap-2 ml-auto">
                 <div className="relative">
                   <select
@@ -508,7 +551,7 @@ export default function Loads() {
                 {updatingId === load.id && (
                   <Loader2 className="w-4 h-4 animate-spin text-gray-400" title="Saving..." />
                 )}
-
+                
                 <button
                   onClick={() => handleDeleteClick(load)}
                   className="p-2 hover:bg-gray-700 rounded-lg transition-colors"
@@ -524,12 +567,24 @@ export default function Loads() {
 
       {/* Add Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+        <div 
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+          onClick={(e) => {
+            // Close modal if clicking on backdrop
+            if (e.target === e.currentTarget) {
+              setShowAddModal(false);
+            }
+          }}
+        >
           <div className="bg-[#171c26] rounded-2xl p-6 w-full max-w-xl border border-gray-700 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Add New Load</h2>
               <button
-                onClick={() => setShowAddModal(false)}
+                type="button"
+                onClick={() => {
+                  setShowAddModal(false);
+                  setLastErr("");
+                }}
                 className="p-1 hover:bg-gray-700 rounded-lg transition-colors"
               >
                 <X className="w-5 h-5" />
@@ -570,6 +625,25 @@ export default function Loads() {
                   onChange={(v) => setNewLoad((s) => ({ ...s, status: v }))}
                   options={STATUS_CHOICES}
                 />
+                <div>
+                  <label className="block text-sm text-gray-400">Equipment Type *</label>
+                  <div className="relative">
+                    <select
+                      value={newLoad.equipment_type}
+                      onChange={(e) => setNewLoad((s) => ({ ...s, equipment_type: e.target.value }))}
+                      required
+                      className="appearance-none pr-7 w-full bg-gray-800 text-white rounded-lg p-2 mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-gray-700"
+                    >
+                      <option value="">Select type</option>
+                      {EQUIPMENT_OPTIONS.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-2 top-[22px] h-4 w-4 text-gray-400" />
+                  </div>
+                </div>
                 <NumberInput
                   label="Rate ($)"
                   value={newLoad.rate}
@@ -597,7 +671,10 @@ export default function Loads() {
               <div className="flex justify-end gap-3 mt-6">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => {
+                    setShowAddModal(false);
+                    setLastErr("");
+                  }}
                   className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition-colors"
                   disabled={submitting}
                 >
@@ -605,13 +682,14 @@ export default function Loads() {
                 </button>
                 <button
                   type="submit"
-                  className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-white disabled:opacity-60 transition-colors"
+                  className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-white disabled:opacity-60 transition-colors flex items-center gap-2"
                   disabled={submitting}
                 >
                   {submitting ? (
-                    <span className="inline-flex items-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" /> Saving…
-                    </span>
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" /> 
+                      <span>Saving…</span>
+                    </>
                   ) : (
                     "Save Load"
                   )}
@@ -773,6 +851,25 @@ export default function Loads() {
                   onChange={(v) => setEditLoad((s) => ({ ...s, status: v }))}
                   options={STATUS_CHOICES}
                 />
+                <div>
+                  <label className="block text-sm text-gray-400">Equipment Type *</label>
+                  <div className="relative">
+                    <select
+                      value={editLoad.equipment_type}
+                      onChange={(e) => setEditLoad((s) => ({ ...s, equipment_type: e.target.value }))}
+                      required
+                      className="appearance-none pr-7 w-full bg-gray-800 text-white rounded-lg p-2 mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-gray-700"
+                    >
+                      <option value="">Select type</option>
+                      {EQUIPMENT_OPTIONS.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-2 top-[22px] h-4 w-4 text-gray-400" />
+                  </div>
+                </div>
                 <NumberInput
                   label="Rate ($)"
                   value={editLoad.rate}
@@ -836,8 +933,15 @@ export default function Loads() {
         </div>
       )}
 
-      {/* Keep portals alive */}
-      {showDeleteModal || showNotesModal || showEditModal ? null : <span className="hidden" />}
+      {/* AddLoadModal Component (if you want to use it) */}
+      <AddLoadModal
+        open={openCreate}
+        onClose={() => setOpenCreate(false)}
+        onCreated={() => {
+          fetchLoads();
+          setOpenCreate(false);
+        }}
+      />
     </div>
   );
 }
@@ -858,6 +962,7 @@ function TextInput({ label, value, onChange, placeholder, required }) {
     </div>
   );
 }
+
 function NumberInput({ label, value, onChange }) {
   return (
     <div>
@@ -874,6 +979,7 @@ function NumberInput({ label, value, onChange }) {
     </div>
   );
 }
+
 function SelectInput({ label, value, onChange, options }) {
   return (
     <div>
@@ -895,6 +1001,7 @@ function SelectInput({ label, value, onChange, options }) {
     </div>
   );
 }
+
 function DateTimeInput({ label, value, onChange }) {
   return (
     <div>

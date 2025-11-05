@@ -9,7 +9,7 @@ import MainLayout from "./layout/MainLayout.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import { SettingsProvider } from "./context/SettingsProvider.jsx";
 import AuthGuard from "./components/AuthGuard.jsx";
-import InvoiceDraft from "./pages/InvoiceDraft.jsx";
+
 /* Theme */
 import { ThemeProvider } from "./context/ThemeProvider.jsx";
 
@@ -28,6 +28,7 @@ const Login        = lazy(() => import("./pages/Login.jsx"));
 const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx"));
 const SetPassword  = lazy(() => import("./pages/SetPassword.jsx"));
 const Billing      = lazy(() => import("./pages/Billing.jsx"));
+const InvoiceDraft = lazy(() => import("./pages/InvoiceDraft.jsx"));
 
 /* Settings nested layout */
 import SettingsLayout from "./components/settings/SettingsLayout";
@@ -90,9 +91,7 @@ function AppRoutes() {
             path="settings"
             element={
               <ErrorBoundary>
-                <AuthGuard>
-                  <SettingsLayout />
-                </AuthGuard>
+                <SettingsLayout />
               </ErrorBoundary>
             }
           >
