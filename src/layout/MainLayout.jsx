@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, useRef } from "react";
+// src/layout/MainLayout.jsx
+import { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   ShieldCheck,
@@ -10,183 +11,226 @@ import {
   Activity as ActivityIcon,
   Settings as SettingsIcon,
   Users as UsersIcon,
+  CreditCard,
   LogOut,
 } from "lucide-react";
+
 import { supabase } from "../lib/supabase";
 import GlobalThemeFix from "../GlobalThemeFix.jsx";
 import ThemeSwitcher from "../components/ThemeSwitcher.jsx";
 import DiagnosticsOverlay from "../components/DiagnosticsOverlay.jsx";
 
-/* ------------------------------- Utilities -------------------------------- */
+/* -------------------------------- Utilities ------------------------------- */
 function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
-
-/** PURE (no hooks inside). */
-function isActivePath(location, path) {
+function pathActive(location, path) {
   const exact = location.pathname === path;
   const starts = location.pathname.startsWith(path + "/");
   return exact || starts;
 }
 
-/* ------------------------------ Data helpers ------------------------------ */
-/** Keep the hook order identical on every render. No conditional hooks above. */
+/* ---------------------------------- API ----------------------------------- */
 async function fetchIsAdmin(userId) {
-  if (!userId) return false;
+  try {
+    const {
+      data: { user },
+      error: uErr,
+    } = await supabase.auth.getUser();
+    if (uErr) throw uErr;
+    if (user?.app_metadata?.role === "admin") return true;
 
-  // If your users table uses `id` = auth.uid(), query by id.
-  // If you truly have `auth_user_id`, change the .eq('id', ...) to .eq('auth_user_id', ...)
-  const { data, error } = await supabase
-    .from("users")
-    .select("role")
-    .eq("id", userId)
-    .maybeSingle();
+    if (!userId) return false;
+    const { data, error } = await supabase
+      .from("users")
+      .select("is_admin")
+      .eq("id", userId)
+      .maybeSingle();
 
-  if (error) {
-    console.warn("[MainLayout] fetchIsAdmin error:", error);
+    if (error) return false;
+    return !!data?.is_admin;
+  } catch {
     return false;
   }
-  return (data?.role || "").toUpperCase() === "ADMIN";
+}
+
+function getDisplayName(user) {
+  return (
+    user?.user_metadata?.full_name ||
+    user?.user_metadata?.name ||
+    user?.email ||
+    "User"
+  );
 }
 
 /* --------------------------------- View ----------------------------------- */
 export default function MainLayout() {
-  // 1) Stable hook order block — nothing conditional above/between hooks
-  const location = useLocation();
   const navigate = useNavigate();
-  const navRef = useRef(null);
+  const location = useLocation();
 
-  const [bootDone, setBootDone] = useState(false);
-  const [user, setUser] = useState(null);
+  const [sessionUser, setSessionUser] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [bootDone, setBootDone] = useState(false);
 
-  // 2) Auth/session bootstrap — never conditionally run useEffect
+  // Initial auth load + listener
   useEffect(() => {
-    let active = true;
+    let mounted = true;
 
-    async function init() {
-      try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const currentUser = sessionData?.session?.user ?? null;
-        if (!active) return;
+    (async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-        setUser(currentUser);
+      if (!mounted) return;
+      setSessionUser(session?.user ?? null);
 
-        const admin = await fetchIsAdmin(currentUser?.id || null);
-        if (!active) return;
-
+      if (!session?.user) {
+        navigate("/login", { replace: true });
+      } else {
+        const admin = await fetchIsAdmin(session.user.id);
+        if (!mounted) return;
         setIsAdmin(admin);
-      } catch (err) {
-        console.warn("[MainLayout] init error:", err);
-      } finally {
-        if (active) setBootDone(true);
       }
-    }
+      setBootDone(true);
+    })();
 
-    init();
-
-    const { data: authSub } = supabase.auth.onAuthStateChange((_evt, s) => {
-      const u = s?.user ?? null;
-      setUser(u);
-      fetchIsAdmin(u?.id || null).then(setIsAdmin);
-    });
+    const { data: sub } = supabase.auth.onAuthStateChange(
+      async (_event, session) => {
+        setSessionUser(session?.user ?? null);
+        if (!session?.user) {
+          navigate("/login", { replace: true });
+        } else {
+          const admin = await fetchIsAdmin(session.user.id);
+          setIsAdmin(admin);
+        }
+      }
+    );
 
     return () => {
-      active = false;
-      authSub?.subscription?.unsubscribe?.();
+      mounted = false;
+      sub?.subscription?.unsubscribe?.();
     };
-  }, []);
+  }, [navigate]);
 
-  // 3) Computed nav — keep structure stable; use hidden flags instead of push/pop
-  const navItems = useMemo(() => {
-    return [
-      { to: "/", label: "Dashboard", icon: LayoutDashboard, hidden: false },
-      { to: "/loads", label: "Loads", icon: Boxes, hidden: false },
-      { to: "/in-transit", label: "In Transit", icon: Truck, hidden: false },
-      { to: "/delivered", label: "Delivered", icon: CheckCircle2, hidden: false },
-      { to: "/issues", label: "Issues", icon: TriangleAlert, hidden: false },
-      { to: "/activity", label: "Activity", icon: ActivityIcon, hidden: false },
-      { to: "/users", label: "Users", icon: UsersIcon, hidden: !isAdmin },
-      { to: "/settings", label: "Settings", icon: SettingsIcon, hidden: false },
-    ];
-  }, [isAdmin]);
+  const displayName = useMemo(() => getDisplayName(sessionUser), [sessionUser]);
 
-  // 4) Actions
   const signOut = async () => {
     await supabase.auth.signOut();
-    navigate("/onboarding");
+    navigate("/login", { replace: true });
   };
 
-  // 5) Boot screen — render can be conditional; hook order above stays fixed
+  // Sidebar links (no hooks inside map)
+  const nav = useMemo(() => {
+    const items = [
+      { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { to: "/loads", label: "Loads", icon: Boxes },
+      { to: "/in-transit", label: "In Transit", icon: Truck },
+      { to: "/issues", label: "Issues", icon: TriangleAlert },
+      { to: "/activity", label: "Activity", icon: ActivityIcon },
+      { to: "/billing", label: "Billing", icon: CreditCard },
+      { to: "/settings", label: "Settings", icon: SettingsIcon },
+    ];
+    if (isAdmin) {
+      items.splice(6, 0, { to: "/users", label: "Users", icon: UsersIcon });
+    }
+    return items;
+  }, [isAdmin]);
+
   if (!bootDone) {
     return (
       <div className="min-h-dvh grid place-items-center bg-[var(--bg-base)] text-[var(--text-base)]">
         <div className="flex items-center gap-3 opacity-80">
           <ShieldCheck className="h-5 w-5" />
-          <span className="text-sm">Preparing Atlas Command…</span>
+          <span className="text-sm">Loading Atlas Command…</span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-dvh bg-[var(--bg-base)] text-[var(--text-base)]">
+    <div
+      data-testid="main-layout"
+      className="min-h-dvh bg-[var(--bg-base)] text-[var(--text-base)]"
+    >
       <GlobalThemeFix />
-      <DiagnosticsOverlay />
 
-      <div className="flex">
-        {/* Sidebar */}
-        <aside
-          ref={navRef}
-          className="w-[260px] shrink-0 border-r border-white/10 bg-[var(--bg-surface)]/60 backdrop-blur-md"
-        >
-          <div className="px-4 py-4 border-b border-white/10">
-            <div className="text-lg font-semibold">🛰️ Atlas Command</div>
-            <div className="text-xs text-[var(--text-muted)]">
-              {user?.email ?? "—"}
+      <div className="mx-auto max-w-[1600px] px-3 sm:px-4 lg:px-6 py-4 md:py-6">
+        <div className="grid grid-cols-1 md:grid-cols-[260px,1fr] gap-4 md:gap-6">
+          {/* ------------------------------ Sidebar ------------------------------ */}
+          <aside className="rounded-2xl border border-white/10 bg-[var(--bg-surface)]/90 backdrop-blur-sm">
+            <div className="p-4 pb-2 flex items-center gap-3">
+              <div className="h-8 w-8 grid place-items-center rounded-xl border border-white/10">
+                <ShieldCheck className="h-4 w-4 opacity-80" />
+              </div>
+              <div className="leading-tight">
+                <div className="font-semibold">Atlas Command</div>
+                <div className="text-xs text-[var(--text-muted)]">
+                  Secure Ops Console
+                </div>
+              </div>
             </div>
-          </div>
 
-          <nav className="px-2 py-3 space-y-1">
-            {navItems
-              .filter((n) => !n.hidden)
-              .map(({ to, label, icon: Icon }) => {
-                const active = isActivePath(location, to); // ✅ pure, no hooks
+            <nav className="px-2 py-2">
+              {nav.map((item) => {
+                const Icon = item.icon;
+                const active = pathActive(location, item.to);
                 return (
                   <NavLink
-                    key={to}
-                    to={to}
+                    key={item.to}
+                    to={item.to}
                     className={cx(
-                      "flex items-center gap-3 rounded-xl px-3 py-2 transition",
+                      "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm",
                       active
-                        ? "bg-white/10 text-white"
-                        : "text-[var(--text-muted)] hover:text-white hover:bg-white/5"
+                        ? "bg-white/10 border border-white/10"
+                        : "hover:bg-white/5 border border-transparent"
                     )}
                   >
-                    <Icon className="h-4 w-4" />
-                    <span className="text-sm">{label}</span>
+                    <Icon className="h-4 w-4 opacity-80" />
+                    <span>{item.label}</span>
                   </NavLink>
                 );
               })}
-          </nav>
+            </nav>
 
-          <div className="mt-auto p-3">
-            <ThemeSwitcher />
-            <button
-              onClick={signOut}
-              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-sm text-[var(--text-muted)] hover:text-white hover:bg-white/5"
-            >
-              <LogOut className="h-4 w-4" />
-              Sign out
-            </button>
-          </div>
-        </aside>
+            <div className="mt-4 px-4 pb-4 pt-2">
+              <button
+                onClick={signOut}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-sm hover:bg-white/5"
+              >
+                <LogOut className="h-4 w-4" />
+                <span>Sign out</span>
+              </button>
+            </div>
+          </aside>
 
-        {/* Main content */}
-        <main className="min-h-dvh flex-1">
-          <Outlet />
-        </main>
+          {/* ------------------------------ Main ------------------------------ */}
+          <main className="rounded-2xl border border-white/10 bg-[var(--bg-surface)]/90 backdrop-blur-sm">
+            {/* Header bar with title + name (left) and theme switcher (right) */}
+            <header className="flex items-center justify-between gap-4 border-b border-white/10 px-4 md:px-6 py-3">
+              <div className="min-w-0">
+                <h1 className="text-lg md:text-xl font-semibold leading-tight truncate">
+                  Atlas Command{" "}
+                  <span className="opacity-70">| {displayName}</span>
+                </h1>
+                <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                  {location.pathname}
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <ThemeSwitcher />
+              </div>
+            </header>
+
+            {/* Routed page content */}
+            <section className="p-4 md:p-6">
+              <Outlet />
+            </section>
+          </main>
+        </div>
       </div>
+
+      {/* Non-intrusive diagnostics overlay */}
+      <DiagnosticsOverlay />
     </div>
   );
 }
