@@ -1,5 +1,5 @@
 // src/pages/Loads.jsx
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Plus,
   Loader2,
@@ -7,11 +7,17 @@ import {
   X,
   ChevronDown,
   Pencil,
-  StickyNote,
   AlertTriangle,
-  FileText, // 🆕
+  ShieldCheck,
+  Filter,
+  CheckCircle2,
+  Bug,
+  Clock,
+  StickyNote,
+  Eye,
+  Save,
+  MoreVertical,
 } from "lucide-react";
-import { Link } from "react-router-dom"; // 🆕
 import { supabase } from "../lib/supabase";
 import AddLoadModal from "../components/AddLoadModal";
 
@@ -25,993 +31,902 @@ const STATUS_CHOICES = [
   { label: "Problem", value: "PROBLEM" },
 ];
 
-const EQUIPMENT_OPTIONS = [
-  "Dry Van",
-  "Reefer",
-  "Flatbed",
-  "Step Deck",
-  "Conestoga",
-  "Power Only",
-  "Hotshot",
-  "Tanker",
-  "Other",
+const PRIORITY_CHOICES = [
+  { label: "Low", value: "LOW" },
+  { label: "Medium", value: "MEDIUM" },
+  { label: "High", value: "HIGH" },
+  { label: "Critical", value: "CRITICAL" },
 ];
 
-function fromLocalInputValue(s) {
-  if (!s) return null;
-  const dt = new Date(s);
-  return isNaN(dt.getTime()) ? null : dt.toISOString();
+/* ------------------------------ Utils ------------------------------ */
+function cx(...a) { return a.filter(Boolean).join(" "); }
+function fmtDate(d) { if (!d) return "—"; try { return new Date(d).toLocaleString(); } catch { return String(d); } }
+function since(ts) {
+  if (!ts) return "—";
+  const ms = Date.now() - new Date(ts).getTime();
+  if (isNaN(ms) || ms < 0) return "—";
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h`;
 }
 
-function toLocalInputValue(d) {
-  if (!d) return "";
-  const dt = new Date(d);
-  if (isNaN(dt.getTime())) return "";
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(
-    dt.getHours()
-  )}:${pad(dt.getMinutes())}`;
+/** Lucide icon helper with better visibility */
+function Ico({ as: Icon, className = "", title }) {
+  return (
+    <Icon
+      className={cx("h-4 w-4", className)}
+      strokeWidth={2}
+      style={{ color: "currentColor", stroke: "currentColor" }}
+      aria-hidden={title ? undefined : true}
+      aria-label={title || undefined}
+      focusable="false"
+    />
+  );
 }
 
+/** Improved icon button with fixed size and better contrast */
+function IconButton({ title, onClick, className = "", children }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className={cx(
+        "inline-flex items-center justify-center rounded-lg border",
+        "h-8 w-8",
+        "bg-white/5 text-white hover:text-white hover:bg-white/10 border-white/30 hover:border-white/40",
+        "transition-colors",
+        className
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ------------------------------ Page ------------------------------ */
 export default function Loads() {
   const [loads, setLoads] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState("");
+  const [isAddOpen, setIsAddOpen] = useState(false);
 
-  // notes column presence
-  const [notesMissing, setNotesMissing] = useState(false);
+  // Problems workflow
+  const [showProblemsOnly, setShowProblemsOnly] = useState(false);
+  const [priorityFilter, setPriorityFilter] = useState("ALL");
+  const [reportingLoad, setReportingLoad] = useState(null);
+  const [viewingProblemLoad, setViewingProblemLoad] = useState(null);
 
-  // Add modal
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [openCreate, setOpenCreate] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [lastErr, setLastErr] = useState("");
+  // Notes workflow
+  const [editingNotesLoad, setEditingNotesLoad] = useState(null);
 
-  // Delete modal
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [selectedLoad, setSelectedLoad] = useState(null);
-
-  // Inline status
-  const [updatingId, setUpdatingId] = useState(null);
-
-  // Notes modal (quick edit)
-  const [showNotesModal, setShowNotesModal] = useState(false);
-  const [notesSaving, setNotesSaving] = useState(false);
-  const [notesLoad, setNotesLoad] = useState(null);
-  const [notesText, setNotesText] = useState("");
-
-  // Full Edit modal
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [editSaving, setEditSaving] = useState(false);
-  const [editLoad, setEditLoad] = useState({
-    id: "",
-    reference: "",
-    shipper: "",
-    origin: "",
-    destination: "",
-    status: "AVAILABLE",
-    rate: "",
-    pickup_local: "",
-    delivery_local: "",
-    notes: "",
-    equipment_type: "",
-  });
-
-  // Add form
-  const [newLoad, setNewLoad] = useState({
-    reference: "",
-    shipper: "",
-    origin: "",
-    destination: "",
-    status: "AVAILABLE",
-    rate: "",
-    pickup_local: "",
-    delivery_local: "",
-    equipment_type: "",
-  });
+  const [me, setMe] = useState({ email: "", id: "" });
 
   useEffect(() => {
-    fetchLoads();
+    let active = true;
+
+    (async () => {
+      // whoami for default owner
+      try {
+        const { data } = await supabase.auth.getUser();
+        if (data?.user && active) setMe({ email: data.user.email || "", id: data.user.id });
+      } catch {}
+
+      setLoading(true);
+      setFetchError("");
+      try {
+        const { data, error } = await supabase
+          .from("loads")
+          .select("*")
+          .order("created_at", { ascending: false });
+        if (error) throw error;
+        if (active) setLoads(Array.isArray(data) ? data : []);
+      } catch (e) {
+        console.warn("[Loads] fetch error:", e);
+        setFetchError(e?.message || "Failed to load loads.");
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+
+    return () => { active = false; };
   }, []);
 
-  async function fetchLoads() {
+  // Freshen a single row (so modals show latest)
+  async function refreshOne(id) {
     try {
-      setLoading(true);
-      setNotesMissing(false);
+      const { data, error } = await supabase.from("loads").select("*").eq("id", id).single();
+      if (error) throw error;
+      setLoads((prev) => prev.map((l) => (l.id === id ? data : l)));
+      return data;
+    } catch (e) {
+      console.warn("[Loads] refreshOne error:", e);
+      return null;
+    }
+  }
 
-      const baseCols =
-        "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, created_at, equipment_type";
-      let { data, error } = await supabase
+  // Filtering logic
+  const visibleRows = useMemo(() => {
+    let rows = loads;
+
+    // Priority filter takes precedence: when set, show ONLY problem loads with that priority
+    if (priorityFilter !== "ALL") {
+      rows = rows.filter(
+        (r) => r.status === "PROBLEM" && (r.problem_priority || "") === priorityFilter
+      );
+    } else if (showProblemsOnly) {
+      rows = rows.filter((r) => r.status === "PROBLEM");
+    }
+
+    return rows;
+  }, [loads, showProblemsOnly, priorityFilter]);
+
+  /* --------------------------- CRUD helpers --------------------------- */
+  async function deleteLoad(id) {
+    if (!confirm("Delete this load? This cannot be undone.")) return;
+    try {
+      const { error } = await supabase.from("loads").delete().eq("id", id);
+      if (error) throw error;
+      setLoads((prev) => prev.filter((l) => l.id !== id));
+    } catch (e) {
+      alert(e?.message || "Failed to delete load.");
+    }
+  }
+
+  async function updateStatus(id, next) {
+    try {
+      const { data, error } = await supabase
         .from("loads")
-        .select(`${baseCols}, notes`)
-        .order("created_at", { ascending: false });
+        .update({ status: next, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select()
+        .single();
+      if (error) throw error;
+      setLoads((prev) => prev.map((l) => (l.id === id ? data : l)));
+    } catch (e) {
+      alert(e?.message || "Failed to update status.");
+    }
+  }
 
+  // Problems workflow
+  function openReport(load) { setReportingLoad(load); }
+  function closeReport() { setReportingLoad(null); }
+
+  async function markProblem(loadId, payload) {
+    const full = {
+      status: "PROBLEM",
+      problem_note: payload.note ?? null,
+      problem_priority: payload.priority ?? null,
+      problem_owner: payload.owner ?? null,
+      problem_flagged_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    try {
+      const { data, error } = await supabase.from("loads").update(full).eq("id", loadId).select().single();
       if (error) {
-        // missing column -> retry without it
-        if (
-          String(error.code || "").includes("42703") ||
-          /column .*notes.* does not exist/i.test(error.message || "")
-        ) {
-          setNotesMissing(true);
-          const retry = await supabase
+        // Retry minimal if optional cols missing
+        if (String(error?.message || "").includes("column") || error?.code === "42703") {
+          const { data: data2, error: e2 } = await supabase
             .from("loads")
-            .select(baseCols)
-            .order("created_at", { ascending: false });
-          if (retry.error) throw retry.error;
-          data = retry.data;
+            .update({ status: "PROBLEM", updated_at: new Date().toISOString() })
+            .eq("id", loadId)
+            .select()
+            .single();
+          if (e2) throw e2;
+          setLoads((prev) => prev.map((l) => (l.id === loadId ? data2 : l)));
         } else {
           throw error;
         }
+      } else {
+        setLoads((prev) => prev.map((l) => (l.id === loadId ? data : l)));
       }
-      setLoads(data || []);
-    } catch (err) {
-      console.error("[Loads] fetch error:", err);
-      setLoads([]);
-    } finally {
-      setLoading(false);
+    } catch (e) {
+      alert(e?.message || "Failed to mark problem.");
     }
   }
 
-  async function handleAddLoad(e) {
-    e.preventDefault();
-    setLastErr("");
-
-    if (!newLoad.shipper || !newLoad.origin || !newLoad.destination) {
-      alert("Please fill shipper, origin, and destination.");
-      return;
-    }
-
-    if (!newLoad.equipment_type) {
-      alert("Please select an equipment type.");
-      return;
-    }
-
-    const rateNumber =
-      newLoad.rate === "" || newLoad.rate === null ? 0 : Number(newLoad.rate);
-    if (Number.isNaN(rateNumber) || rateNumber < 0) {
-      alert("Rate must be a non-negative number.");
-      return;
-    }
-
-    const payload = {
-      reference: newLoad.reference?.trim() || null,
-      shipper: newLoad.shipper.trim(),
-      origin: newLoad.origin.trim(),
-      destination: newLoad.destination.trim(),
-      status: newLoad.status,
-      rate: rateNumber,
-      pickup_at: fromLocalInputValue(newLoad.pickup_local),
-      delivery_at: fromLocalInputValue(newLoad.delivery_local),
-      equipment_type: newLoad.equipment_type,
-    };
-
-    setSubmitting(true);
+  async function resolveProblem(loadId) {
+    const basic = { status: "IN_TRANSIT", updated_at: new Date().toISOString() };
+    const full = { ...basic, problem_note: null, problem_priority: null, problem_owner: null, problem_flagged_at: null };
     try {
-      const selectCols = notesMissing
-        ? "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, created_at, equipment_type"
-        : "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, notes, created_at, equipment_type";
-      const { data, error } = await supabase
-        .from("loads")
-        .insert([payload])
-        .select(selectCols);
-
-      if (error) throw error;
-      if (data?.length) setLoads((prev) => [data[0], ...prev]);
-      setShowAddModal(false);
-      setNewLoad({
-        reference: "",
-        shipper: "",
-        origin: "",
-        destination: "",
-        status: "AVAILABLE",
-        rate: "",
-        pickup_local: "",
-        delivery_local: "",
-        equipment_type: "",
-      });
-    } catch (err) {
-      console.error("[Loads] add error:", err);
-      const details =
-        err?.message ||
-        err?.hint ||
-        err?.details ||
-        (typeof err === "object" ? JSON.stringify(err) : String(err)) ||
-        "Insert failed.";
-      setLastErr(details);
-      alert(details);
-    } finally {
-      setSubmitting(false);
+      const { data, error } = await supabase.from("loads").update(full).eq("id", loadId).select().single();
+      if (error) {
+        if (String(error?.message || "").includes("column") || error?.code === "42703") {
+          const { data: data2, error: e2 } = await supabase
+            .from("loads")
+            .update(basic)
+            .eq("id", loadId)
+            .select()
+            .single();
+          if (e2) throw e2;
+          setLoads((prev) => prev.map((l) => (l.id === loadId ? data2 : l)));
+        } else {
+          throw error;
+        }
+      } else {
+        setLoads((prev) => prev.map((l) => (l.id === loadId ? data : l)));
+      }
+    } catch (e) {
+      alert(e?.message || "Failed to resolve problem.");
     }
   }
 
-  function handleDeleteClick(load) {
-    setSelectedLoad(load);
-    setShowDeleteModal(true);
+  async function openViewProblem(id) {
+    const fresh = await refreshOne(id);
+    setViewingProblemLoad(fresh || loads.find((l) => l.id === id) || null);
   }
 
-  async function handleDeleteLoad() {
-    if (!selectedLoad) return;
-    setDeleting(true);
-    try {
-      const { error } = await supabase
-        .from("loads")
-        .delete()
-        .eq("id", selectedLoad.id);
-      if (error) throw error;
-      setLoads((prev) => prev.filter((l) => l.id !== selectedLoad.id));
-      setShowDeleteModal(false);
-      setSelectedLoad(null);
-    } catch (err) {
-      console.error("[Loads] delete error:", err);
-      alert(err?.message || "Delete failed.");
-    } finally {
-      setDeleting(false);
-    }
-  }
-
-  async function handleStatusChange(id, newStatus) {
-    setUpdatingId(id);
+  // Notes
+  function openNotes(load) { setEditingNotesLoad(load); }
+  function closeNotes() { setEditingNotesLoad(null); }
+  async function saveNotes(loadId, notes) {
     try {
       const { data, error } = await supabase
         .from("loads")
-        .update({ status: String(newStatus).toUpperCase() })
-        .eq("id", id)
-        .select("id, status");
-      if (error) throw error;
-      if (data?.length) {
-        setLoads((prev) =>
-          prev.map((l) => (l.id === id ? { ...l, status: data[0].status } : l))
-        );
+        .update({ notes: notes ?? null, updated_at: new Date().toISOString() })
+        .eq("id", loadId)
+        .select()
+        .single();
+      if (error) {
+        if (String(error?.message || "").includes("column") || error?.code === "42703") {
+          alert("The 'notes' column doesn't exist yet. Run the migration to enable notes.");
+          return;
+        }
+        throw error;
       }
-    } catch (err) {
-      console.error("[Loads] status update error:", err);
-      alert(err?.message || "Failed to update status.");
-    } finally {
-      setUpdatingId(null);
+      setLoads((prev) => prev.map((l) => (l.id === loadId ? data : l)));
+    } catch (e) {
+      alert(e?.message || "Failed to save notes.");
     }
   }
 
-  // Quick notes modal
-  function openNotes(load) {
-    if (notesMissing) {
-      alert(
-        "Notes column is not in the database yet.\n\nRun this in Supabase SQL:\n\nALTER TABLE loads ADD COLUMN notes text;"
-      );
-      return;
-    }
-    setNotesLoad({ id: load.id });
-    setNotesText(load.notes || "");
-    setShowNotesModal(true);
-  }
-
-  function closeNotes() {
-    setShowNotesModal(false);
-    setNotesLoad(null);
-    setNotesText("");
-    setNotesSaving(false);
-  }
-
-  async function saveNotes() {
-    if (!notesLoad?.id) return;
-    setNotesSaving(true);
-    try {
-      const { data, error } = await supabase
-        .from("loads")
-        .update({ notes: notesText })
-        .eq("id", notesLoad.id)
-        .select("id, notes");
-      if (error) throw error;
-      if (data?.length) {
-        setLoads((prev) =>
-          prev.map((l) => (l.id === notesLoad.id ? { ...l, notes: data[0].notes } : l))
-        );
-      }
-      closeNotes();
-    } catch (err) {
-      console.error("[Loads] save notes error:", err);
-      alert(err?.message || "Failed to save notes.");
-      setNotesSaving(false);
-    }
-  }
-
-  // Full edit modal
-  function openEdit(load) {
-    setEditLoad({
-      id: load.id,
-      reference: load.reference || "",
-      shipper: load.shipper || "",
-      origin: load.origin || "",
-      destination: load.destination || "",
-      status: (load.status || "AVAILABLE").toUpperCase(),
-      rate: load.rate?.toString?.() ?? String(load.rate ?? ""),
-      pickup_local: toLocalInputValue(load.pickup_at),
-      delivery_local: toLocalInputValue(load.delivery_at),
-      notes: notesMissing ? "" : load.notes || "",
-      equipment_type: load.equipment_type || "",
-    });
-    setShowEditModal(true);
-  }
-
-  function closeEdit() {
-    setShowEditModal(false);
-    setEditSaving(false);
-    setEditLoad({
-      id: "",
-      reference: "",
-      shipper: "",
-      origin: "",
-      destination: "",
-      status: "AVAILABLE",
-      rate: "",
-      pickup_local: "",
-      delivery_local: "",
-      notes: "",
-      equipment_type: "",
-    });
-  }
-
-  async function saveEdit(e) {
-    e.preventDefault();
-    if (!editLoad.id) return;
-
-    if (!editLoad.shipper || !editLoad.origin || !editLoad.destination) {
-      alert("Please fill shipper, origin, and destination.");
-      return;
-    }
-    if (!editLoad.equipment_type) {
-      alert("Please select an equipment type.");
-      return;
-    }
-    const rateNumber =
-      editLoad.rate === "" || editLoad.rate === null ? 0 : Number(editLoad.rate);
-    if (Number.isNaN(rateNumber) || rateNumber < 0) {
-      alert("Rate must be a non-negative number.");
-      return;
-    }
-
-    const payload = {
-      reference: editLoad.reference?.trim() || null,
-      shipper: editLoad.shipper.trim(),
-      origin: editLoad.origin.trim(),
-      destination: editLoad.destination.trim(),
-      status: String(editLoad.status).toUpperCase(),
-      rate: rateNumber,
-      pickup_at: fromLocalInputValue(editLoad.pickup_local),
-      delivery_at: fromLocalInputValue(editLoad.delivery_local),
-      equipment_type: editLoad.equipment_type,
-      ...(notesMissing ? {} : { notes: editLoad.notes }),
-    };
-
-    setEditSaving(true);
-    try {
-      const { data, error } = await supabase
-        .from("loads")
-        .update(payload)
-        .eq("id", editLoad.id)
-        .select(
-          notesMissing
-            ? "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, created_at, equipment_type"
-            : "id, reference, shipper, origin, destination, status, rate, pickup_at, delivery_at, notes, created_at, equipment_type"
-        );
-      if (error) throw error;
-
-      if (data?.length) {
-        const updated = data[0];
-        setLoads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
-      }
-      closeEdit();
-    } catch (err) {
-      console.error("[Loads] save edit error:", err);
-      alert(err?.message || "Failed to update load.");
-      setEditSaving(false);
-    }
-  }
-
+  /* ------------------------------ Render ------------------------------ */
   return (
-    <div className="relative min-h-screen p-6 text-gray-200">
+    <div className="p-6">
       {/* Header */}
-      <div className="sticky top-0 z-30 -mx-6 mb-6 border-b border-gray-800 bg-[#0f131a]/80 backdrop-blur supports-[backdrop-filter]:backdrop-blur">
-        <div className="mx-6 py-4 flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Loads</h1>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-2 px-4 py-2 rounded-lg shadow-md transition focus:outline-none focus:ring-2 focus:ring-blue-400"
-          >
-            <Plus size={18} />
-            Add Load
-          </button>
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5">
+            <Ico as={ShieldCheck} className="text-amber-400" />
+          </div>
+          <div>
+            <h1 className="text-xl font-semibold">Loads</h1>
+            <p className="text-sm text-white/60">Create, track, and manage loads.</p>
+          </div>
+        </div>
+
+        <button
+          onClick={() => setIsAddOpen(true)}
+          className="inline-flex items-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400 focus:outline-none"
+        >
+          <Ico as={Plus} />
+          Add Load
+        </button>
+      </div>
+
+      {/* Problems toolbar */}
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <label className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-sm">
+          <input
+            type="checkbox"
+            className="accent-amber-500"
+            checked={showProblemsOnly}
+            onChange={(e) => setShowProblemsOnly(e.target.checked)}
+          />
+          <span className="inline-flex items-center gap-1">
+            <Ico as={Bug} />
+            Show problems only
+          </span>
+        </label>
+
+        <div className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-2 py-1">
+          <Ico as={Filter} className="opacity-70" />
+          <Select
+            value={priorityFilter}
+            onChange={setPriorityFilter}
+            options={[{ label: "All priorities", value: "ALL" }, ...PRIORITY_CHOICES]}
+          />
         </div>
       </div>
 
-      {/* Soft warning if 'notes' column missing */}
-      {notesMissing && (
-        <div className="mb-4 rounded-xl border border-amber-600/40 bg-amber-500/10 p-3 text-amber-200 text-sm flex items-start gap-2">
-          <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-          <div>
-            <div className="font-medium">Notes column not found.</div>
-            <div className="opacity-90">
-              Add it to enable per-load notes:
-              <code className="ml-2 whitespace-pre rounded bg-black/30 px-2 py-1">
-                ALTER TABLE loads ADD COLUMN notes text;
-              </code>
+      {/* Body */}
+      <div className="rounded-2xl border border-white/10">
+        {loading ? (
+          <div className="grid place-items-center p-16">
+            <div className="inline-flex items-center gap-2 text-white/70">
+              <Ico as={Loader2} className="animate-spin" />
+              <span>Loading loads…</span>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* FAB */}
-      <button
-        onClick={() => setShowAddModal(true)}
-        className="fixed bottom-6 right-6 z-40 inline-flex items-center justify-center rounded-full p-4 shadow-lg bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
-        title="Add Load"
-        aria-label="Add Load"
-      >
-        <Plus className="w-5 h-5 text-white" />
-      </button>
-
-      {/* List */}
-      {loading ? (
-        <div className="flex justify-center items-center h-40 text-gray-400">
-          <Loader2 className="animate-spin mr-2" /> Loading...
-        </div>
-      ) : loads.length === 0 ? (
-        <div className="text-center text-gray-400">
-          <p className="mb-4">No loads available.</p>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg shadow-md transition"
-          >
-            <Plus size={18} />
-            Add Your First Load
-          </button>
-        </div>
-      ) : (
-        <div className="grid gap-3">
-          {loads.map((load) => (
-            <div
-              key={load.id}
-              className="bg-[#171c26] border border-gray-700 rounded-xl p-4 flex flex-wrap md:flex-nowrap gap-4 md:gap-6 items-center hover:border-gray-600 transition-colors"
-            >
-              <div className="flex-1 min-w-[260px]">
-                <div className="flex items-center gap-2">
-                  <p className="font-medium text-white">
-                    {load.reference || "No Reference"} — {load.shipper}
-                  </p>
-
-                  {/* Edit whole load */}
-                  <button
-                    onClick={() => openEdit(load)}
-                    className="p-1 rounded hover:bg-gray-700 transition-colors"
-                    title="Edit load"
-                  >
-                    <Pencil className="w-4 h-4 text-gray-300 hover:text-blue-400" />
-                  </button>
-
-                  {/* Quick notes */}
-                  {!notesMissing && (
-                    <button
-                      onClick={() => openNotes(load)}
-                      className="p-1 rounded hover:bg-gray-700 transition-colors"
-                      title="Edit notes"
-                    >
-                      <StickyNote className="w-4 h-4 text-gray-300 hover:text-blue-400" />
-                    </button>
-                  )}
+        ) : visibleRows.length === 0 ? (
+          <div className="p-8">
+            <div className="grid place-items-center rounded-2xl border border-white/10 p-10">
+              <div className="flex max-w-xl flex-col items-center text-center">
+                <div className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-white/5">
+                  <TruckGlyph />
                 </div>
-
-                <p className="text-sm text-gray-400">
-                  {load.origin} → {load.destination}
+                <h2 className="text-lg font-semibold">
+                  {priorityFilter !== "ALL" || showProblemsOnly ? "No matching problem loads" : "No loads yet"}
+                </h2>
+                <p className="mt-1 text-sm text-white/60">
+                  {priorityFilter !== "ALL" || showProblemsOnly
+                    ? "Adjust filters or priority to see more."
+                    : "Create your first load to get started."}
                 </p>
-
-                {load.equipment_type && (
-                  <p className="text-[11px] text-blue-400 mt-1">
-                    Equipment: {load.equipment_type}
-                  </p>
-                )}
-
-                {(load.pickup_at || load.delivery_at) && (
-                  <p className="text-[11px] text-gray-500 mt-1">
-                    {load.pickup_at && <>PU: {new Date(load.pickup_at).toLocaleString()} </>}
-                    {load.delivery_at && <>• DEL: {new Date(load.delivery_at).toLocaleString()}</>}
-                  </p>
-                )}
-
-                {!notesMissing &&
-                  (load.notes ? (
-                    <p className="text-[12px] text-gray-300 mt-2 line-clamp-2">
-                      <span className="opacity-70">Notes: </span>
-                      {load.notes}
-                    </p>
-                  ) : (
-                    <p className="text-[12px] text-gray-500 mt-2 italic">
-                      No notes yet — use the 🗒️ button.
-                    </p>
-                  ))}
-              </div>
-
-              {/* Inline status + actions */}
-              <div className="flex items-center gap-2 ml-auto">
-                <div className="relative">
-                  <select
-                    value={load.status}
-                    onChange={(e) => handleStatusChange(load.id, e.target.value)}
-                    className="appearance-none pr-7 bg-gray-800 text-gray-100 rounded-lg px-3 py-2 text-sm border border-gray-700"
-                    title="Update status"
-                    disabled={updatingId === load.id}
+                {priorityFilter === "ALL" && !showProblemsOnly && (
+                  <button
+                    onClick={() => setIsAddOpen(true)}
+                    className="mt-4 inline-flex items-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400"
                   >
-                    {STATUS_CHOICES.map((s) => (
-                      <option key={s.value} value={s.value}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                </div>
-
-                {updatingId === load.id && (
-                  <Loader2 className="w-4 h-4 animate-spin text-gray-400" title="Saving..." />
+                    <Ico as={Plus} />
+                    Add Load
+                  </button>
                 )}
-                
-                <button
-                  onClick={() => handleDeleteClick(load)}
-                  className="p-2 hover:bg-gray-700 rounded-lg transition-colors"
-                  title="Delete Load"
-                >
-                  <Trash2 className="w-4 h-4 text-gray-400 hover:text-red-400" />
-                </button>
               </div>
             </div>
-          ))}
-        </div>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-white/5">
+                <tr className="text-left">
+                  <Th>Load #</Th>
+                  <Th>Shipper</Th>
+                  <Th>Origin</Th>
+                  <Th>Destination</Th>
+                  <Th>Status</Th>
+                  <Th>Problem</Th>
+                  <Th>Updated</Th>
+                  <Th className="text-right">Actions</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRows.map((l) => (
+                  <tr key={l.id} className="border-t border-white/10 hover:bg-white/5">
+                    <Td>{l.reference || "—"}</Td>
+                    <Td>{l.shipper || "—"}</Td>
+                    <Td>{l.origin || "—"}</Td>
+                    <Td>{l.destination || "—"}</Td>
+                    <Td><StatusBadge value={l.status} /></Td>
+                    <Td>
+                      {l.status === "PROBLEM" ? (
+                        <div className="flex items-center gap-2">
+                          <PriorityBadge value={l.problem_priority} />
+                          <span className="inline-flex items-center gap-1 text-xs text-white/70">
+                            <Ico as={Clock} />
+                            {since(l.problem_flagged_at || l.updated_at)}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-white/40">—</span>
+                      )}
+                    </Td>
+                    <Td>{fmtDate(l.updated_at || l.created_at)}</Td>
+                    <Td className="text-right">
+                      <div className="inline-flex items-center gap-2">
+                        {/* Primary action - prominent button */}
+                        {l.status === "PROBLEM" ? (
+                          <button
+                            onClick={() => resolveProblem(l.id)}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                          >
+                            <Ico as={CheckCircle2} />
+                            <span>Resolve</span>
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => setReportingLoad(l)}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/20 border border-red-500/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/30 transition-colors"
+                          >
+                            <Ico as={AlertTriangle} />
+                            <span>Report</span>
+                          </button>
+                        )}
+
+                        {/* Notes - icon button */}
+                        <IconButton
+                          title="View/Edit Notes"
+                          onClick={() => openNotes(l)}
+                        >
+                          <Ico as={StickyNote} />
+                        </IconButton>
+
+                        {/* More actions - dropdown menu */}
+                        <MoreActionsMenu
+                          load={l}
+                          onViewProblem={() => openViewProblem(l.id)}
+                          onSetTransit={() => updateStatus(l.id, "IN_TRANSIT")}
+                          onDelete={() => deleteLoad(l.id)}
+                        />
+                      </div>
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Add Load modal (existing) */}
+      {isAddOpen && (
+        <AddLoadModal
+          onClose={() => setIsAddOpen(false)}
+          onAdded={(row) => setLoads((prev) => [row, ...prev])}
+        />
       )}
 
-      {/* Add Modal */}
-      {showAddModal && (
-        <div 
-          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
-          onClick={(e) => {
-            // Close modal if clicking on backdrop
-            if (e.target === e.currentTarget) {
-              setShowAddModal(false);
+      {/* Report Problem */}
+      {!!reportingLoad && (
+        <ReportProblemModal
+          load={reportingLoad}
+          me={me}
+          onClose={() => setReportingLoad(null)}
+          onSubmit={async ({ note, priority, owner }) => {
+            await markProblem(reportingLoad.id, { note, priority, owner });
+            setReportingLoad(null);
+          }}
+        />
+      )}
+
+      {/* View Problem (editable) */}
+      {!!viewingProblemLoad && (
+        <ViewProblemModal
+          load={viewingProblemLoad}
+          onClose={() => setViewingProblemLoad(null)}
+          onResolve={async () => {
+            await resolveProblem(viewingProblemLoad.id);
+            setViewingProblemLoad(null);
+          }}
+          onSave={async ({ note, priority, owner }) => {
+            try {
+              const { data, error } = await supabase
+                .from("loads")
+                .update({
+                  problem_note: note ?? null,
+                  problem_priority: priority ?? null,
+                  problem_owner: owner ?? null,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", viewingProblemLoad.id)
+                .select()
+                .single();
+
+              if (error) {
+                if (String(error?.message || "").includes("column") || error?.code === "42703") {
+                  alert("Problem columns are missing. Run the migration to enable editing.");
+                  return;
+                }
+                throw error;
+              }
+              setLoads((prev) => prev.map((l) => (l.id === data.id ? data : l)));
+              setViewingProblemLoad(data);
+            } catch (e) {
+              alert(e?.message || "Failed to save problem details.");
             }
           }}
-        >
-          <div className="bg-[#171c26] rounded-2xl p-6 w-full max-w-xl border border-gray-700 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold">Add New Load</h2>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowAddModal(false);
-                  setLastErr("");
-                }}
-                className="p-1 hover:bg-gray-700 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleAddLoad} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <TextInput
-                  label="Reference (optional)"
-                  value={newLoad.reference}
-                  onChange={(v) => setNewLoad((s) => ({ ...s, reference: v }))}
-                />
-                <TextInput
-                  label="Shipper *"
-                  value={newLoad.shipper}
-                  onChange={(v) => setNewLoad((s) => ({ ...s, shipper: v }))}
-                  required
-                />
-                <TextInput
-                  label="Origin *"
-                  placeholder="City, ST or address"
-                  value={newLoad.origin}
-                  onChange={(v) => setNewLoad((s) => ({ ...s, origin: v }))}
-                  required
-                />
-                <TextInput
-                  label="Destination *"
-                  placeholder="City, ST or address"
-                  value={newLoad.destination}
-                  onChange={(v) => setNewLoad((s) => ({ ...s, destination: v }))}
-                  required
-                />
-
-                <SelectInput
-                  label="Status *"
-                  value={newLoad.status}
-                  onChange={(v) => setNewLoad((s) => ({ ...s, status: v }))}
-                  options={STATUS_CHOICES}
-                />
-                <div>
-                  <label className="block text-sm text-gray-400">Equipment Type *</label>
-                  <div className="relative">
-                    <select
-                      value={newLoad.equipment_type}
-                      onChange={(e) => setNewLoad((s) => ({ ...s, equipment_type: e.target.value }))}
-                      required
-                      className="appearance-none pr-7 w-full bg-gray-800 text-white rounded-lg p-2 mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-gray-700"
-                    >
-                      <option value="">Select type</option>
-                      {EQUIPMENT_OPTIONS.map((opt) => (
-                        <option key={opt} value={opt}>
-                          {opt}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="pointer-events-none absolute right-2 top-[22px] h-4 w-4 text-gray-400" />
-                  </div>
-                </div>
-                <NumberInput
-                  label="Rate ($)"
-                  value={newLoad.rate}
-                  onChange={(v) => setNewLoad((s) => ({ ...s, rate: v }))}
-                />
-
-                <DateTimeInput
-                  label="Pickup (PU)"
-                  value={newLoad.pickup_local}
-                  onChange={(v) => setNewLoad((s) => ({ ...s, pickup_local: v }))}
-                />
-                <DateTimeInput
-                  label="Delivery (DEL)"
-                  value={newLoad.delivery_local}
-                  onChange={(v) => setNewLoad((s) => ({ ...s, delivery_local: v }))}
-                />
-              </div>
-
-              {lastErr && (
-                <div className="text-sm text-red-300 bg-red-900/30 border border-red-700 rounded-lg p-2">
-                  {lastErr}
-                </div>
-              )}
-
-              <div className="flex justify-end gap-3 mt-6">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAddModal(false);
-                    setLastErr("");
-                  }}
-                  className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition-colors"
-                  disabled={submitting}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-white disabled:opacity-60 transition-colors flex items-center gap-2"
-                  disabled={submitting}
-                >
-                  {submitting ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" /> 
-                      <span>Saving…</span>
-                    </>
-                  ) : (
-                    "Save Load"
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        />
       )}
 
-      {/* Delete Modal */}
-      {showDeleteModal && selectedLoad && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-          <div className="bg-[#171c26] rounded-2xl p-6 w-full max-w-md border border-gray-700">
-            <div className="flex items-start gap-4">
-              <div className="flex-shrink-0 w-12 h-12 rounded-full bg-red-900/30 flex items-center justify-center">
-                <Trash2 className="w-6 h-6 text-red-400" />
-              </div>
-              <div className="flex-1">
-                <h2 className="text-xl font-semibold mb-2">Delete Load</h2>
-                <p className="text-gray-400 mb-4">
-                  Are you sure you want to delete this load? This action cannot be undone.
-                </p>
-                <div className="bg-gray-800 rounded-lg p-3 mb-4">
-                  <p className="text-sm text-white font-medium">
-                    {selectedLoad.reference || "No Reference"} — {selectedLoad.shipper}
-                  </p>
-                  <p className="text-xs text-gray-400 mt-1">
-                    {selectedLoad.origin} → {selectedLoad.destination}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowDeleteModal(false);
-                  setSelectedLoad(null);
-                }}
-                className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition-colors"
-                disabled={deleting}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteLoad}
-                className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-white disabled:opacity-60 transition-colors"
-                disabled={deleting}
-              >
-                {deleting ? (
-                  <span className="inline-flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin" /> Deleting…
-                  </span>
-                ) : (
-                  "Delete Load"
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* Notes */}
+      {!!editingNotesLoad && (
+        <NotesModal
+          load={editingNotesLoad}
+          onClose={() => setEditingNotesLoad(null)}
+          onSave={async (text) => {
+            await saveNotes(editingNotesLoad.id, text);
+            setEditingNotesLoad(null);
+          }}
+        />
       )}
 
-      {/* Notes Modal */}
-      {showNotesModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-          <div className="bg-[#171c26] rounded-2xl p-6 w-full max-w-lg border border-gray-700">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold">Load Notes</h2>
-              <button
-                onClick={closeNotes}
-                className="p-1 rounded hover:bg-gray-700 transition-colors"
-                title="Close"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <textarea
-              value={notesText}
-              onChange={(e) => setNotesText(e.target.value)}
-              rows={8}
-              className="w-full bg-gray-800 text-white rounded-lg p-3 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Driver updates, customer notes, reference numbers, etc."
-            />
-
-            <div className="mt-4 flex justify-end gap-3">
-              <button
-                onClick={closeNotes}
-                className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition-colors"
-                disabled={notesSaving}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={saveNotes}
-                className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-white disabled:opacity-60 transition-colors"
-                disabled={notesSaving}
-              >
-                {notesSaving ? (
-                  <span className="inline-flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin" /> Saving…
-                  </span>
-                ) : (
-                  "Save Notes"
-                )}
-              </button>
-            </div>
-          </div>
+      {/* Fetch error (non-blocking) */}
+      {fetchError && (
+        <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
+          {fetchError}
         </div>
       )}
-
-      {/* Edit Modal */}
-      {showEditModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-          <div className="bg-[#171c26] rounded-2xl p-6 w-full max-w-xl border border-gray-700 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold">Edit Load</h2>
-              <button
-                onClick={closeEdit}
-                className="p-1 hover:bg-gray-700 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={saveEdit} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <TextInput
-                  label="Reference (optional)"
-                  value={editLoad.reference}
-                  onChange={(v) => setEditLoad((s) => ({ ...s, reference: v }))}
-                />
-                <TextInput
-                  label="Shipper *"
-                  value={editLoad.shipper}
-                  onChange={(v) => setEditLoad((s) => ({ ...s, shipper: v }))}
-                  required
-                />
-                <TextInput
-                  label="Origin *"
-                  value={editLoad.origin}
-                  onChange={(v) => setEditLoad((s) => ({ ...s, origin: v }))}
-                  placeholder="City, ST or address"
-                  required
-                />
-                <TextInput
-                  label="Destination *"
-                  value={editLoad.destination}
-                  onChange={(v) => setEditLoad((s) => ({ ...s, destination: v }))}
-                  placeholder="City, ST or address"
-                  required
-                />
-
-                <SelectInput
-                  label="Status *"
-                  value={editLoad.status}
-                  onChange={(v) => setEditLoad((s) => ({ ...s, status: v }))}
-                  options={STATUS_CHOICES}
-                />
-                <div>
-                  <label className="block text-sm text-gray-400">Equipment Type *</label>
-                  <div className="relative">
-                    <select
-                      value={editLoad.equipment_type}
-                      onChange={(e) => setEditLoad((s) => ({ ...s, equipment_type: e.target.value }))}
-                      required
-                      className="appearance-none pr-7 w-full bg-gray-800 text-white rounded-lg p-2 mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-gray-700"
-                    >
-                      <option value="">Select type</option>
-                      {EQUIPMENT_OPTIONS.map((opt) => (
-                        <option key={opt} value={opt}>
-                          {opt}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="pointer-events-none absolute right-2 top-[22px] h-4 w-4 text-gray-400" />
-                  </div>
-                </div>
-                <NumberInput
-                  label="Rate ($)"
-                  value={editLoad.rate}
-                  onChange={(v) => setEditLoad((s) => ({ ...s, rate: v }))}
-                />
-
-                <DateTimeInput
-                  label="Pickup (PU)"
-                  value={editLoad.pickup_local}
-                  onChange={(v) => setEditLoad((s) => ({ ...s, pickup_local: v }))}
-                />
-                <DateTimeInput
-                  label="Delivery (DEL)"
-                  value={editLoad.delivery_local}
-                  onChange={(v) =>
-                    setEditLoad((s) => ({ ...s, delivery_local: v }))
-                  }
-                />
-
-                {!notesMissing && (
-                  <div className="md:col-span-2">
-                    <label className="block text-sm text-gray-400">Notes</label>
-                    <textarea
-                      value={editLoad.notes}
-                      onChange={(e) =>
-                        setEditLoad((s) => ({ ...s, notes: e.target.value }))
-                      }
-                      rows={6}
-                      className="mt-1 w-full bg-gray-800 text-white rounded-lg p-3 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="Driver updates, appointment changes, etc."
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="flex justify-end gap-3 mt-6">
-                <button
-                  type="button"
-                  onClick={closeEdit}
-                  className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition-colors"
-                  disabled={editSaving}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-white disabled:opacity-60 transition-colors"
-                  disabled={editSaving}
-                >
-                  {editSaving ? (
-                    <span className="inline-flex items-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" /> Updating…
-                    </span>
-                  ) : (
-                    "Update Load"
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* AddLoadModal Component (if you want to use it) */}
-      <AddLoadModal
-        open={openCreate}
-        onClose={() => setOpenCreate(false)}
-        onCreated={() => {
-          fetchLoads();
-          setOpenCreate(false);
-        }}
-      />
     </div>
   );
 }
 
-/* ------------------------ Small input components ------------------------ */
-function TextInput({ label, value, onChange, placeholder, required }) {
+/* --------------------------- Table Bits --------------------------- */
+function Th({ children, className = "" }) {
+  return <th className={cx("px-4 py-3 text-xs font-medium text-white/70", className)}>{children}</th>;
+}
+function Td({ children, className = "" }) {
+  return <td className={cx("px-4 py-3 align-top", className)}>{children}</td>;
+}
+
+function StatusBadge({ value }) {
+  const map = {
+    AVAILABLE: "bg-white/10 text-white/70 border-white/20",
+    IN_TRANSIT: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+    DELIVERED: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+    CANCELLED: "bg-white/10 text-white/50 border-white/20",
+    AT_RISK: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+    PROBLEM: "bg-red-500/15 text-red-300 border-red-500/30",
+  };
   return (
-    <div>
-      <label className="block text-sm text-gray-400">{label}</label>
-      <input
-        type="text"
+    <span
+      className={cx(
+        "inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-xs",
+        map[value] || "bg-white/10 text-white/70 border-white/20"
+      )}
+    >
+      {value === "PROBLEM" ? <Ico as={AlertTriangle} /> : null}
+      {value || "—"}
+    </span>
+  );
+}
+
+function PriorityBadge({ value }) {
+  const map = {
+    LOW: "bg-white/10 text-white/70 border-white/20",
+    MEDIUM: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+    HIGH: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+    CRITICAL: "bg-red-500/15 text-red-300 border-red-500/30",
+  };
+  if (!value) return <span className="text-xs text-white/40">—</span>;
+  return (
+    <span
+      className={cx(
+        "inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-xs",
+        map[value] || "bg-white/10 text-white/70 border-white/20"
+      )}
+    >
+      {value}
+    </span>
+  );
+}
+
+/* --------------------------- More Actions Dropdown --------------------------- */
+function MoreActionsMenu({ load, onViewProblem, onSetTransit, onDelete }) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <div className="relative">
+      <IconButton
+        title="More actions"
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <Ico as={MoreVertical} />
+      </IconButton>
+
+      {isOpen && (
+        <>
+          {/* Backdrop to close menu */}
+          <div
+            className="fixed inset-0 z-10"
+            onClick={() => setIsOpen(false)}
+          />
+          
+          {/* Dropdown menu */}
+          <div className="absolute right-0 top-full z-20 mt-1 min-w-[180px] rounded-lg border border-white/10 bg-[#0B0B0F] py-1 shadow-xl">
+            {load.status === "PROBLEM" && (
+              <button
+                onClick={() => {
+                  onViewProblem();
+                  setIsOpen(false);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-white/80 hover:bg-white/5"
+              >
+                <Ico as={Eye} />
+                View Problem Details
+              </button>
+            )}
+            <button
+              onClick={() => {
+                onSetTransit();
+                setIsOpen(false);
+              }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-white/80 hover:bg-white/5"
+            >
+              <Ico as={Pencil} />
+              Set In Transit
+            </button>
+            <button
+              onClick={() => {
+                onDelete();
+                setIsOpen(false);
+              }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-red-300 hover:bg-red-500/10"
+            >
+              <Ico as={Trash2} />
+              Delete Load
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* --------------------------- Reusable Select --------------------------- */
+function Select({ value, onChange, options }) {
+  return (
+    <div className="relative">
+      <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        required={required}
-        className="w-full bg-gray-800 text-white rounded-lg p-2 mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
-      />
+        className="appearance-none rounded-lg border border-white/10 bg-transparent px-3 py-1.5 pr-8 text-sm outline-none"
+      >
+        {options.map((o) => (
+          <option
+            key={o.value}
+            value={o.value}
+            className="bg-[#0B0B0F] text-white"
+          >
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <Ico as={ChevronDown} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 opacity-60" />
     </div>
   );
 }
 
-function NumberInput({ label, value, onChange }) {
+/* ----------------------------- Misc SVG ----------------------------- */
+function TruckGlyph() {
   return (
-    <div>
-      <label className="block text-sm text-gray-400">{label}</label>
-      <input
-        type="number"
-        min="0"
-        step="0.01"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full bg-gray-800 text-white rounded-lg p-2 mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        placeholder="0.00"
+    <svg width="24" height="24" viewBox="0 0 24 24" className="text-white/70">
+      <path
+        d="M3 16V7a1 1 0 0 1 1-1h9v10H3zm10 0h5l3-4h-4V7h-4v9zM7 19a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm9 0a2 2 0 1 1 .001-3.999A2 2 0 0 1 16 19z"
+        fill="currentColor"
+        fillOpacity="0.75"
       />
-    </div>
+    </svg>
   );
 }
 
-function SelectInput({ label, value, onChange, options }) {
+/* ------------------------ Report Problem Modal ------------------------ */
+function ReportProblemModal({ load, me, onClose, onSubmit }) {
+  const [note, setNote] = useState("");
+  const [priority, setPriority] = useState("HIGH");
+  const [owner, setOwner] = useState(me?.email || "");
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!priority) { alert("Select a priority."); return; }
+    setSaving(true);
+    try {
+      await onSubmit({ note: note.trim() || null, priority, owner: owner.trim() || null });
+    } finally { setSaving(false); }
+  }
+
   return (
-    <div>
-      <label className="block text-sm text-gray-400">{label}</label>
-      <div className="relative">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="appearance-none pr-7 w-full bg-gray-800 text-white rounded-lg p-2 mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500 border border-gray-700"
-        >
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <ChevronDown className="pointer-events-none absolute right-2 top-[22px] h-4 w-4 text-gray-400" />
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
+      <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-[var(--bg-base,#0B0B0F)] p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-red-500/10">
+              <Ico as={AlertTriangle} className="text-red-300" />
+            </div>
+            <h3 className="text-base font-semibold">Report Problem</h3>
+          </div>
+          <IconButton title="Close" onClick={onClose}><Ico as={X} /></IconButton>
+        </div>
+
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs text-white/70">Load #</label>
+              <input
+                value={load?.reference || "—"}
+                disabled
+                className="w-full cursor-not-allowed rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-white/70">Owner</label>
+              <input
+                value={owner}
+                onChange={(e) => setOwner(e.target.value)}
+                placeholder="assignee@email.com"
+                className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="sm:col-span-1">
+              <label className="mb-1 block text-xs text-white/70">Priority</label>
+              <Select value={priority} onChange={setPriority} options={PRIORITY_CHOICES} />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="mb-1 block text-xs text-white/70">Problem Note</label>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="What happened? What do we need to do?"
+                rows={4}
+                className="w-full resize-y rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-white/10 px-3 py-2 text-sm hover:bg-white/5"
+          >
+            Close
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-xl bg-red-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-red-400 disabled:opacity-60"
+          >
+            {saving ? <Ico as={Loader2} className="animate-spin" /> : <Ico as={AlertTriangle} />}
+            Flag as Problem
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-function DateTimeInput({ label, value, onChange }) {
+/* ------------------------ View Problem Modal (Editable) ------------------------- */
+function ViewProblemModal({ load, onClose, onResolve, onSave }) {
+  const [note, setNote] = useState(load?.problem_note || "");
+  const [priority, setPriority] = useState(load?.problem_priority || "HIGH");
+  const [owner, setOwner] = useState(load?.problem_owner || "");
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    try { await onSave({ note: note.trim() || null, priority, owner: owner.trim() || null }); }
+    finally { setSaving(false); }
+  }
+
+  const flagged = fmtDate(load?.problem_flagged_at) || "—";
+
   return (
-    <div>
-      <label className="block text-sm text-gray-400">{label}</label>
-      <input
-        type="datetime-local"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full bg-gray-800 text-white rounded-lg p-2 mt-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
-      />
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
+      <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-[var(--bg-base,#0B0B0F)] p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-red-500/10">
+              <Ico as={Eye} className="text-red-300" />
+            </div>
+            <h3 className="text-base font-semibold">Problem Details</h3>
+          </div>
+          <IconButton title="Close" onClick={onClose}><Ico as={X} /></IconButton>
+        </div>
+
+        <div className="space-y-3">
+          <div className="rounded-xl border border-white/10 p-3">
+            <div className="text-xs text-white/60 mb-1">Problem Note</div>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={4}
+              placeholder="Add context for the team…"
+              className="w-full resize-y rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-white/10 p-3">
+              <div className="text-xs text-white/60 mb-1">Priority</div>
+              <Select value={priority} onChange={setPriority} options={PRIORITY_CHOICES} />
+            </div>
+            <div className="rounded-xl border border-white/10 p-3 sm:col-span-1">
+              <div className="text-xs text-white/60 mb-1">Owner</div>
+              <input
+                value={owner}
+                onChange={(e) => setOwner(e.target.value)}
+                placeholder="assignee@email.com"
+                className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40"
+              />
+            </div>
+            <div className="rounded-xl border border-white/10 p-3 sm:col-span-1">
+              <div className="text-xs text-white/60 mb-1">Flagged</div>
+              <div className="text-sm font-medium">{flagged}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400 disabled:opacity-60"
+          >
+            {saving ? <Ico as={Loader2} className="animate-spin" /> : <Ico as={Save} />}
+            Save
+          </button>
+          <button
+            onClick={onResolve}
+            className="inline-flex items-center gap-2 rounded-xl bg-emerald-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-emerald-400"
+          >
+            <Ico as={CheckCircle2} />
+            Resolve
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------- Notes Modal --------------------------- */
+function NotesModal({ load, onClose, onSave }) {
+  const [text, setText] = useState(load?.notes || "");
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    try { await onSave(text.trim() || null); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
+      <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-[var(--bg-base,#0B0B0F)] p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-white/10">
+              <Ico as={StickyNote} className="text-white/80" />
+            </div>
+            <h3 className="text-base font-semibold">Load Notes</h3>
+          </div>
+          <IconButton title="Close" onClick={onClose}><Ico as={X} /></IconButton>
+        </div>
+
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs text-white/70">Load #</label>
+              <input
+                value={load?.reference || "—"}
+                disabled
+                className="w-full cursor-not-allowed rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-white/70">Updated</label>
+              <input
+                value={fmtDate(load?.updated_at || load?.created_at)}
+                disabled
+                className="w-full cursor-not-allowed rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-white/70">Notes</label>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Anything relevant to this load…"
+              rows={6}
+              className="w-full resize-y rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40"
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-white/10 px-3 py-2 text-sm hover:bg-white/5"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400 disabled:opacity-60"
+          >
+            {saving ? <Ico as={Loader2} className="animate-spin" /> : <Ico as={Save} />}
+            Save Notes
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

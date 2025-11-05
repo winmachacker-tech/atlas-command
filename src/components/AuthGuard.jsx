@@ -8,13 +8,7 @@ import { supabase } from "../lib/supabase";
  * - Prevents redirect loops by separating "checking" vs "unauthenticated".
  * - Defers redirect until initial session stabilizes (grace window).
  * - Restores the intended route via ?redirect=...
- *
- * Usage:
- *   <AuthGuard><YourProtectedApp /></AuthGuard>
- *
- * Optional props:
- *   - requireAuth (default: true)  → if false, no guarding (useful to wrap public routes consistently)
- *   - loginPath  (default: "/login")
+ * - 🔹PLUS: tiny bridge → if Supabase sends hash/search tokens to "/", forward to /auth/callback.
  */
 export default function AuthGuard({
   children,
@@ -42,6 +36,25 @@ export default function AuthGuard({
   // Small grace window so "INITIAL_SESSION" → "SIGNED_IN" doesn't cause a flash redirect
   const GRACE_MS = 900;
   const graceTimerRef = useRef(null);
+
+  /* ---------- NEW: very small, safe bridge to /auth/callback ---------- */
+  useEffect(() => {
+    if (isCallback) return;
+    const hash = window.location.hash || "";
+    const hasHashTokens =
+      hash.includes("access_token=") || hash.includes("refresh_token=");
+    const qs = new URLSearchParams(location.search || "");
+    const hasSearchTokens = qs.has("code") || qs.has("token_hash") || qs.has("type");
+
+    if (hasHashTokens) {
+      // Preserve the exact hash so AuthCallback can read tokens
+      navigate(`/auth/callback${hash}`, { replace: true });
+    } else if (hasSearchTokens) {
+      // Preserve the search params exactly
+      navigate(`/auth/callback${location.search}`, { replace: true });
+    }
+  }, [isCallback, location.search, navigate]);
+  /* ------------------------------------------------------------------- */
 
   // Initial session fetch
   useEffect(() => {
@@ -128,8 +141,7 @@ export default function AuthGuard({
   // If guarding, while checking auth, render nothing (or a tiny placeholder)
   if (shouldGuard && checking) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-zinc-500">
-        {/* Optional: a minimal loader to avoid a blank screen */}
+      <div className="flex min-h-screen items-center justify-center text-sm text-zinc-500">
         Checking authentication…
       </div>
     );

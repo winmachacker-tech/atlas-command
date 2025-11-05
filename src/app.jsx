@@ -1,75 +1,61 @@
 // src/app.jsx
-import { Suspense } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-
-// App shell
+import { Suspense, lazy } from "react";
+import { Routes, Route, Navigate } from "react-router-dom";
 import MainLayout from "./layout/MainLayout.jsx";
+import AuthGuard from "./components/AuthGuard.jsx";
 
-// Pages
-import Dashboard from "./pages/Dashboard.jsx";
-import Loads from "./pages/Loads.jsx";
-import InTransit from "./pages/InTransit.jsx";
-import Delivered from "./pages/Delivered.jsx";
-import Issues from "./pages/Issues.jsx";
-import Users from "./pages/Users.jsx";
-import Settings from "./pages/Settings.jsx";
-import Onboarding from "./pages/Onboarding.jsx";
+const Dashboard    = lazy(() => import("./pages/Dashboard.jsx"));
+const Loads        = lazy(() => import("./pages/Loads.jsx"));
+const InTransit    = lazy(() => import("./pages/InTransit.jsx"));
+const Delivered    = lazy(() => import("./pages/Delivered.jsx"));
+const Billing      = lazy(() => import("./pages/Billing.jsx"));
+const Settings     = lazy(() => import("./pages/Settings.jsx"));
+
+const Login        = lazy(() => import("./pages/Login.jsx"));
+const Signup       = lazy(() => import("./pages/Signup.jsx"));
+const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx"));
+const SetPassword  = lazy(() => import("./pages/SetPassword.jsx")); // if you have it
 
 function Fallback() {
   return (
-    <div className="min-h-dvh grid place-items-center text-[var(--text-base)] bg-[var(--bg-base)]">
-      <div className="opacity-70 text-sm">Loading…</div>
-    </div>
-  );
-}
-
-// Tiny test page to prove routing hits exactly what we expect
-function IssuesRoutingProbe() {
-  return (
-    <div className="min-h-dvh grid place-items-center text-[var(--text-base)] bg-[var(--bg-base)]">
-      <div className="rounded-xl border border-white/10 bg-[var(--bg-surface)] p-6">
-        <div className="text-xl font-semibold">Routing OK</div>
-        <div className="text-sm opacity-70 mt-1">
-          You reached <code>/__issues_test</code>. Now go to <code>/issues</code> — it should render <code>src/pages/Issues.jsx</code>.
-        </div>
+    <div className="min-h-screen grid place-items-center text-white/80">
+      <div className="rounded-2xl border border-white/10 bg-black/40 backdrop-blur-md px-6 py-4">
+        Loading…
       </div>
     </div>
   );
 }
 
-export default function App() {
+export default function AppRoutes() {
   return (
-    <BrowserRouter>
-      <Suspense fallback={<Fallback />}>
-        <Routes>
-          {/* App shell */}
-          <Route path="/" element={<MainLayout />}>
-            {/* Default redirect */}
-            <Route index element={<Navigate to="/dashboard" replace />} />
+    <Suspense fallback={<Fallback />}>
+      <Routes>
+        {/* PUBLIC */}
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Signup />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/set-password" element={<SetPassword />} />
 
-            {/* Core pages */}
-            <Route path="dashboard" element={<Dashboard />} />
-            <Route path="loads" element={<Loads />} />
-            <Route path="in-transit" element={<InTransit />} />
-            <Route path="delivered" element={<Delivered />} />
+        {/* PROTECTED */}
+        <Route
+          path="/"
+          element={
+            <AuthGuard>
+              <MainLayout />
+            </AuthGuard>
+          }
+        >
+          <Route index element={<Dashboard />} />
+          <Route path="loads" element={<Loads />} />
+          <Route path="in-transit" element={<InTransit />} />
+          <Route path="delivered" element={<Delivered />} />
+          <Route path="billing" element={<Billing />} />
+          <Route path="settings" element={<Settings />} />
+        </Route>
 
-            {/* ✅ Issues route (this must match the NavLink) */}
-            <Route path="issues" element={<Issues />} />
-
-            <Route path="users" element={<Users />} />
-            <Route path="settings" element={<Settings />} />
-          </Route>
-
-          {/* Public/onboarding (optional) */}
-          <Route path="/onboarding" element={<Onboarding />} />
-
-          {/* Temporary probe to verify routing works end-to-end */}
-          <Route path="/__issues_test" element={<IssuesRoutingProbe />} />
-
-          {/* Catch-all */}
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Routes>
-      </Suspense>
-    </BrowserRouter>
+        {/* CATCH-ALL */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
   );
 }

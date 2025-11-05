@@ -1,4 +1,5 @@
 // src/main.jsx
+import "./styles/dark-bridge.css";
 import React, { StrictMode, Suspense, lazy } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
@@ -18,13 +19,13 @@ const Dashboard    = lazy(() => import("./pages/Dashboard.jsx"));
 const Loads        = lazy(() => import("./pages/Loads.jsx"));
 const InTransit    = lazy(() => import("./pages/InTransit.jsx"));
 const Delivered    = lazy(() => import("./pages/Delivered.jsx"));
-const ProblemBoard = lazy(() => import("./pages/ProblemBoard.jsx"));
 const Activity     = lazy(() => import("./pages/Activity.jsx"));
 const Settings     = lazy(() => import("./pages/Settings.jsx"));
 const Trucks       = lazy(() => import("./pages/Trucks.jsx"));
 const Drivers      = lazy(() => import("./pages/Drivers.jsx"));
 const Users        = lazy(() => import("./pages/Users.jsx"));
 const Login        = lazy(() => import("./pages/Login.jsx"));
+const Signup       = lazy(() => import("./pages/Signup.jsx"));        // ✅ added
 const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx"));
 const SetPassword  = lazy(() => import("./pages/SetPassword.jsx"));
 const Billing      = lazy(() => import("./pages/Billing.jsx"));
@@ -50,12 +51,13 @@ function AppRoutes() {
   return (
     <Suspense fallback={<Loader />}>
       <Routes>
-        {/* Auth */}
+        {/* PUBLIC */}
         <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Signup />} />            {/* ✅ added */}
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/set-password" element={<SetPassword />} />
 
-        {/* App */}
+        {/* PROTECTED */}
         <Route
           path="/"
           element={
@@ -80,7 +82,6 @@ function AppRoutes() {
           <Route path="in-transit" element={<ErrorBoundary><InTransit /></ErrorBoundary>} />
           <Route path="delivered" element={<ErrorBoundary><Delivered /></ErrorBoundary>} />
           <Route path="billing" element={<ErrorBoundary><Billing /></ErrorBoundary>} />
-          <Route path="problems" element={<ErrorBoundary><ProblemBoard /></ErrorBoundary>} />
           <Route path="activity" element={<ErrorBoundary><Activity /></ErrorBoundary>} />
           <Route path="trucks" element={<ErrorBoundary><Trucks /></ErrorBoundary>} />
           <Route path="drivers" element={<ErrorBoundary><Drivers /></ErrorBoundary>} />

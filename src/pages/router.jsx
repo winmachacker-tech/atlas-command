@@ -7,7 +7,6 @@ const Dashboard = () => import("./pages/Dashboard.jsx").then(m => ({ default: m.
 const Loads = () => import("./pages/Loads.jsx").then(m => ({ default: m.default }));
 const InTransit = () => import("./pages/InTransit.jsx").then(m => ({ default: m.default }));
 const Delivered = () => import("./pages/Delivered.jsx").then(m => ({ default: m.default }));
-const ProblemBoard = () => import("./pages/ProblemBoard.jsx").then(m => ({ default: m.default }));
 const Activity = () => import("./pages/Activity.jsx").then(m => ({ default: m.default }));
 const Settings = () => import("./pages/Settings.jsx").then(m => ({ default: m.default }));
 const NotFound = () => import("./pages/NotFound.jsx").then(m => ({ default: m.default }));
@@ -23,7 +22,6 @@ export const router = createBrowserRouter([
       { path: "loads", element: <Loads /> },
       { path: "in-transit", element: <InTransit /> },
       { path: "delivered", element: <Delivered /> },
-      { path: "problems", element: <ProblemBoard /> },
       { path: "activity", element: <Activity /> },
       { path: "settings", element: <Settings /> },
       { path: "*", element: <NotFound /> },
