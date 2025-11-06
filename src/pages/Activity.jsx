@@ -1,142 +1,145 @@
-// src/lib/activityTracker.js
-import { supabase } from "./supabase";
+// src/pages/Activity.jsx
+import { useEffect, useState } from "react";
+import { Clock, AlertTriangle, CheckCircle2, Bug, Eye } from "lucide-react";
+import { supabase } from "../lib/supabase";
 
 /**
- * Get basic device info from user agent
+ * Activity
+ * - Reads recent events from `activity_log` (adjust table/columns to your schema).
+ * - Safe: if table doesn't exist or query fails, shows a friendly message.
+ * - No breaking changes elsewhere; only fixes incorrect import path.
  */
-function getDeviceInfo(userAgent) {
-  const ua = userAgent.toLowerCase();
-  
-  // Detect OS
-  let os = "Unknown";
-  if (ua.includes("windows")) os = "Windows";
-  else if (ua.includes("mac os x")) os = "macOS";
-  else if (ua.includes("linux")) os = "Linux";
-  else if (ua.includes("android")) os = "Android";
-  else if (ua.includes("iphone") || ua.includes("ipad")) os = "iOS";
-  
-  // Detect Browser
-  let browser = "Unknown";
-  if (ua.includes("edg")) browser = "Edge";
-  else if (ua.includes("chrome")) browser = "Chrome";
-  else if (ua.includes("safari") && !ua.includes("chrome")) browser = "Safari";
-  else if (ua.includes("firefox")) browser = "Firefox";
-  
-  return `${browser} on ${os}`;
-}
+export default function Activity() {
+  const [items, setItems] = useState([]);
+  const [busy, setBusy] = useState(true);
+  const [err, setErr] = useState("");
 
-/**
- * Get approximate location from IP (using a free IP geolocation service)
- * This is optional - returns null if it fails
- */
-async function getLocationFromIP(ip) {
-  try {
-    // Using ipapi.co free tier (1000 requests/day)
-    const response = await fetch(`https://ipapi.co/${ip}/json/`);
-    if (!response.ok) return null;
-    
-    const data = await response.json();
-    if (data.city && data.region) {
-      return `${data.city}, ${data.region}`;
-    }
-    return null;
-  } catch (e) {
-    console.warn("Failed to get location:", e);
-    return null;
-  }
-}
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        setBusy(true);
+        // Adjust to your actual table/columns as needed
+        const { data, error } = await supabase
+          .from("activity_log")
+          .select("id,event_type,message,created_at,actor,ref_id,severity")
+          .order("created_at", { ascending: false })
+          .limit(100);
 
-/**
- * Get client IP address
- * Note: In production, you'd get this from your server
- * For now, we'll just use a placeholder
- */
-async function getClientIP() {
-  try {
-    // Using ipify for getting public IP (free service)
-    const response = await fetch("https://api.ipify.org?format=json");
-    const data = await response.json();
-    return data.ip || "Unknown";
-  } catch (e) {
-    console.warn("Failed to get IP:", e);
-    return "Unknown";
-  }
-}
-
-/**
- * Track user activity (login, logout, etc.)
- * 
- * @param {string} activityType - Type of activity (e.g., 'login', 'logout')
- * @param {boolean} success - Whether the activity was successful
- * @param {string} errorMessage - Error message if activity failed
- */
-export async function trackActivity(activityType, success = true, errorMessage = null) {
-  try {
-    // Get current user
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
-      console.warn("No user found for activity tracking");
-      return;
-    }
-
-    // Get device/browser info
-    const userAgent = navigator.userAgent;
-    const deviceInfo = getDeviceInfo(userAgent);
-
-    // Get IP address (optional - can be slow)
-    let ipAddress = "Unknown";
-    let location = null;
-    
-    try {
-      ipAddress = await getClientIP();
-      if (ipAddress && ipAddress !== "Unknown") {
-        location = await getLocationFromIP(ipAddress);
+        if (!alive) return;
+        if (error) {
+          setErr(error.message || "Failed to load activity.");
+          setItems([]);
+        } else {
+          setItems(data || []);
+        }
+      } catch (e) {
+        if (!alive) return;
+        setErr(e.message || "Failed to load activity.");
+      } finally {
+        if (alive) setBusy(false);
       }
-    } catch (e) {
-      console.warn("Failed to get IP/location:", e);
-    }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
-    // Insert activity record
-    const { error: insertError } = await supabase
-      .from("user_activity")
-      .insert({
-        user_id: user.id,
-        activity_type: activityType,
-        ip_address: ipAddress,
-        user_agent: userAgent,
-        device_info: deviceInfo,
-        location: location,
-        success: success,
-        error_message: errorMessage,
-      });
+  return (
+    <div className="p-6 space-y-4">
+      <header className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Activity</h1>
+      </header>
 
-    if (insertError) {
-      console.error("Failed to track activity:", insertError);
-    } else {
-      console.log(`Activity tracked: ${activityType}`);
-    }
-  } catch (e) {
-    console.error("Error in trackActivity:", e);
+      {busy ? (
+        <div className="text-sm opacity-70">Loading recent activity…</div>
+      ) : err ? (
+        <div className="rounded-xl border border-red-300/40 bg-red-50/40 p-4 text-sm">
+          <div className="font-medium mb-1">Couldn’t load activity</div>
+          <div className="opacity-80">{err}</div>
+          <div className="mt-2 opacity-70">
+            Tip: If you haven’t created a log table yet, add one:
+            <pre className="mt-2 text-xs bg-white/60 rounded p-2 overflow-auto">
+{`create table if not exists public.activity_log (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  actor text,
+  event_type text,
+  message text,
+  ref_id text,
+  severity text check (severity in ('INFO','WARN','ERROR')) default 'INFO'
+);`}
+            </pre>
+          </div>
+        </div>
+      ) : items.length === 0 ? (
+        <div className="rounded-xl border p-6 text-sm opacity-80">
+          No activity yet.
+        </div>
+      ) : (
+        <ul className="space-y-3">
+          {items.map((it) => (
+            <li
+              key={it.id}
+              className="rounded-xl border p-4 bg-white/60 dark:bg-white/5 flex items-start gap-3"
+            >
+              <SeverityIcon severity={it.severity} />
+              <div className="flex-1 min-w-0">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="font-medium">{it.event_type || "Event"}</span>
+                  {it.actor && (
+                    <span className="text-xs px-2 py-0.5 rounded-full border">
+                      {it.actor}
+                    </span>
+                  )}
+                  {it.ref_id && (
+                    <span className="text-xs px-2 py-0.5 rounded-full border">
+                      {it.ref_id}
+                    </span>
+                  )}
+                </div>
+                <div className="text-sm mt-1">{it.message || "—"}</div>
+                <div className="text-xs mt-2 flex items-center gap-1 opacity-70">
+                  <Clock className="w-3.5 h-3.5" />
+                  <time dateTime={it.created_at}>
+                    {new Date(it.created_at).toLocaleString()}
+                  </time>
+                </div>
+              </div>
+              <button
+                className="text-xs inline-flex items-center gap-1 px-2 py-1 rounded-lg border hover:bg-black/5 dark:hover:bg-white/10"
+                title="View details"
+              >
+                <Eye className="w-3.5 h-3.5" />
+                Details
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function SeverityIcon({ severity }) {
+  switch (severity) {
+    case "ERROR":
+      return (
+        <div className="mt-0.5">
+          <Bug className="w-5 h-5 text-red-500" />
+        </div>
+      );
+    case "WARN":
+      return (
+        <div className="mt-0.5">
+          <AlertTriangle className="w-5 h-5 text-amber-500" />
+        </div>
+      );
+    default:
+      return (
+        <div className="mt-0.5">
+          <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+        </div>
+      );
   }
-}
-
-/**
- * Track login specifically
- */
-export async function trackLogin() {
-  return trackActivity("login", true);
-}
-
-/**
- * Track logout specifically
- */
-export async function trackLogout() {
-  return trackActivity("logout", true);
-}
-
-/**
- * Track failed login
- */
-export async function trackFailedLogin(errorMessage) {
-  return trackActivity("login", false, errorMessage);
 }

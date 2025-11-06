@@ -1,5 +1,6 @@
 /* src/index.css */
 /* Tailwind layers */
+@import "./styles/dark-bridge.css";
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -270,4 +271,3 @@ html.dark .divide-neutral-200 > :not([hidden]) ~ :not([hidden]),
 html.dark .divide-gray-200 > :not([hidden]) ~ :not([hidden]) {
   border-color: #262b36 !important;
 }
-@import "./styles/dark-bridge.css";
