@@ -17,9 +17,12 @@ import {
   Eye,
   Save,
   MoreVertical,
+  UserCheck,
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import AddLoadModal from "../components/AddLoadModal";
+import AssignDriverModal from "../components/AssignDriverModal";
+import EditLoadModal from "../components/EditLoadModal";
 
 /** MUST match DB enum/check */
 const STATUS_CHOICES = [
@@ -104,6 +107,12 @@ export default function Loads() {
   // Notes workflow
   const [editingNotesLoad, setEditingNotesLoad] = useState(null);
 
+  // Driver assignment
+  const [assigningDriverLoad, setAssigningDriverLoad] = useState(null);
+
+  // Edit load
+  const [editingLoad, setEditingLoad] = useState(null);
+
   const [me, setMe] = useState({ email: "", id: "" });
 
   useEffect(() => {
@@ -121,7 +130,10 @@ export default function Loads() {
       try {
         const { data, error } = await supabase
           .from("loads")
-          .select("*")
+          .select(`
+            *,
+            driver:v_drivers_active!loads_driver_id_fkey(id, first_name, last_name)
+          `)
           .order("created_at", { ascending: false });
         if (error) throw error;
         if (active) setLoads(Array.isArray(data) ? data : []);
@@ -139,7 +151,14 @@ export default function Loads() {
   // Freshen a single row (so modals show latest)
   async function refreshOne(id) {
     try {
-      const { data, error } = await supabase.from("loads").select("*").eq("id", id).single();
+      const { data, error } = await supabase
+        .from("loads")
+        .select(`
+          *,
+          driver:v_drivers_active!loads_driver_id_fkey(id, first_name, last_name)
+        `)
+        .eq("id", id)
+        .single();
       if (error) throw error;
       setLoads((prev) => prev.map((l) => (l.id === id ? data : l)));
       return data;
@@ -284,6 +303,10 @@ export default function Loads() {
     }
   }
 
+  // Driver assignment
+  function openAssignDriver(load) { setAssigningDriverLoad(load); }
+  function closeAssignDriver() { setAssigningDriverLoad(null); }
+
   /* ------------------------------ Render ------------------------------ */
   return (
     <div className="p-6">
@@ -376,8 +399,12 @@ export default function Loads() {
                 <tr className="text-left">
                   <Th>Load #</Th>
                   <Th>Shipper</Th>
+                  <Th>Driver</Th>
                   <Th>Origin</Th>
                   <Th>Destination</Th>
+                  <Th>Pickup</Th>
+                  <Th>Delivery</Th>
+                  <Th>Rate</Th>
                   <Th>Status</Th>
                   <Th>Problem</Th>
                   <Th>Updated</Th>
@@ -389,8 +416,47 @@ export default function Loads() {
                   <tr key={l.id} className="border-t border-white/10 hover:bg-white/5">
                     <Td>{l.reference || "—"}</Td>
                     <Td>{l.shipper || "—"}</Td>
+                    <Td>
+                      {l.driver ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 text-xs text-sky-300">
+                          <Ico as={UserCheck} />
+                          {l.driver.last_name}, {l.driver.first_name}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-white/40">—</span>
+                      )}
+                    </Td>
                     <Td>{l.origin || "—"}</Td>
                     <Td>{l.destination || "—"}</Td>
+                    <Td>
+                      {l.pickup_date ? (
+                        <div className="text-xs">
+                          <div className="font-medium">{new Date(l.pickup_date).toLocaleDateString()}</div>
+                          {l.pickup_time && <div className="text-white/60">{l.pickup_time}</div>}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-white/40">—</span>
+                      )}
+                    </Td>
+                    <Td>
+                      {l.delivery_date ? (
+                        <div className="text-xs">
+                          <div className="font-medium">{new Date(l.delivery_date).toLocaleDateString()}</div>
+                          {l.delivery_time && <div className="text-white/60">{l.delivery_time}</div>}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-white/40">—</span>
+                      )}
+                    </Td>
+                    <Td>
+                      {l.rate ? (
+                        <span className="font-mono text-xs font-medium text-emerald-300">
+                          ${parseFloat(l.rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-white/40">—</span>
+                      )}
+                    </Td>
                     <Td><StatusBadge value={l.status} /></Td>
                     <Td>
                       {l.status === "PROBLEM" ? (
@@ -417,6 +483,19 @@ export default function Loads() {
                             <Ico as={CheckCircle2} />
                             <span>Resolve</span>
                           </button>
+                        ) : l.status === "IN_TRANSIT" ? (
+                          <button
+                            onClick={() => updateStatus(l.id, "DELIVERED")}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                          >
+                            <Ico as={CheckCircle2} />
+                            <span>Delivered</span>
+                          </button>
+                        ) : l.status === "DELIVERED" ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 text-xs text-emerald-400">
+                            <Ico as={CheckCircle2} />
+                            <span>Complete</span>
+                          </span>
                         ) : (
                           <button
                             onClick={() => setReportingLoad(l)}
@@ -426,6 +505,14 @@ export default function Loads() {
                             <span>Report</span>
                           </button>
                         )}
+
+                        {/* Driver - icon button */}
+                        <IconButton
+                          title={l.driver_id ? "Change Driver" : "Assign Driver"}
+                          onClick={() => openAssignDriver(l)}
+                        >
+                          <Ico as={UserCheck} />
+                        </IconButton>
 
                         {/* Notes - icon button */}
                         <IconButton
@@ -441,6 +528,7 @@ export default function Loads() {
                           onViewProblem={() => openViewProblem(l.id)}
                           onSetTransit={() => updateStatus(l.id, "IN_TRANSIT")}
                           onDelete={() => deleteLoad(l.id)}
+                          onEditLoad={() => setEditingLoad(l)}
                         />
                       </div>
                     </Td>
@@ -452,11 +540,35 @@ export default function Loads() {
         )}
       </div>
 
-      {/* Add Load modal (existing) */}
+      {/* Add Load modal */}
       {isAddOpen && (
         <AddLoadModal
           onClose={() => setIsAddOpen(false)}
           onAdded={(row) => setLoads((prev) => [row, ...prev])}
+        />
+      )}
+
+      {/* Edit Load modal */}
+      {!!editingLoad && (
+        <EditLoadModal
+          load={editingLoad}
+          onClose={() => setEditingLoad(null)}
+          onUpdated={(updatedLoad) => {
+            setLoads((prev) => prev.map((l) => (l.id === updatedLoad.id ? updatedLoad : l)));
+            setEditingLoad(null);
+          }}
+        />
+      )}
+
+      {/* Assign Driver modal */}
+      {!!assigningDriverLoad && (
+        <AssignDriverModal
+          load={assigningDriverLoad}
+          onClose={() => setAssigningDriverLoad(null)}
+          onAssigned={(updatedLoad) => {
+            setLoads((prev) => prev.map((l) => (l.id === updatedLoad.id ? updatedLoad : l)));
+            setAssigningDriverLoad(null);
+          }}
         />
       )}
 
@@ -585,7 +697,7 @@ function PriorityBadge({ value }) {
 }
 
 /* --------------------------- More Actions Dropdown --------------------------- */
-function MoreActionsMenu({ load, onViewProblem, onSetTransit, onDelete }) {
+function MoreActionsMenu({ load, onViewProblem, onSetTransit, onDelete, onEditLoad }) {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
@@ -607,6 +719,16 @@ function MoreActionsMenu({ load, onViewProblem, onSetTransit, onDelete }) {
           
           {/* Dropdown menu */}
           <div className="absolute right-0 top-full z-20 mt-1 min-w-[180px] rounded-lg border border-white/10 bg-[#0B0B0F] py-1 shadow-xl">
+            <button
+              onClick={() => {
+                onEditLoad();
+                setIsOpen(false);
+              }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-white/80 hover:bg-white/5"
+            >
+              <Ico as={Pencil} />
+              Edit Load
+            </button>
             {load.status === "PROBLEM" && (
               <button
                 onClick={() => {
@@ -619,16 +741,18 @@ function MoreActionsMenu({ load, onViewProblem, onSetTransit, onDelete }) {
                 View Problem Details
               </button>
             )}
-            <button
-              onClick={() => {
-                onSetTransit();
-                setIsOpen(false);
-              }}
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-white/80 hover:bg-white/5"
-            >
-              <Ico as={Pencil} />
-              Set In Transit
-            </button>
+            {load.status !== "IN_TRANSIT" && load.status !== "DELIVERED" && (
+              <button
+                onClick={() => {
+                  onSetTransit();
+                  setIsOpen(false);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-white/80 hover:bg-white/5"
+              >
+                <Ico as={Save} />
+                Mark In Transit
+              </button>
+            )}
             <button
               onClick={() => {
                 onDelete();

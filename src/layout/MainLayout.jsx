@@ -1,5 +1,5 @@
 // src/layout/MainLayout.jsx
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Home,
@@ -110,6 +110,119 @@ function SideGroup({ id, title, icon: Icon, children, defaultOpen }) {
   );
 }
 
+/* ------------------------- Avatar dropdown (NEW) ------------------------ */
+function AvatarMenu({ onSignOut }) {
+  const nav = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState("");
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      if (!active) return;
+      const user = data?.user ?? null;
+
+      // Prefer auth user_metadata.avatar_url; silently fallback
+      const metaUrl =
+        user?.user_metadata?.avatar_url ||
+        user?.user_metadata?.avatar ||
+        "";
+
+      setAvatarUrl(metaUrl || "");
+      setEmail(user?.email || "");
+    })();
+
+    function handleDoc(e) {
+      if (!wrapRef.current) return;
+      if (!wrapRef.current.contains(e.target)) setOpen(false);
+    }
+    function handleEsc(e) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", handleDoc);
+    document.addEventListener("keydown", handleEsc);
+    return () => {
+      active = false;
+      document.removeEventListener("mousedown", handleDoc);
+      document.removeEventListener("keydown", handleEsc);
+    };
+  }, []);
+
+  const initials = email
+    ? email.replace(/@.*/, "").slice(0, 2).toUpperCase()
+    : "U";
+
+  return (
+    <div className="relative" ref={wrapRef}>
+      <button
+        onClick={() => setOpen((s) => !s)}
+        className="flex items-center gap-2 rounded-xl px-2 py-1.5 hover:bg-[var(--bg-hover)] transition"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        {/* Avatar circle */}
+        {avatarUrl ? (
+          <img
+            src={avatarUrl}
+            alt="Profile"
+            className="h-8 w-8 rounded-full object-cover border border-[var(--border-subtle)]"
+            referrerPolicy="no-referrer"
+          />
+        ) : (
+          <div className="h-8 w-8 rounded-full grid place-items-center text-xs font-semibold bg-[var(--bg-hover)] border border-[var(--border-subtle)]">
+            {initials}
+          </div>
+        )}
+        <ChevronDown className={cx("h-4 w-4", open && "rotate-180")} />
+      </button>
+
+      {/* Dropdown */}
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 mt-2 w-56 rounded-xl border border-[var(--border)] bg-[var(--bg-panel)] shadow-lg overflow-hidden z-40"
+        >
+          <div className="px-3 py-2 text-xs text-[var(--text-muted)]">
+            {email || "Signed in"}
+          </div>
+          <button
+            onClick={() => {
+              setOpen(false);
+              nav("/profile");
+            }}
+            className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] transition"
+            role="menuitem"
+          >
+            Profile &amp; Account
+          </button>
+          <button
+            onClick={() => {
+              setOpen(false);
+              nav("/settings/appearance");
+            }}
+            className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] transition"
+            role="menuitem"
+          >
+            Appearance
+          </button>
+          <div className="my-1 h-px bg-[var(--border-subtle)]" />
+          <button
+            onClick={onSignOut}
+            className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] transition flex items-center gap-2 text-red-400"
+            role="menuitem"
+          >
+            <LogOut className="h-4 w-4" />
+            Sign out
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ------------------------------- Layout -------------------------------- */
 export default function MainLayout() {
   const navigate = useNavigate();
@@ -127,7 +240,7 @@ export default function MainLayout() {
     if (
       [
         "/settings",
-        "/settings/profile",
+        "/profile",
         "/settings/appearance",
         "/settings/notifications",
         "/settings/integrations",
@@ -223,9 +336,10 @@ export default function MainLayout() {
                 defaultOpen={activeGroupByPath === "admin"}
               >
                 {/* Settings items moved here */}
-                <SideLink to="/settings/profile" icon={UserRound}>
+                <SideLink to="/profile" icon={UserRound}>
                   Profile &amp; Account
                 </SideLink>
+
                 <SideLink to="/settings/appearance" icon={Palette}>
                   Appearance
                 </SideLink>
@@ -280,6 +394,13 @@ export default function MainLayout() {
               <div className="flex items-center gap-2">
                 <ThemeMenu />
               </div>
+            </div>
+          </div>
+
+          {/* Desktop top bar (NEW: avatar only, minimal) */}
+          <div className="hidden md:block sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg-panel)]/80 backdrop-blur">
+            <div className="flex items-center justify-end px-6 py-3">
+              <AvatarMenu onSignOut={signOut} />
             </div>
           </div>
 

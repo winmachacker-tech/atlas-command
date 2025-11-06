@@ -5,6 +5,7 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import "./index.css";
 
+
 /* Shell / providers / guards */
 import MainLayout from "./layout/MainLayout.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
@@ -30,11 +31,28 @@ const AuthCallback   = lazy(() => import("./pages/AuthCallback.jsx"));
 const SetPassword    = lazy(() => import("./pages/SetPassword.jsx"));
 const Billing        = lazy(() => import("./pages/Billing.jsx"));
 const InvoiceDraft   = lazy(() => import("./pages/InvoiceDraft.jsx"));
-const TeamManagement = lazy(() => import("./pages/TeamManagement.jsx")); // ✅ ADDED
+const TeamManagement = lazy(() => import("./pages/TeamManagement.jsx"));
+const Profile = lazy(() => import("./pages/Profile.jsx"));
 
 /* Settings nested layout */
 import SettingsLayout from "./components/settings/SettingsLayout";
-const ProfileSettings = lazy(() => import("./pages/settings/ProfileSettings"));
+
+/**
+ * NOTE:
+ * We intentionally avoid importing "./pages/settings/ProfileSettings"
+ * (the file was removed during cleanup). This inline stub preserves the
+ * existing route structure without breaking builds.
+ */
+const ProfileSettings = function ProfileSettingsStub() {
+  return (
+    <div className="p-6">
+      <h1 className="text-xl font-semibold">Settings</h1>
+      <p className="text-sm opacity-70 mt-1">
+        Settings subpages were removed. This is a placeholder to keep routes stable.
+      </p>
+    </div>
+  );
+};
 
 /* Fallback */
 const Loader = () => (
@@ -57,6 +75,7 @@ function AppRoutes() {
         <Route path="/signup" element={<Signup />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/set-password" element={<SetPassword />} />
+        <Route path="/profile" element={<AuthGuard><Profile /></AuthGuard>} />
 
         {/* PROTECTED */}
         <Route
@@ -87,8 +106,8 @@ function AppRoutes() {
           <Route path="trucks" element={<ErrorBoundary><Trucks /></ErrorBoundary>} />
           <Route path="drivers" element={<ErrorBoundary><Drivers /></ErrorBoundary>} />
           <Route path="users" element={<ErrorBoundary><Users /></ErrorBoundary>} />
-          
-          {/* ✅ TEAM MANAGEMENT ROUTE - ADDED */}
+
+          {/* ✅ TEAM MANAGEMENT */}
           <Route path="teammanagement" element={<ErrorBoundary><TeamManagement /></ErrorBoundary>} />
 
           {/* Settings (nested) */}

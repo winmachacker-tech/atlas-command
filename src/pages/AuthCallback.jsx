@@ -9,6 +9,7 @@ import { supabase } from "../lib/supabase";
  *  - Keep your logic, add support for ?redirect_to as alias of ?next
  *  - Handle ?error_description from Supabase gracefully
  *  - Do NOT remap "signup" -> "invite" (pass-through to verifyOtp)
+ *  - Fixed to use "profiles" table instead of "users"
  */
 export default function AuthCallback() {
   const navigate = useNavigate();
@@ -120,22 +121,22 @@ export default function AuthCallback() {
         try {
           const profile = {
             id: user.id,
-            email: user.email,
             full_name: user.user_metadata?.full_name ?? null,
-            // Comment out fields your schema doesn't have.
+            phone: user.user_metadata?.phone ?? null,
+            role: user.user_metadata?.role ?? "USER",
             is_admin: false,
             updated_at: new Date().toISOString(),
           };
 
           const { error: upsertErr } = await supabase
-            .from("users")
+            .from("profiles") // ✅ Changed from "users" to "profiles"
             .upsert(profile, { onConflict: "id" });
 
           if (upsertErr) {
-            console.warn("[AuthCallback] users upsert warning (non-fatal)", upsertErr);
+            console.warn("[AuthCallback] profiles upsert warning (non-fatal)", upsertErr);
           }
         } catch (soft) {
-          console.warn("[AuthCallback] users upsert skipped (non-fatal)", soft);
+          console.warn("[AuthCallback] profiles upsert skipped (non-fatal)", soft);
         }
 
         // Clean the URL (remove #tokens & code) before navigating

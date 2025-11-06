@@ -123,7 +123,7 @@ serve(async (req) => {
     // 2. Verify caller is admin
     console.log("👮 Checking admin status...");
     const { data: me, error: meErr } = await service
-      .from("users")
+      .from("profiles")  // ✅ CHANGED from "users" to "profiles"
       .select("is_admin")
       .eq("id", callerId)
       .maybeSingle();

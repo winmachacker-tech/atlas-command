@@ -11,3 +11,5 @@ dist/
 .backup*
 *.tmp
 *.bak
+build/
+.vercel/output/

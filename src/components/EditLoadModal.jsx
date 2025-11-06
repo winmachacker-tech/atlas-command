@@ -1,6 +1,6 @@
 // src/components/AddLoadModal.jsx
 import { useState, useEffect } from "react";
-import { X, Loader2, Plus, ChevronDown } from "lucide-react";
+import { X, Loader2, Plus, ChevronDown, Pencil, Save } from "lucide-react";
 import { supabase } from "../lib/supabase";
 
 function cx(...a) {
@@ -29,43 +29,43 @@ function IconButton({ title, onClick, children }) {
   );
 }
 
-export default function AddLoadModal({ onClose, onAdded }) {
+export default function EditLoadModal({ load, onClose, onUpdated }) {
   const [formData, setFormData] = useState({
-    reference: "",
-    shipper: "",
-    origin: "",
-    destination: "",
-    status: "AVAILABLE",
-    driver_id: "",
-    rate: "",
-    pickup_date: "",
-    pickup_time: "",
-    delivery_date: "",
-    delivery_time: "",
+    reference: load?.reference || "",
+    shipper: load?.shipper || "",
+    origin: load?.origin || "",
+    destination: load?.destination || "",
+    status: load?.status || "AVAILABLE",
+    driver_id: load?.driver_id || "",
+    rate: load?.rate || "",
+    pickup_date: load?.pickup_date || "",
+    pickup_time: load?.pickup_time || "",
+    delivery_date: load?.delivery_date || "",
+    delivery_time: load?.delivery_time || "",
     // Contact info
-    shipper_contact_name: "",
-    shipper_contact_phone: "",
-    shipper_contact_email: "",
-    receiver_contact_name: "",
-    receiver_contact_phone: "",
-    receiver_contact_email: "",
+    shipper_contact_name: load?.shipper_contact_name || "",
+    shipper_contact_phone: load?.shipper_contact_phone || "",
+    shipper_contact_email: load?.shipper_contact_email || "",
+    receiver_contact_name: load?.receiver_contact_name || "",
+    receiver_contact_phone: load?.receiver_contact_phone || "",
+    receiver_contact_email: load?.receiver_contact_email || "",
     // Reference numbers
-    bol_number: "",
-    po_number: "",
-    customer_reference: "",
+    bol_number: load?.bol_number || "",
+    po_number: load?.po_number || "",
+    customer_reference: load?.customer_reference || "",
     // Load details
-    commodity: "",
-    weight: "",
-    pieces: "",
-    equipment_type: "DRY_VAN",
-    temperature: "",
-    special_instructions: "",
+    commodity: load?.commodity || "",
+    weight: load?.weight || "",
+    pieces: load?.pieces || "",
+    equipment_type: load?.equipment_type || "DRY_VAN",
+    temperature: load?.temperature || "",
+    special_instructions: load?.special_instructions || "",
     // Financial & distance
-    miles: "",
-    rate_per_mile: "",
-    detention_charges: "",
-    accessorial_charges: "",
-    broker_name: "",
+    miles: load?.miles || "",
+    rate_per_mile: load?.rate_per_mile || "",
+    detention_charges: load?.detention_charges || "",
+    accessorial_charges: load?.accessorial_charges || "",
+    broker_name: load?.broker_name || "",
   });
   const [calculatingMiles, setCalculatingMiles] = useState(false);
   const [drivers, setDrivers] = useState([]);
@@ -187,58 +187,59 @@ export default function AddLoadModal({ onClose, onAdded }) {
     try {
       const { data, error } = await supabase
         .from("loads")
-        .insert([
-          {
-            reference: formData.reference.trim(),
-            shipper: formData.shipper.trim() || null,
-            origin: formData.origin.trim() || null,
-            destination: formData.destination.trim() || null,
-            status: formData.status,
-            driver_id: formData.driver_id || null,
-            rate: formData.rate ? parseFloat(formData.rate) : null,
-            pickup_date: formData.pickup_date || null,
-            pickup_time: formData.pickup_time || null,
-            delivery_date: formData.delivery_date || null,
-            delivery_time: formData.delivery_time || null,
-            // Contact info
-            shipper_contact_name: formData.shipper_contact_name.trim() || null,
-            shipper_contact_phone: formData.shipper_contact_phone.trim() || null,
-            shipper_contact_email: formData.shipper_contact_email.trim() || null,
-            receiver_contact_name: formData.receiver_contact_name.trim() || null,
-            receiver_contact_phone: formData.receiver_contact_phone.trim() || null,
-            receiver_contact_email: formData.receiver_contact_email.trim() || null,
-            // Reference numbers
-            bol_number: formData.bol_number.trim() || null,
-            po_number: formData.po_number.trim() || null,
-            customer_reference: formData.customer_reference.trim() || null,
-            // Load details
-            commodity: formData.commodity.trim() || null,
-            weight: formData.weight ? parseFloat(formData.weight) : null,
-            pieces: formData.pieces ? parseInt(formData.pieces) : null,
-            equipment_type: formData.equipment_type || null,
-            temperature: formData.temperature.trim() || null,
-            special_instructions: formData.special_instructions.trim() || null,
-            // Financial & distance
-            miles: formData.miles ? parseInt(formData.miles) : null,
-            rate_per_mile: formData.rate_per_mile ? parseFloat(formData.rate_per_mile) : null,
-            detention_charges: formData.detention_charges ? parseFloat(formData.detention_charges) : null,
-            accessorial_charges: formData.accessorial_charges ? parseFloat(formData.accessorial_charges) : null,
-            broker_name: formData.broker_name.trim() || null,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          },
-        ])
-        .select()
+        .update({
+          reference: formData.reference.trim(),
+          shipper: formData.shipper.trim() || null,
+          origin: formData.origin.trim() || null,
+          destination: formData.destination.trim() || null,
+          status: formData.status,
+          driver_id: formData.driver_id || null,
+          rate: formData.rate ? parseFloat(formData.rate) : null,
+          pickup_date: formData.pickup_date || null,
+          pickup_time: formData.pickup_time || null,
+          delivery_date: formData.delivery_date || null,
+          delivery_time: formData.delivery_time || null,
+          // Contact info
+          shipper_contact_name: formData.shipper_contact_name.trim() || null,
+          shipper_contact_phone: formData.shipper_contact_phone.trim() || null,
+          shipper_contact_email: formData.shipper_contact_email.trim() || null,
+          receiver_contact_name: formData.receiver_contact_name.trim() || null,
+          receiver_contact_phone: formData.receiver_contact_phone.trim() || null,
+          receiver_contact_email: formData.receiver_contact_email.trim() || null,
+          // Reference numbers
+          bol_number: formData.bol_number.trim() || null,
+          po_number: formData.po_number.trim() || null,
+          customer_reference: formData.customer_reference.trim() || null,
+          // Load details
+          commodity: formData.commodity.trim() || null,
+          weight: formData.weight ? parseFloat(formData.weight) : null,
+          pieces: formData.pieces ? parseInt(formData.pieces) : null,
+          equipment_type: formData.equipment_type || null,
+          temperature: formData.temperature.trim() || null,
+          special_instructions: formData.special_instructions.trim() || null,
+          // Financial & distance
+          miles: formData.miles ? parseInt(formData.miles) : null,
+          rate_per_mile: formData.rate_per_mile ? parseFloat(formData.rate_per_mile) : null,
+          detention_charges: formData.detention_charges ? parseFloat(formData.detention_charges) : null,
+          accessorial_charges: formData.accessorial_charges ? parseFloat(formData.accessorial_charges) : null,
+          broker_name: formData.broker_name.trim() || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", load.id)
+        .select(`
+          *,
+          driver:v_drivers_active!loads_driver_id_fkey(id, first_name, last_name)
+        `)
         .single();
 
       if (error) throw error;
 
-      // Call parent callback with new load
-      onAdded(data);
+      // Call parent callback with updated load
+      onUpdated(data);
       onClose();
     } catch (e) {
-      console.error("[AddLoadModal] error:", e);
-      setError(e?.message || "Failed to create load");
+      console.error("[EditLoadModal] error:", e);
+      setError(e?.message || "Failed to update load");
     } finally {
       setSaving(false);
     }
@@ -251,9 +252,9 @@ export default function AddLoadModal({ onClose, onAdded }) {
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/10">
-              <Ico as={Plus} className="text-amber-400" />
+              <Ico as={Pencil} className="text-amber-400" />
             </div>
-            <h3 className="text-lg font-semibold">Add New Load</h3>
+            <h3 className="text-lg font-semibold">Edit Load</h3>
           </div>
           <IconButton title="Close" onClick={onClose}>
             <Ico as={X} />
@@ -734,12 +735,12 @@ export default function AddLoadModal({ onClose, onAdded }) {
               {saving ? (
                 <>
                   <Ico as={Loader2} className="animate-spin" />
-                  Creating...
+                  Updating...
                 </>
               ) : (
                 <>
-                  <Ico as={Plus} />
-                  Add Load
+                  <Ico as={Save} className="text-amber-400" />
+                  Update Load
                 </>
               )}
             </button>

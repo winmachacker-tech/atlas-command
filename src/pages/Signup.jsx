@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Link } from "react-router-dom";
+import { ArrowLeft } from "lucide-react";
 
 export default function Signup() {
   const [fullName, setFullName] = useState("");
@@ -26,46 +27,92 @@ export default function Signup() {
 
   async function onSignup(e) {
     e.preventDefault();
-    if (busy) return;
+    console.log("🚀 Signup form submitted"); // DEBUG
+    
+    if (busy) {
+      console.log("⏳ Already busy, ignoring");
+      return;
+    }
+    
     setErr("");
     setOkMsg("");
 
-    if (!email.trim()) return setErr("Email is required.");
-    if (!password) return setErr("Password is required.");
-    if (password.length < 8) return setErr("Use at least 8 characters.");
-    if (password !== confirm) return setErr("Passwords do not match.");
-    if (!agree) return setErr("Please accept the Terms to continue.");
+    // Validation
+    if (!email.trim()) {
+      console.log("❌ Email missing");
+      return setErr("Email is required.");
+    }
+    if (!password) {
+      console.log("❌ Password missing");
+      return setErr("Password is required.");
+    }
+    if (password.length < 8) {
+      console.log("❌ Password too short");
+      return setErr("Use at least 8 characters.");
+    }
+    if (password !== confirm) {
+      console.log("❌ Passwords don't match");
+      return setErr("Passwords do not match.");
+    }
+    if (!agree) {
+      console.log("❌ Terms not accepted");
+      return setErr("Please accept the Terms to continue.");
+    }
 
     try {
       setBusy(true);
+      console.log("📧 Calling supabase.auth.signUp with:", email);
+      
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password,
         options: {
           data: { full_name: fullName || null },
-          // If you use a custom redirect, uncomment below and set in Supabase Auth:
-          // emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
         },
       });
-      if (error) throw error;
 
-      if (data?.user && !data.user.confirmed_at) {
-        setOkMsg(
-          "Account created. Check your email and click the verification link to finish signing up."
-        );
-      } else {
-        setOkMsg("Account created.");
+      console.log("📊 Signup response:", { data, error });
+
+      if (error) {
+        console.error("❌ Signup error:", error);
+        throw error;
+      }
+
+      if (data?.user) {
+        console.log("✅ User created:", data.user.id);
+        
+        if (!data.user.confirmed_at) {
+          console.log("📨 Email confirmation required");
+          setOkMsg(
+            "Account created! Check your email and click the verification link to finish signing up."
+          );
+        } else {
+          console.log("✅ Account confirmed immediately");
+          setOkMsg("Account created successfully!");
+        }
       }
     } catch (e2) {
+      console.error("💥 Signup exception:", e2);
       setErr(e2?.message || "Sign up failed");
     } finally {
       setBusy(false);
+      console.log("🏁 Signup process complete");
     }
   }
 
   return (
     <div className="min-h-screen grid place-items-center p-6">
       <div className="w-full max-w-md rounded-2xl border border-white/10 bg-black/40 backdrop-blur-md p-6 shadow-xl text-[var(--text-base,#E5E7EB)]">
+        {/* Back button */}
+        <Link
+          to="/login"
+          className="inline-flex items-center gap-2 text-sm text-white/60 hover:text-white mb-4 transition"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to login
+        </Link>
+
         <div className="mb-6 text-center">
           <h1 className="text-3xl font-semibold">Create your account</h1>
           <p className="mt-1 text-sm text-white/60">Join Atlas Command</p>
@@ -185,8 +232,9 @@ export default function Signup() {
           </label>
 
           <button
+            type="submit"
             disabled={busy}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 font-medium text-white disabled:opacity-60"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition"
           >
             {busy && (
               <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/50 border-t-transparent" />
