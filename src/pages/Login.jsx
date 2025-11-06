@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { trackLogin, trackFailedLogin } from "../lib/activityTracker"; // ✅ NEW
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -19,8 +20,15 @@ export default function Login() {
         password,
       });
       if (error) throw error;
+      
+      // ✅ Track successful login
+      trackLogin().catch(err => console.error("Failed to track login:", err));
+      
       nav(from, { replace: true });
     } catch (err) {
+      // ✅ Track failed login
+      trackFailedLogin(err.message).catch(e => console.error("Failed to track failed login:", e));
+      
       alert(err.message || "Login failed");
     } finally {
       setBusy(false);

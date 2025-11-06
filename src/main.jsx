@@ -32,7 +32,11 @@ const SetPassword    = lazy(() => import("./pages/SetPassword.jsx"));
 const Billing        = lazy(() => import("./pages/Billing.jsx"));
 const InvoiceDraft   = lazy(() => import("./pages/InvoiceDraft.jsx"));
 const TeamManagement = lazy(() => import("./pages/TeamManagement.jsx"));
-const Profile = lazy(() => import("./pages/Profile.jsx"));
+const Profile        = lazy(() => import("./pages/Profile.jsx"));
+const Appearance     = lazy(() => import("./pages/Appearance.jsx"));
+const Integrations   = lazy(() => import("./pages/Integrations.jsx"));
+const Security       = lazy(() => import("./pages/Security.jsx")); // ✅ NEW
+const Notifications = lazy(() => import("./pages/Notifications.jsx").catch(() => ({ default: () => <div className="p-6">Notifications</div> })));
 
 /* Settings nested layout */
 import SettingsLayout from "./components/settings/SettingsLayout";
@@ -76,7 +80,7 @@ function AppRoutes() {
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/set-password" element={<SetPassword />} />
         <Route path="/profile" element={<AuthGuard><Profile /></AuthGuard>} />
-
+        <Route path="settings/notifications" element={<Notifications />} />
         {/* PROTECTED */}
         <Route
           path="/"
@@ -109,6 +113,15 @@ function AppRoutes() {
 
           {/* ✅ TEAM MANAGEMENT */}
           <Route path="teammanagement" element={<ErrorBoundary><TeamManagement /></ErrorBoundary>} />
+
+          {/* ✅ APPEARANCE */}
+          <Route path="settings/appearance" element={<ErrorBoundary><Appearance /></ErrorBoundary>} />
+
+          {/* ✅ INTEGRATIONS */}
+          <Route path="settings/integrations" element={<ErrorBoundary><Integrations /></ErrorBoundary>} />
+
+          {/* ✅ SECURITY - NEW ROUTE */}
+          <Route path="settings/security" element={<ErrorBoundary><Security /></ErrorBoundary>} />
 
           {/* Settings (nested) */}
           <Route

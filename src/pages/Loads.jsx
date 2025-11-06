@@ -18,11 +18,13 @@ import {
   Save,
   MoreVertical,
   UserCheck,
+  FileText,            // 👈 NEW: for Documents button
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import AddLoadModal from "../components/AddLoadModal";
 import AssignDriverModal from "../components/AssignDriverModal";
 import EditLoadModal from "../components/EditLoadModal";
+import LoadDocuments from "../components/LoadDocuments"; // ✅ keep a single import
 
 /** MUST match DB enum/check */
 const STATUS_CHOICES = [
@@ -112,6 +114,9 @@ export default function Loads() {
 
   // Edit load
   const [editingLoad, setEditingLoad] = useState(null);
+
+  // Documents workflow 👇
+  const [docsLoad, setDocsLoad] = useState(null);
 
   const [me, setMe] = useState({ email: "", id: "" });
 
@@ -522,6 +527,14 @@ export default function Loads() {
                           <Ico as={StickyNote} />
                         </IconButton>
 
+                        {/* Documents - icon button 👇 */}
+                        <IconButton
+                          title="Documents"
+                          onClick={() => setDocsLoad(l)}
+                        >
+                          <Ico as={FileText} />
+                        </IconButton>
+
                         {/* More actions - dropdown menu */}
                         <MoreActionsMenu
                           load={l}
@@ -633,6 +646,14 @@ export default function Loads() {
             await saveNotes(editingNotesLoad.id, text);
             setEditingNotesLoad(null);
           }}
+        />
+      )}
+
+      {/* Documents modal 👇 */}
+      {!!docsLoad && (
+        <DocumentsModal
+          load={docsLoad}
+          onClose={() => setDocsLoad(null)}
         />
       )}
 
@@ -1049,6 +1070,32 @@ function NotesModal({ load, onClose, onSave }) {
             {saving ? <Ico as={Loader2} className="animate-spin" /> : <Ico as={Save} />}
             Save Notes
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------- Documents Modal --------------------------- */
+function DocumentsModal({ load, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
+      <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[var(--bg-base,#0B0B0F)] p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-white/10">
+              <Ico as={FileText} className="text-white/80" />
+            </div>
+            <h3 className="text-base font-semibold">
+              Documents — <span className="font-normal opacity-80">{load?.reference || load?.id}</span>
+            </h3>
+          </div>
+          <IconButton title="Close" onClick={onClose}><Ico as={X} /></IconButton>
+        </div>
+
+        {/* LoadDocuments embedded */}
+        <div className="mt-2">
+          <LoadDocuments loadId={load?.id} />
         </div>
       </div>
     </div>

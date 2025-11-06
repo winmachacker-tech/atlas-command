@@ -19,9 +19,11 @@ import {
   Plug,
   Shield,
   CreditCard,
+  RefreshCw,
 } from "lucide-react";
 import ThemeMenu from "../components/ThemeMenu.jsx";
 import { supabase } from "../lib/supabase";
+import { trackLogout } from "../lib/activityTracker"; // ✅ NEW
 
 /* -------------------------- tiny class joiner -------------------------- */
 function cx(...a) {
@@ -125,7 +127,6 @@ function AvatarMenu({ onSignOut }) {
       if (!active) return;
       const user = data?.user ?? null;
 
-      // Prefer auth user_metadata.avatar_url; silently fallback
       const metaUrl =
         user?.user_metadata?.avatar_url ||
         user?.user_metadata?.avatar ||
@@ -163,7 +164,6 @@ function AvatarMenu({ onSignOut }) {
         aria-haspopup="menu"
         aria-expanded={open}
       >
-        {/* Avatar circle */}
         {avatarUrl ? (
           <img
             src={avatarUrl}
@@ -179,7 +179,6 @@ function AvatarMenu({ onSignOut }) {
         <ChevronDown className={cx("h-4 w-4", open && "rotate-180")} />
       </button>
 
-      {/* Dropdown */}
       {open && (
         <div
           role="menu"
@@ -217,6 +216,191 @@ function AvatarMenu({ onSignOut }) {
             <LogOut className="h-4 w-4" />
             Sign out
           </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* --------------------- Notification Bell (SOLID dropdown) --------------------- */
+function NotificationBell() {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  const [userId, setUserId] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const wrapRef = useRef(null);
+  const nav = useNavigate();
+
+  async function loadLatest(uid) {
+    setLoading(true);
+    const { data: rows } = await supabase
+      .from("notifications")
+      .select("*")
+      .eq("user_id", uid)
+      .order("created_at", { ascending: false })
+      .limit(10);
+    setItems(rows || []);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      const uid = data?.user?.id || null;
+      if (!mounted || !uid) return;
+      setUserId(uid);
+      await loadLatest(uid);
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+    const channel = supabase
+      .channel("realtime:notifications")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` },
+        (payload) => setItems((prev) => [payload.new, ...prev].slice(0, 10))
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [userId]);
+
+  useEffect(() => {
+    function onDoc(e) {
+      if (!wrapRef.current) return;
+      if (!wrapRef.current.contains(e.target)) setOpen(false);
+    }
+    function onEsc(e) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, []);
+
+  const unread = items.filter((i) => !i.read).length;
+
+  async function markAllRead() {
+    if (!userId) return;
+    const ids = items.filter((i) => !i.read).map((i) => i.id);
+    if (!ids.length) return;
+    await supabase.from("notifications").update({ read: true }).in("id", ids).eq("user_id", userId);
+    setItems((prev) => prev.map((i) => ({ ...i, read: true })));
+  }
+
+  async function handleItemClick(it) {
+    if (userId && !it.read) {
+      await supabase.from("notifications").update({ read: true }).eq("id", it.id).eq("user_id", userId);
+      setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, read: true } : x)));
+    }
+    if (it.link) nav(it.link);
+    setOpen(false);
+  }
+
+  return (
+    <div className="relative" ref={wrapRef}>
+      <button
+        onClick={() => setOpen((s) => !s)}
+        className="relative rounded-xl p-2 hover:bg-[var(--bg-hover)] transition"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Notifications"
+      >
+        <Bell className="h-5 w-5" />
+        {unread > 0 && (
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-black text-[10px] grid place-items-center">
+            {unread > 99 ? "99+" : unread}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div
+          className={cx(
+            "absolute right-0 mt-2 w-[360px] max-w-[90vw] rounded-xl z-40 overflow-hidden",
+            // SOLID panel (no transparency) + stronger shadow + subtle ring
+            "bg-[var(--bg-panel)] border border-[var(--border)] shadow-2xl ring-1 ring-black/10"
+          )}
+        >
+          <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border-subtle)]">
+            <span className="text-sm font-medium">Notifications</span>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => userId && loadLatest(userId)}
+                className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-base)]"
+                title="Refresh"
+              >
+                <RefreshCw className={cx("h-3.5 w-3.5", loading && "animate-spin")} />
+                Refresh
+              </button>
+              <button
+                onClick={markAllRead}
+                className="text-xs text-[var(--text-muted)] hover:text-[var(--text-base)]"
+              >
+                Mark all as read
+              </button>
+            </div>
+          </div>
+
+          <div className="max-h-[60vh] overflow-auto">
+            {items.length === 0 ? (
+              <div className="p-4 text-sm text-[var(--text-muted)]">
+                No notifications yet.
+              </div>
+            ) : (
+              <ul className="divide-y divide-[var(--border-subtle)]">
+                {items.map((it) => (
+                  <li
+                    key={it.id}
+                    className={cx(
+                      "px-3 py-3 cursor-pointer hover:bg-[var(--bg-hover)] transition",
+                      !it.read && "bg-[var(--bg-active)]/40"
+                    )}
+                    onClick={() => handleItemClick(it)}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5">
+                        <Bell className="h-4 w-4 text-amber-500" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium truncate">
+                          {it.title || "Notification"}
+                        </div>
+                        {it.message && (
+                          <div className="text-xs text-[var(--text-muted)] truncate">
+                            {it.message}
+                          </div>
+                        )}
+                        <div className="mt-1 text-[10px] text-[var(--text-muted)]">
+                          {new Date(it.created_at).toLocaleString()}
+                        </div>
+                      </div>
+                      {!it.read && <span className="ml-auto mt-0.5 inline-block h-2 w-2 rounded-full bg-amber-500" />}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="px-3 py-2 border-t border-[var(--border-subtle)] text-right">
+            <button
+              onClick={() => setOpen(false)}
+              className="text-xs text-[var(--text-muted)] hover:text-[var(--text-base)]"
+            >
+              Close
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -265,10 +449,12 @@ export default function MainLayout() {
 
   const signOut = useCallback(async () => {
     try {
+      // ✅ Track logout before signing out
+      trackLogout().catch(err => console.error("Failed to track logout:", err));
+      
       await supabase.auth.signOut();
+    } finally {
       navigate("/login", { replace: true });
-    } catch (e) {
-      console.error("Sign out error:", e);
     }
   }, [navigate]);
 
@@ -322,7 +508,6 @@ export default function MainLayout() {
                 icon={DollarSign}
                 defaultOpen={activeGroupByPath === "accounting"}
               >
-                {/* Settings → Billing moved here */}
                 <SideLink to="/billing" icon={CreditCard}>
                   Billing
                 </SideLink>
@@ -335,7 +520,6 @@ export default function MainLayout() {
                 icon={Shield}
                 defaultOpen={activeGroupByPath === "admin"}
               >
-                {/* Settings items moved here */}
                 <SideLink to="/profile" icon={UserRound}>
                   Profile &amp; Account
                 </SideLink>
@@ -353,7 +537,6 @@ export default function MainLayout() {
                   Security
                 </SideLink>
 
-                {/* TM2 → Team Management (already updated path) */}
                 <SideLink to="/teammanagement" icon={UserRound}>
                   Team Management
                 </SideLink>
@@ -392,14 +575,16 @@ export default function MainLayout() {
               </button>
               <span className="font-semibold">Atlas Command</span>
               <div className="flex items-center gap-2">
+                <NotificationBell />
                 <ThemeMenu />
               </div>
             </div>
           </div>
 
-          {/* Desktop top bar (NEW: avatar only, minimal) */}
+          {/* Desktop top bar */}
           <div className="hidden md:block sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg-panel)]/80 backdrop-blur">
-            <div className="flex items-center justify-end px-6 py-3">
+            <div className="flex items-center justify-end px-6 py-3 gap-2">
+              <NotificationBell />
               <AvatarMenu onSignOut={signOut} />
             </div>
           </div>

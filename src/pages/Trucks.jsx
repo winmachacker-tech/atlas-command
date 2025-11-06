@@ -1,772 +1,1763 @@
 // src/pages/Trucks.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "../lib/supabase";
 import {
   Plus,
-  PencilLine,
-  Trash2,
   RefreshCw,
-  Loader2,
   Search,
-  Clock,
-  ShieldAlert,
-  FileWarning,
-  Link as LinkIcon,
+  AlertTriangle,
+  Filter,
+  Info,
+  Loader2,
+  Paperclip,
+  MoreVertical,
+  Edit3,
+  Wrench,
+  UserCheck,
+  UserX,
+  Gauge,
+  FileText,
   X,
-  Save,
+  Hammer,
+  Download,
+  Trash2,
+  Pencil,
+  Bell,
   CheckCircle2,
 } from "lucide-react";
+import { supabase } from "../lib/supabase";
+import TruckDocumentsModal from "../components/TruckDocumentsModal.jsx";
+import PMSchedulerModal from "../components/PMSchedulerModal.jsx";
 
-/* ------------------------------- utilities ------------------------------- */
+/** Status options must match DB enum/check */
+const STATUS_CHOICES = ["ACTIVE", "INACTIVE", "MAINTENANCE"];
+
+/** Helper: join class names */
 function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
 
-// days until a date (positive = in future, negative = past)
-function daysUntil(dateStr) {
-  if (!dateStr) return null;
-  const d = new Date(dateStr);
-  const today = new Date();
-  const diff = Math.ceil((d.setHours(0, 0, 0, 0) - today.setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24));
-  return diff;
+/** Compute days from today to a due date (ISO string or Date). Negative = overdue */
+function daysUntil(d) {
+  if (!d) return null;
+  const due = new Date(d);
+  if (isNaN(+due)) return null;
+  const now = new Date();
+  const diffMs = due.setHours(0, 0, 0, 0) - now.setHours(0, 0, 0, 0);
+  return Math.round(diffMs / (1000 * 60 * 60 * 24));
 }
 
-// RYG pill for a date threshold
-function ExpiryPill({ label, date }) {
-  const dleft = daysUntil(date);
-  let intent = "default";
-  let text = "—";
-  if (dleft !== null) {
-    text = `${new Date(date).toLocaleDateString()} (${dleft}d)`;
-    if (dleft < 0) intent = "red";
-    else if (dleft <= 30) intent = "amber";
-    else intent = "green";
+function fmtDate(d) {
+  try {
+    return d ? new Date(d).toLocaleDateString() : "—";
+  } catch {
+    return "—";
   }
-  const map = {
-    default:
-      "bg-zinc-100 text-zinc-700 border border-zinc-200/60 dark:bg-zinc-800 dark:text-zinc-200 dark:border-zinc-700/60",
-    red: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200",
-    amber: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200",
-    green: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200",
+}
+
+/** Pick label/bg for a due date */
+function duePill(d) {
+  const n = daysUntil(d);
+  if (n === null) {
+    return { text: "—", className: "bg-transparent text-[var(--text-soft)]" };
+  }
+  if (n < 0) {
+    return {
+      text: `${fmtDate(d)} (${n}d)`,
+      className:
+        "bg-red-500/20 text-red-300 border border-red-500/30 shadow-sm",
+    };
+  }
+  if (n <= 7) {
+    return {
+      text: `${fmtDate(d)} (+${n}d)`,
+      className:
+        "bg-amber-500/20 text-amber-300 border border-amber-500/30 shadow-sm",
+    };
+  }
+  return {
+    text: fmtDate(d),
+    className:
+      "bg-emerald-500/15 text-emerald-300 border border-emerald-500/25",
   };
+}
+
+/** ACTIONS POPUP */
+function ActionsMenu({
+  onEdit,
+  onOdometer,
+  onAssign,
+  onUnassign,
+  onDocs,
+  onMaint,
+  onOpenPM,
+  onClose,
+  anchorRef,
+}) {
+  // Close when clicking outside
+  const menuRef = useRef(null);
+  useEffect(() => {
+    function onDocClick(e) {
+      if (!menuRef.current) return;
+      if (!anchorRef?.current) return;
+      if (
+        menuRef.current.contains(e.target) ||
+        anchorRef.current.contains(e.target)
+      )
+        return;
+      onClose?.();
+    }
+    function onEsc(e) {
+      if (e.key === "Escape") onClose?.();
+    }
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [onClose, anchorRef]);
+
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs text-zinc-500">{label}</span>
-      <span className={cx("text-xs px-2 py-1 rounded-lg", map[intent])}>{text}</span>
+    <div
+      ref={menuRef}
+      className="absolute z-50 mt-2 min-w-[240px] rounded-xl border bg-[var(--panel)] shadow-xl overflow-hidden"
+      style={{ right: 0 }}
+    >
+      <button
+        onClick={() => {
+          onEdit?.();
+          onClose?.();
+        }}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+      >
+        <Edit3 className="w-4 h-4" /> Edit compliance & status
+      </button>
+      <button
+        onClick={() => {
+          onOdometer?.();
+          onClose?.();
+        }}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+      >
+        <Gauge className="w-4 h-4" /> Update odometer
+      </button>
+      <button
+        onClick={() => {
+          onAssign?.();
+          onClose?.();
+        }}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+      >
+        <UserCheck className="w-4 h-4" /> Assign / Change driver
+      </button>
+      <button
+        onClick={() => {
+          onUnassign?.();
+          onClose?.();
+        }}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+      >
+        <UserX className="w-4 h-4" /> Unassign driver
+      </button>
+      <button
+        onClick={() => {
+          onDocs?.();
+          onClose?.();
+        }}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+      >
+        <FileText className="w-4 h-4" /> Documents
+      </button>
+      <button
+        onClick={() => {
+          onMaint?.();
+          onClose?.();
+        }}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+      >
+        <Hammer className="w-4 h-4" /> Maintenance log
+      </button>
+      <div className="h-px bg-white/10 my-1" />
+      <button
+        onClick={() => {
+          onOpenPM?.();
+          onClose?.();
+        }}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+      >
+        <Wrench className="w-4 h-4" /> PM Scheduler
+      </button>
     </div>
   );
 }
 
-function StatusBadge({ status }) {
-  const map = {
-    ACTIVE: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200",
-    IN_REPAIR: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200",
-    INACTIVE: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200",
-    RETIRED: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200",
-  };
+/** MODAL SHELL */
+function ModalShell({ title, onClose, children, footer, maxWidth = "max-w-xl" }) {
   return (
-    <span className={cx("text-xs px-2 py-1 rounded-lg border border-transparent", map[status] || map.INACTIVE)}>
-      {status || "—"}
-    </span>
-  );
-}
-
-/* --------------------------------- Modal --------------------------------- */
-function Modal({ open, onClose, title, children, footer }) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative z-[61] w-[95vw] max-w-3xl rounded-2xl bg-white dark:bg-neutral-950 border border-zinc-200 dark:border-neutral-800 shadow-xl">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-neutral-800">
-          <h3 className="text-lg font-semibold">{title}</h3>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-neutral-800">
+    <div className="fixed inset-0 z-[100] grid place-items-center bg-black/50 backdrop-blur-sm p-4">
+      <div className={`w-full ${maxWidth} rounded-2xl border bg-[var(--panel)] shadow-2xl`}>
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          <div className="font-semibold text-lg">{title}</div>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg hover:bg-white/5 transition"
+            title="Close"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-4">{children}</div>
-        {footer && <div className="px-4 py-3 border-t border-zinc-200 dark:border-neutral-800">{footer}</div>}
+        <div className="p-5">{children}</div>
+        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t">
+          {footer}
+        </div>
       </div>
     </div>
   );
 }
 
-/* ------------------------------ Trucks Page ------------------------------ */
-export default function TrucksPage() {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
+/** MODAL: Update Odometer */
+function OdometerModal({ open, onClose, truck, onSaved }) {
+  const [odo, setOdo] = useState(truck?.odometer ?? "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
 
-  const [q, setQ] = useState("");
-  const [showForm, setShowForm] = useState(false);
-  const [editing, setEditing] = useState(null); // row being edited
-
-  const [drivers, setDrivers] = useState([]);
-  const [loads, setLoads] = useState([]);
-
-  const [showAudit, setShowAudit] = useState(false);
-  const [auditTruck, setAuditTruck] = useState(null);
-  const [auditRows, setAuditRows] = useState([]);
-  const [auditLoading, setAuditLoading] = useState(false);
-
-  // form state
-  const emptyForm = {
-    truck_number: "",
-    vin: "",
-    make: "",
-    model: "",
-    model_year: "",
-    status: "ACTIVE",
-    current_driver_id: null,
-    current_load_id: null,
-    registration_expiry: "",
-    inspection_expiry: "",
-    ifta_expiry: "",
-    insurance_expiry: "",
-    odometer_miles: "",
-    maintenance_due_miles: "",
-    last_service_date: "",
-    notes: "",
-  };
-  const [form, setForm] = useState(emptyForm);
-
-  // fetch list
-  async function fetchTrucks() {
-    setLoading(true);
-    setErrorMsg("");
-    const { data, error } = await supabase
-      .from("v_trucks_active")
-      .select("*")
-      .order("truck_number", { ascending: true })
-      .limit(1000);
-    if (error) {
-      console.error(error);
-      setErrorMsg(error.message);
-      setRows([]);
-    } else {
-      setRows(data || []);
-    }
-    setLoading(false);
-  }
-
-  async function fetchDriversLoads() {
-    const [d1, d2] = await Promise.all([
-      supabase.from("drivers").select("id, first_name, last_name").order("last_name", { ascending: true }).limit(500),
-      supabase.from("loads").select("id, reference, status").order("created_at", { ascending: false }).limit(300),
-    ]);
-    if (!d1.error) setDrivers(d1.data || []);
-    if (!d2.error) setLoads(d2.data || []);
-  }
-
-  // realtime subscription for trucks
   useEffect(() => {
-    fetchTrucks();
-    fetchDriversLoads();
-    const channel = supabase
-      .channel("trucks-page")
-      .on("postgres_changes", { event: "*", schema: "public", table: "trucks" }, () => fetchTrucks())
-      .subscribe();
+    setOdo(truck?.odometer ?? "");
+    setErr(null);
+  }, [truck]);
+
+  if (!open || !truck) return null;
+
+  async function save() {
+    try {
+      setBusy(true);
+      setErr(null);
+      const value = Number(odo);
+      if (!Number.isFinite(value) || value < 0)
+        throw new Error("Enter a valid non-negative number.");
+      const { error } = await supabase
+        .from("trucks")
+        .update({ odometer: value })
+        .eq("id", truck.id);
+      if (error) throw error;
+      onSaved?.();
+      onClose?.();
+    } catch (e) {
+      setErr(e.message || "Failed to update odometer.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ModalShell
+      title={`Update Odometer • ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      onClose={onClose}
+      footer={
+        <>
+          <button
+            onClick={onClose}
+            className="px-3 py-2 rounded-xl border hover:bg-[var(--bg-hover)]"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={busy}
+            className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50"
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </>
+      }
+    >
+      {err && (
+        <div className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-200 px-3 py-2 text-sm">
+          {err}
+        </div>
+      )}
+      <label className="text-sm block mb-1 opacity-80">Odometer</label>
+      <input
+        type="number"
+        inputMode="numeric"
+        value={odo}
+        onChange={(e) => setOdo(e.target.value)}
+        className="w-full px-3 py-2 rounded-xl border bg-transparent"
+        placeholder="e.g. 452310"
+      />
+    </ModalShell>
+  );
+}
+
+/** MODAL: Assign / Change Driver */
+function AssignDriverModal({ open, onClose, truck, onSaved }) {
+  const [drivers, setDrivers] = useState([]);
+  const [q, setQ] = useState("");
+  const [selected, setSelected] = useState(truck?.driver_id || null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let mounted = true;
+    async function load() {
+      try {
+        setErr(null);
+        const { data, error } = await supabase
+          .from("drivers")
+          .select("id, full_name, status")
+          .order("full_name", { ascending: true });
+        if (error) throw error;
+        if (mounted) setDrivers(data || []);
+      } catch (e) {
+        if (mounted) setErr(e.message || "Failed to load drivers");
+      }
+    }
+    if (open) load();
     return () => {
-      supabase.removeChannel(channel);
+      mounted = false;
     };
+  }, [open]);
+
+  useEffect(() => {
+    setSelected(truck?.driver_id || null);
+    setErr(null);
+  }, [truck]);
+
+  if (!open || !truck) return null;
+
+  const filtered = (drivers || []).filter((d) => {
+    const hay = [d.full_name, d.status].filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(q.trim().toLowerCase());
+  });
+
+  async function save() {
+    try {
+      setBusy(true);
+      setErr(null);
+      const payload = { driver_id: selected || null };
+      const { error } = await supabase
+        .from("trucks")
+        .update(payload)
+        .eq("id", truck.id);
+      if (error) throw error;
+      onSaved?.();
+      onClose?.();
+    } catch (e) {
+      setErr(e.message || "Failed to assign driver.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ModalShell
+      title={`Assign Driver • ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      onClose={onClose}
+      footer={
+        <>
+          <button
+            onClick={onClose}
+            className="px-3 py-2 rounded-xl border hover:bg-[var(--bg-hover)]"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={busy}
+            className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50"
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </>
+      }
+    >
+      {err && (
+        <div className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-200 px-3 py-2 text-sm">
+          {err}
+        </div>
+      )}
+      <div className="mb-2 text-sm opacity-80">Search & select a driver:</div>
+      <div className="relative mb-3">
+        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 opacity-70" />
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Type a driver name or status…"
+          className="w-full pl-9 pr-3 py-2 rounded-xl border bg-transparent outline-none"
+        />
+      </div>
+      <div className="max-h-64 overflow-auto rounded-xl border">
+        <table className="min-w-full text-sm">
+          <tbody>
+            {filtered.length === 0 ? (
+              <tr>
+                <td className="px-3 py-3 opacity-70">No drivers</td>
+              </tr>
+            ) : (
+              filtered.map((d) => (
+                <tr
+                  key={d.id}
+                  className={cx(
+                    "border-b",
+                    selected === d.id ? "bg-black/10" : "hover:bg-black/5"
+                  )}
+                >
+                  <td className="px-3 py-2">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="driver"
+                        checked={selected === d.id}
+                        onChange={() => setSelected(d.id)}
+                      />
+                      <div>
+                        <div className="font-medium">
+                          {d.full_name || "Driver"}
+                        </div>
+                        <div className="text-xs opacity-70">
+                          {d.status || "—"}
+                        </div>
+                      </div>
+                    </label>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </ModalShell>
+  );
+}
+
+/** MODAL: Edit Compliance + Status */
+function EditComplianceModal({ open, onClose, truck, onSaved }) {
+  const [form, setForm] = useState({
+    status: truck?.status || "ACTIVE",
+    reg_due: truck?.reg_due || "",
+    insp_due: truck?.insp_due || "",
+    ifta_due: truck?.ifta_due || "",
+    ins_due: truck?.ins_due || "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    setForm({
+      status: truck?.status || "ACTIVE",
+      reg_due: truck?.reg_due || "",
+      insp_due: truck?.insp_due || "",
+      ifta_due: truck?.ifta_due || "",
+      ins_due: truck?.ins_due || "",
+    });
+    setErr(null);
+  }, [truck]);
+
+  if (!open || !truck) return null;
+
+  function change(k, v) {
+    setForm((s) => ({ ...s, [k]: v }));
+  }
+
+  async function save() {
+    try {
+      setBusy(true);
+      setErr(null);
+      const payload = {
+        status: form.status || null,
+        reg_due: form.reg_due || null,
+        insp_due: form.insp_due || null,
+        ifta_due: form.ifta_due || null,
+        ins_due: form.ins_due || null,
+      };
+      const { error } = await supabase
+        .from("trucks")
+        .update(payload)
+        .eq("id", truck.id);
+      if (error) throw error;
+      onSaved?.();
+      onClose?.();
+    } catch (e) {
+      setErr(e.message || "Failed to save changes.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const field = (label, key) => (
+    <div>
+      <label className="text-sm block mb-1 opacity-80">{label}</label>
+      <input
+        type="date"
+        value={form[key] ? String(form[key]).slice(0, 10) : ""}
+        onChange={(e) => change(key, e.target.value || "")}
+        className="w-full px-3 py-2 rounded-xl border bg-transparent"
+      />
+    </div>
+  );
+
+  return (
+    <ModalShell
+      title={`Edit Compliance & Status • ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      onClose={onClose}
+      footer={
+        <>
+          <button
+            onClick={onClose}
+            className="px-3 py-2 rounded-xl border hover:bg-[var(--bg-hover)]"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={busy}
+            className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50"
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </>
+      }
+    >
+      {err && (
+        <div className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-200 px-3 py-2 text-sm">
+          {err}
+        </div>
+      )}
+      <div className="grid gap-4">
+        <div>
+          <label className="text-sm block mb-1 opacity-80">Status</label>
+          <select
+            value={form.status}
+            onChange={(e) => change("status", e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border bg-transparent"
+          >
+            {STATUS_CHOICES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="grid md:grid-cols-2 gap-4">
+          {field("Registration Due", "reg_due")}
+          {field("Inspection Due", "insp_due")}
+          {field("IFTA Due", "ifta_due")}
+          {field("Insurance Due", "ins_due")}
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+/** MODAL: Maintenance Log (CRUD) */
+function MaintenanceModal({ open, onClose, truck, onSaved }) {
+  const [rows, setRows] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [editing, setEditing] = useState(null); // record or null
+  const [form, setForm] = useState({
+    date: "",
+    type: "",
+    odometer: "",
+    cost: "",
+    notes: "",
+  });
+
+  useEffect(() => {
+    if (!open || !truck?.id) return;
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, truck?.id]);
+
+  function resetForm() {
+    setEditing(null);
+    setForm({ date: "", type: "", odometer: "", cost: "", notes: "" });
+  }
+
+  async function load() {
+    try {
+      setBusy(true);
+      setErr(null);
+      const { data, error } = await supabase
+        .from("truck_maintenance")
+        .select("id, truck_id, date, type, odometer, cost, notes, created_at")
+        .eq("truck_id", truck.id)
+        .order("date", { ascending: false })
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      setRows(data || []);
+    } catch (e) {
+      setErr(
+        (e?.message || "").includes("does not exist")
+          ? "Table truck_maintenance not found. I’ll send you the SQL migration next."
+          : e?.message || "Failed to load maintenance."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function change(k, v) {
+    setForm((s) => ({ ...s, [k]: v }));
+  }
+
+  function beginEdit(rec) {
+    setEditing(rec);
+    setForm({
+      date: rec.date ? String(rec.date).slice(0, 10) : "",
+      type: rec.type || "",
+      odometer: rec.odometer ?? "",
+      cost: rec.cost ?? "",
+      notes: rec.notes || "",
+    });
+  }
+
+  async function save() {
+    try {
+      setBusy(true);
+      setErr(null);
+      const payload = {
+        truck_id: truck.id,
+        date: form.date || null,
+        type: form.type || null,
+        odometer: form.odometer === "" ? null : Number(form.odometer),
+        cost: form.cost === "" ? null : Number(form.cost),
+        notes: form.notes || null,
+      };
+      if (
+        payload.odometer != null &&
+        (!Number.isFinite(payload.odometer) || payload.odometer < 0)
+      ) {
+        throw new Error("Odometer must be a non-negative number.");
+      }
+      if (payload.cost != null && !Number.isFinite(payload.cost)) {
+        throw new Error("Cost must be a number.");
+      }
+      if (editing) {
+        const { error } = await supabase
+          .from("truck_maintenance")
+          .update(payload)
+          .eq("id", editing.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("truck_maintenance")
+          .insert(payload);
+        if (error) throw error;
+      }
+      resetForm();
+      await load();
+      onSaved?.();
+    } catch (e) {
+      setErr(e.message || "Failed to save maintenance entry.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id) {
+    if (!id) return;
+    try {
+      setBusy(true);
+      setErr(null);
+      const { error } = await supabase
+        .from("truck_maintenance")
+        .delete()
+        .eq("id", id);
+      if (error) throw error;
+      if (editing?.id === id) resetForm();
+      await load();
+      onSaved?.();
+    } catch (e) {
+      setErr(e.message || "Failed to delete entry.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open || !truck) return null;
+
+  return (
+    <ModalShell
+      title={`Maintenance • ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      onClose={onClose}
+      maxWidth="max-w-3xl"
+      footer={
+        <>
+          <button
+            onClick={onClose}
+            className="px-3 py-2 rounded-xl border hover:bg-[var(--bg-hover)]"
+          >
+            Close
+          </button>
+          <button
+            onClick={save}
+            disabled={busy}
+            className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50"
+          >
+            {busy ? "Saving…" : editing ? "Update Entry" : "Add Entry"}
+          </button>
+        </>
+      }
+    >
+      {err && (
+        <div className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-200 px-3 py-2 text-sm">
+          {err}
+        </div>
+      )}
+
+      {/* Form */}
+      <div className="grid md:grid-cols-5 gap-3 mb-4">
+        <div className="md:col-span-1">
+          <label className="text-sm block mb-1 opacity-80">Date</label>
+          <input
+            type="date"
+            value={form.date}
+            onChange={(e) => change("date", e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border bg-transparent"
+          />
+        </div>
+        <div className="md:col-span-1">
+          <label className="text-sm block mb-1 opacity-80">Type</label>
+          <input
+            placeholder="PM A, Tires, DOT, etc."
+            value={form.type}
+            onChange={(e) => change("type", e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border bg-transparent"
+          />
+        </div>
+        <div className="md:col-span-1">
+          <label className="text-sm block mb-1 opacity-80">Odometer</label>
+          <input
+            type="number"
+            inputMode="numeric"
+            value={form.odometer}
+            onChange={(e) => change("odometer", e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border bg-transparent"
+            placeholder="452310"
+          />
+        </div>
+        <div className="md:col-span-1">
+          <label className="text-sm block mb-1 opacity-80">Cost ($)</label>
+          <input
+            type="number"
+            inputMode="decimal"
+            value={form.cost}
+            onChange={(e) => change("cost", e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border bg-transparent"
+            placeholder="500"
+          />
+        </div>
+        <div className="md:col-span-1">
+          <label className="text-sm block mb-1 opacity-80">Notes</label>
+          <input
+            placeholder="Shop, parts, etc."
+            value={form.notes}
+            onChange={(e) => change("notes", e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border bg-transparent"
+          />
+        </div>
+      </div>
+
+      {/* List */}
+      <div className="overflow-x-auto rounded-xl border">
+        <table className="min-w-full text-sm">
+          <thead className="bg-black/10 text-left text-[var(--text-soft)]">
+            <tr>
+              <th className="px-3 py-3">Date</th>
+              <th className="px-3 py-3">Type</th>
+              <th className="px-3 py-3">Odometer</th>
+              <th className="px-3 py-3">Cost</th>
+              <th className="px-3 py-3">Notes</th>
+              <th className="px-3 py-3 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {busy && rows.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-3 py-10 text-center">
+                  <Loader2 className="inline w-4 h-4 animate-spin" /> Loading…
+                </td>
+              </tr>
+            ) : rows.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-3 py-8 text-center opacity-70">
+                  No entries yet.
+                </td>
+              </tr>
+            ) : (
+              rows.map((r, i) => {
+                const zebra = i % 2 ? "bg-black/5" : "";
+                return (
+                  <tr key={r.id} className={cx(zebra, "border-t")}>
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      {fmtDate(r.date)}
+                    </td>
+                    <td className="px-3 py-3">{r.type || "—"}</td>
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      {r.odometer ?? "—"}
+                    </td>
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      {r.cost != null
+                        ? `$${Number(r.cost).toLocaleString()}`
+                        : "—"}
+                    </td>
+                    <td className="px-3 py-3">{r.notes || "—"}</td>
+                    <td className="px-3 py-3 text-right">
+                      <div className="inline-flex items-center gap-2">
+                        <button
+                          className="px-2 py-1 rounded-lg border text-xs hover:bg-[var(--bg-hover)] inline-flex items-center gap-1"
+                          onClick={() => beginEdit(r)}
+                        >
+                          <Pencil className="w-4 h-4" /> Edit
+                        </button>
+                        <button
+                          className="px-2 py-1 rounded-lg border text-xs hover:bg-[var(--bg-hover)] text-red-300 border-red-500/30 inline-flex items-center gap-1"
+                          onClick={() => remove(r.id)}
+                        >
+                          <Trash2 className="w-4 h-4" /> Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </ModalShell>
+  );
+}
+
+/** SLIDE-OVER: PM Alerts Drawer */
+function PMAlertsDrawer({
+  open,
+  onClose,
+  alerts,
+  onResolve,
+  onGotoTruck,
+  refetching,
+  onRefresh,
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[120]">
+      <div
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <aside className="absolute right-0 top-0 h-full w-full max-w-lg bg-[var(--panel)] border-l shadow-2xl flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          <div className="flex items-center gap-2">
+            <Bell className="w-5 h-5" />
+            <div className="font-semibold">PM Alerts</div>
+            <span className="text-xs opacity-70">
+              (Open: {alerts?.length ?? 0})
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onRefresh}
+              className="px-2 py-1 rounded-lg border text-xs hover:bg-[var(--bg-hover)] inline-flex items-center gap-1"
+              title="Refresh alerts"
+            >
+              {refetching ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Refreshing…
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-4 h-4" />
+                  Refresh
+                </>
+              )}
+            </button>
+            <button
+              onClick={onClose}
+              className="p-2 rounded-lg hover:bg-white/5"
+              title="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-auto p-4">
+          {alerts?.length ? (
+            <div className="space-y-3">
+              {alerts.map((a) => {
+                const sev =
+                  a.status === "OVERDUE"
+                    ? "bg-red-500/15 text-red-300 border-red-500/30"
+                    : "bg-amber-500/15 text-amber-300 border-amber-500/30";
+                return (
+                  <div
+                    key={a.id}
+                    className={cx(
+                      "rounded-xl border p-4",
+                      "hover:bg-white/[0.02] transition"
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={cx(
+                              "px-2 py-0.5 rounded-lg text-xs border",
+                              sev
+                            )}
+                          >
+                            {a.status}
+                          </span>
+                          <div className="font-semibold">
+                            {a.truck?.truck_number
+                              ? `Truck ${a.truck.truck_number}`
+                              : a.truck?.vin || "Truck"}
+                          </div>
+                        </div>
+                        <div className="text-sm opacity-80 mt-1">
+                          {a.policy?.name || "Policy"} • {a.reason || "—"}
+                        </div>
+                        <div className="text-xs opacity-60 mt-1">
+                          Opened {new Date(a.created_at).toLocaleString()}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="px-2 py-1 rounded-lg border text-xs hover:bg-[var(--bg-hover)] inline-flex items-center gap-1"
+                          onClick={() => onGotoTruck?.(a.truck_id)}
+                          title="Go to truck row"
+                        >
+                          <Info className="w-4 h-4" />
+                          Open
+                        </button>
+                        <button
+                          className="px-2 py-1 rounded-lg border text-xs hover:bg-[var(--bg-hover)] inline-flex items-center gap-1"
+                          onClick={() => onResolve?.(a.id)}
+                          title="Mark as resolved"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          Resolve
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="h-full grid place-items-center text-center">
+              <div className="opacity-70">
+                <Bell className="w-8 h-8 mx-auto mb-2 opacity-60" />
+                <div className="font-medium">No open PM alerts</div>
+                <div className="text-sm">You’re all set for now.</div>
+              </div>
+            </div>
+          )}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+export default function Trucks() {
+  const [trucks, setTrucks] = useState([]);
+  const [driversById, setDriversById] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [refetching, setRefetching] = useState(false);
+  const [error, setError] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
+
+  /** Filters */
+  const [q, setQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [complianceFilter, setComplianceFilter] = useState("ALL"); // ALL | OVERDUE | DUE_SOON
+  const [hasDriver, setHasDriver] = useState("ANY"); // ANY | HAS | NONE
+  const [sortBy, setSortBy] = useState("EARLIEST_DUE"); // EARLIEST_DUE | TRUCK_NUMBER
+
+  /** Docs modal */
+  const [docsOpen, setDocsOpen] = useState(false);
+  const [activeTruck, setActiveTruck] = useState(null);
+  const [docPresence, setDocPresence] = useState({}); // { [truck.id]: boolean }
+  const DOCS_BUCKET = "truck-docs";
+
+  /** Action menu state */
+  const [menuFor, setMenuFor] = useState(null); // truck.id
+  const menuAnchorRef = useRef({}); // map of refs by truck id
+  const [odoOpen, setOdoOpen] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [maintOpen, setMaintOpen] = useState(false);
+  const [pmOpen, setPmOpen] = useState(false);
+
+  /** Alerts UI */
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  const [alerts, setAlerts] = useState([]);
+  const [alertsLoading, setAlertsLoading] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const { data: tData, error: tErr } = await supabase
+          .from("trucks")
+          .select(
+            `
+            id,
+            truck_number,
+            vin,
+            make,
+            model,
+            year,
+            status,
+            driver_id,
+            odometer,
+            reg_due,
+            insp_due,
+            ifta_due,
+            ins_due
+          `
+          )
+          .order("truck_number", { ascending: true });
+
+        if (tErr) throw tErr;
+
+        const ids = Array.from(
+          new Set(tData.map((t) => t?.driver_id).filter(Boolean))
+        );
+        let map = {};
+        if (ids.length) {
+          const { data: dData, error: dErr } = await supabase
+            .from("drivers")
+            .select("id, full_name")
+            .in("id", ids);
+          if (dErr) throw dErr;
+          map = (dData || []).reduce((acc, d) => {
+            acc[d.id] = d.full_name || "Driver";
+            return acc;
+          }, {});
+        }
+
+        if (mounted) {
+          setTrucks(tData || []);
+          setDriversById(map);
+          setLastUpdated(new Date());
+        }
+
+        // Docs presence check
+        if (mounted && (tData || []).length) {
+          const presenceMap = {};
+          await Promise.all(
+            (tData || []).map(async (t) => {
+              try {
+                const { data, error: listErr } = await supabase.storage
+                  .from(DOCS_BUCKET)
+                  .list(`${t.id}`, { limit: 1 });
+                presenceMap[t.id] = !listErr && (data || []).length > 0;
+              } catch {
+                presenceMap[t.id] = false;
+              }
+            })
+          );
+          if (mounted) setDocPresence(presenceMap);
+        }
+      } catch (e) {
+        if (mounted) setError(e.message || "Failed to load trucks");
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const filtered = useMemo(() => {
-    const k = q.trim().toLowerCase();
-    if (!k) return rows;
-    return rows.filter((r) => {
-      return (
-        (r.truck_number || "").toLowerCase().includes(k) ||
-        (r.vin || "").toLowerCase().includes(k) ||
-        (r.make || "").toLowerCase().includes(k) ||
-        (r.model || "").toLowerCase().includes(k) ||
-        (r.current_driver_name || "").toLowerCase().includes(k) ||
-        (r.current_load_reference || "").toLowerCase().includes(k)
+  async function refetch() {
+    setRefetching(true);
+    setError(null);
+    try {
+      const { data: tData, error: tErr } = await supabase
+        .from("trucks")
+        .select(
+          `
+          id,
+          truck_number,
+          vin,
+          make,
+          model,
+          year,
+          status,
+          driver_id,
+          odometer,
+          reg_due,
+          insp_due,
+          ifta_due,
+          ins_due
+        `
+        )
+        .order("truck_number", { ascending: true });
+      if (tErr) throw tErr;
+
+      const ids = Array.from(
+        new Set(tData.map((t) => t?.driver_id).filter(Boolean))
       );
+      let map = {};
+      if (ids.length) {
+        const { data: dData, error: dErr } = await supabase
+          .from("drivers")
+          .select("id, full_name")
+          .in("id", ids);
+        if (dErr) throw dErr;
+        map = (dData || []).reduce((acc, d) => {
+          acc[d.id] = d.full_name || "Driver";
+          return acc;
+        }, {});
+      }
+
+      setTrucks(tData || []);
+      setDriversById(map);
+      setLastUpdated(new Date());
+
+      const presenceMap = {};
+      await Promise.all(
+        (tData || []).map(async (t) => {
+          try {
+            const { data, error: listErr } = await supabase.storage
+              .from(DOCS_BUCKET)
+              .list(`${t.id}`, { limit: 1 });
+            presenceMap[t.id] = !listErr && (data || []).length > 0;
+          } catch {
+            presenceMap[t.id] = false;
+          }
+        })
+      );
+      setDocPresence(presenceMap);
+    } catch (e) {
+      setError(e.message || "Failed to refresh");
+    } finally {
+      setRefetching(false);
+    }
+  }
+
+  /** Alerts fetch/resolve */
+  async function fetchAlerts() {
+    setAlertsLoading(true);
+    try {
+      // Bring joined truck/policy names for display
+      const { data, error } = await supabase
+        .from("pm_alerts")
+        .select(
+          `
+          id,
+          policy_id,
+          truck_id,
+          status,
+          reason,
+          created_at,
+          resolved_at,
+          truck:trucks( truck_number, vin ),
+          policy:truck_pm_policy( name )
+        `
+        )
+        .is("resolved_at", null)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      setAlerts(data || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setAlertsLoading(false);
+    }
+  }
+
+  async function resolveAlert(id) {
+    try {
+      const { error } = await supabase
+        .from("pm_alerts")
+        .update({ resolved_at: new Date().toISOString() })
+        .eq("id", id);
+      if (error) throw error;
+      await fetchAlerts();
+    } catch (e) {
+      alert(e.message || "Failed to resolve alert");
+    }
+  }
+
+  function earliestDue(t) {
+    const pool = [t?.reg_due, t?.insp_due, t?.ifta_due, t?.ins_due]
+      .map((d) => (d ? new Date(d) : null))
+      .filter((d) => d && !isNaN(+d));
+    if (!pool.length) return null;
+    return new Date(Math.min(...pool.map((d) => +d)));
+  }
+
+  const filtered = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    return (trucks || [])
+      .filter((t) => {
+        if (query) {
+          const hay =
+            [
+              t.truck_number,
+              t.vin,
+              t.make,
+              t.model,
+              t.year,
+              driversById[t.driver_id],
+            ]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase() || "";
+          if (!hay.includes(query)) return false;
+        }
+        if (statusFilter !== "ALL") {
+          if ((t.status || "").toUpperCase() !== statusFilter) return false;
+        }
+        if (hasDriver === "HAS" && !t.driver_id) return false;
+        if (hasDriver === "NONE" && t.driver_id) return false;
+
+        if (complianceFilter !== "ALL") {
+          const dArr = [t.reg_due, t.insp_due, t.ifta_due, t.ins_due];
+          const daysArr = dArr.map(daysUntil).filter((n) => n !== null);
+          if (!daysArr.length) return false;
+          const anyOverdue = daysArr.some((n) => n < 0);
+          const anyDueSoon = daysArr.some((n) => n >= 0 && n <= 7);
+          if (complianceFilter === "OVERDUE" && !anyOverdue) return false;
+          if (complianceFilter === "DUE_SOON" && !anyDueSoon) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        if (sortBy === "TRUCK_NUMBER") {
+          const A = (a.truck_number || "").toString().padStart(6, "0");
+          const B = (b.truck_number || "").toString().padStart(6, "0");
+          return A.localeCompare(B);
+        }
+        const ea = earliestDue(a);
+        const eb = earliestDue(b);
+        if (!ea && !eb) return 0;
+        if (!ea) return 1;
+        if (!eb) return -1;
+        return +ea - +eb;
+      });
+  }, [
+    trucks,
+    q,
+    statusFilter,
+    complianceFilter,
+    hasDriver,
+    sortBy,
+    driversById,
+  ]);
+
+  function openDocs(truck) {
+    setActiveTruck(truck);
+    setDocsOpen(true);
+  }
+  function closeDocs() {
+    setDocsOpen(false);
+    setActiveTruck(null);
+  }
+
+  async function unassignDriver(truck) {
+    await supabase
+      .from("trucks")
+      .update({ driver_id: null })
+      .eq("id", truck.id);
+    await refetch();
+  }
+
+  /** Export CSV of filtered trucks */
+  function exportCsv() {
+    const headers = [
+      "truck_number",
+      "vin",
+      "make",
+      "model",
+      "year",
+      "status",
+      "driver_name",
+      "odometer",
+      "reg_due",
+      "insp_due",
+      "ifta_due",
+      "ins_due",
+    ];
+    const lines = [headers.join(",")];
+    filtered.forEach((t) => {
+      const row = [
+        t.truck_number ?? "",
+        t.vin ?? "",
+        t.make ?? "",
+        t.model ?? "",
+        t.year ?? "",
+        (t.status || "").toUpperCase(),
+        driversById[t.driver_id] ?? "",
+        t.odometer ?? "",
+        t.reg_due ?? "",
+        t.insp_due ?? "",
+        t.ifta_due ?? "",
+        t.ins_due ?? "",
+      ]
+        .map((x) => `"${String(x).replace(/"/g, '""')}"`)
+        .join(",");
+      lines.push(row);
     });
-  }, [rows, q]);
-
-  function openCreate() {
-    setEditing(null);
-    setForm(emptyForm);
-    setShowForm(true);
-  }
-
-  function openEdit(row) {
-    setEditing(row);
-    setForm({
-      truck_number: row.truck_number || "",
-      vin: row.vin || "",
-      make: row.make || "",
-      model: row.model || "",
-      model_year: row.model_year || "",
-      status: row.status || "ACTIVE",
-      current_driver_id: row.current_driver_id || null,
-      current_load_id: row.current_load_id || null,
-      registration_expiry: row.registration_expiry || "",
-      inspection_expiry: row.inspection_expiry || "",
-      ifta_expiry: row.ifta_expiry || "",
-      insurance_expiry: row.insurance_expiry || "",
-      odometer_miles: row.odometer_miles ?? "",
-      maintenance_due_miles: row.maintenance_due_miles ?? "",
-      last_service_date: row.last_service_date || "",
-      notes: row.notes || "",
+    const blob = new Blob([lines.join("\n")], {
+      type: "text/csv;charset=utf-8",
     });
-    setShowForm(true);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `trucks_${new Date()
+      .toISOString()
+      .slice(0, 19)
+      .replace(/[:T]/g, "-")}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
-  async function saveForm(e) {
-    e?.preventDefault?.();
-    setSaving(true);
-    setErrorMsg("");
-
-    const payload = {
-      ...form,
-      model_year: form.model_year ? Number(form.model_year) : null,
-      odometer_miles: form.odometer_miles === "" ? null : Number(form.odometer_miles),
-      maintenance_due_miles: form.maintenance_due_miles === "" ? null : Number(form.maintenance_due_miles),
-      current_driver_id: form.current_driver_id || null,
-      current_load_id: form.current_load_id || null,
-      last_service_date: form.last_service_date || null,
-      registration_expiry: form.registration_expiry || null,
-      inspection_expiry: form.inspection_expiry || null,
-      ifta_expiry: form.ifta_expiry || null,
-      insurance_expiry: form.insurance_expiry || null,
-    };
-
-    let error = null;
-    if (editing) {
-      const { error: e1 } = await supabase.from("trucks").update(payload).eq("id", editing.id);
-      error = e1;
-    } else {
-      const { error: e2 } = await supabase.from("trucks").insert(payload);
-      error = e2;
-    }
-
-    if (error) {
-      console.error(error);
-      setErrorMsg(error.message);
-    } else {
-      setShowForm(false);
-      setEditing(null);
-      setForm(emptyForm);
-      await fetchTrucks();
-    }
-    setSaving(false);
+  /** Alerts button clicked */
+  async function openAlertsDrawer() {
+    await fetchAlerts();
+    setAlertsOpen(true);
   }
 
-  async function deactivate(row) {
-    if (!confirm(`Deactivate (active=false) truck ${row.truck_number}?`)) return;
-    const { error } = await supabase.from("trucks").update({ active: false, status: "INACTIVE" }).eq("id", row.id);
-    if (error) {
-      alert(error.message);
-    } else {
-      await fetchTrucks();
-    }
-  }
-
-  function driverUrl(id) {
-    return id ? `/drivers/${id}` : null;
-  }
-  function loadUrl(id) {
-    return id ? `/loads/${id}` : null;
-  }
-
-  async function openAudit(row) {
-    setAuditTruck(row);
-    setShowAudit(true);
-    setAuditLoading(true);
-    const { data, error } = await supabase
-      .from("trucks_audit")
-      .select("*")
-      .eq("truck_id", row.id)
-      .order("changed_at", { ascending: false })
-      .limit(100);
-    if (error) {
-      console.error(error);
-      setAuditRows([]);
-    } else {
-      setAuditRows(data || []);
-    }
-    setAuditLoading(false);
+  /** Jump to truck in table from alert drawer */
+  function goToTruckRow(truckId) {
+    setAlertsOpen(false);
+    // Optional: you could auto-focus search with the truck number here if desired
+    // For now we rely on visual scan; future: programmatic scroll into view
   }
 
   return (
     <div className="p-4 md:p-6">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">Trucks</h1>
-          <div className="hidden md:flex items-center gap-2 text-xs text-zinc-500">
-            <FileWarning className="w-4 h-4" />
-            <span>Track registrations, inspections, IFTA, insurance</span>
-          </div>
-        </div>
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <h1 className="text-2xl font-semibold tracking-tight">Trucks</h1>
         <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="w-4 h-4 absolute left-2 top-2.5 text-zinc-400" />
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search truck #, VIN, driver, load…"
-              className="pl-8 pr-3 py-2 rounded-xl border border-zinc-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-zinc-300 dark:focus:ring-neutral-700"
-            />
-          </div>
+          {/* Alerts badge */}
           <button
-            onClick={fetchTrucks}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-zinc-200 dark:border-neutral-800 hover:bg-zinc-50 dark:hover:bg-neutral-900"
+            onClick={openAlertsDrawer}
+            className={cx(
+              "relative inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-sm",
+              "hover:bg-[var(--bg-hover)] transition"
+            )}
+            title="Open PM alerts"
+          >
+            <Bell className="w-4 h-4" />
+            Alerts
+            {/* Tiny counter (shows only when we already loaded) */}
+            {alertsLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin ml-1" />
+            ) : alerts?.length ? (
+              <span className="ml-1 inline-flex items-center justify-center min-w-[20px] h-[20px] text-xs rounded-full bg-red-500/20 text-red-300 border border-red-500/30 px-1">
+                {alerts.length}
+              </span>
+            ) : null}
+          </button>
+
+          <button
+            onClick={exportCsv}
+            className={cx(
+              "inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-sm",
+              "hover:bg-[var(--bg-hover)] transition"
+            )}
+            title="Export CSV (filtered)"
+          >
+            <Download className="w-4 h-4" />
+            Export CSV
+          </button>
+          <button
+            onClick={refetch}
+            className={cx(
+              "inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-sm",
+              "hover:bg-[var(--bg-hover)] transition"
+            )}
             title="Refresh"
           >
-            <RefreshCw className="w-4 h-4" />
-            <span className="text-sm hidden md:inline">Refresh</span>
+            {refetching ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Refreshing…
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-4 h-4" />
+                Refresh
+              </>
+            )}
           </button>
           <button
-            onClick={openCreate}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-black text-white hover:bg-black/90"
+            className={cx(
+              "inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-sm",
+              "bg-[var(--bg-active)] hover:opacity-90 transition"
+            )}
+            onClick={() => alert("TODO: Add Truck modal")}
           >
             <Plus className="w-4 h-4" />
-            <span className="text-sm">Add Truck</span>
+            Add Truck
           </button>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="mt-4">
-        {loading ? (
-          <div className="flex items-center gap-2 text-zinc-500">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span>Loading trucks…</span>
-          </div>
-        ) : errorMsg ? (
-          <div className="rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/30 p-4 text-red-700 dark:text-red-200">
-            {errorMsg}
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="rounded-xl border border-zinc-200 dark:border-neutral-800 p-8 text-center">
-            <div className="mx-auto w-10 h-10 rounded-full grid place-items-center bg-zinc-100 dark:bg-neutral-900 mb-3">
-              <TruckIcon />
-            </div>
-            <div className="font-medium">No trucks found</div>
-            <div className="text-sm text-zinc-500">Try a different search or add a truck.</div>
-            <div className="mt-4">
-              <button
-                onClick={openCreate}
-                className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-black text-white hover:bg-black/90"
-              >
-                <Plus className="w-4 h-4" />
-                <span className="text-sm">Add Truck</span>
-              </button>
-            </div>
-          </div>
+      <div className="text-xs text-[var(--text-soft)] mb-3">
+        Track registrations, inspections, IFTA, insurance
+        <span className="mx-2">•</span>
+        {lastUpdated ? (
+          <span>Last updated {lastUpdated.toLocaleTimeString()}</span>
         ) : (
-          <div className="overflow-x-auto rounded-2xl border border-zinc-200 dark:border-neutral-800">
-            <table className="min-w-full text-sm">
-              <thead className="bg-zinc-50 dark:bg-neutral-900/50 text-zinc-700 dark:text-zinc-300">
-                <tr>
-                  <Th>Truck #</Th>
-                  <Th>VIN</Th>
-                  <Th>Make / Model / Year</Th>
-                  <Th>Status</Th>
-                  <Th>Driver</Th>
-                  <Th>Load</Th>
-                  <Th>Compliance</Th>
-                  <Th>Odometer</Th>
-                  <Th className="text-right pr-3">Actions</Th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100 dark:divide-neutral-900">
-                {filtered.map((r) => (
-                  <tr key={r.id} className="hover:bg-zinc-50/60 dark:hover:bg-neutral-900/40">
-                    <Td mono>{r.truck_number || "—"}</Td>
-                    <Td mono className="truncate max-w-[160px]" title={r.vin || ""}>
-                      {r.vin || "—"}
-                    </Td>
-                    <Td>
-                      <div className="flex items-center gap-2">
-                        <span>{r.make || "—"}</span>
-                        <span className="text-zinc-500">/</span>
-                        <span>{r.model || "—"}</span>
-                        <span className="text-zinc-500">/</span>
-                        <span>{r.model_year || "—"}</span>
-                      </div>
-                    </Td>
-                    <Td>
-                      <StatusBadge status={r.status} />
-                    </Td>
-                    <Td>
-                      {r.current_driver_id ? (
-                        <a
-                          href={driverUrl(r.current_driver_id)}
-                          className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline"
-                          title="Open driver"
-                        >
-                          <LinkIcon className="w-3.5 h-3.5" />
-                          {r.current_driver_name || r.current_driver_id}
-                        </a>
-                      ) : (
-                        <span className="text-zinc-500">—</span>
-                      )}
-                    </Td>
-                    <Td>
-                      {r.current_load_id ? (
-                        <a
-                          href={loadUrl(r.current_load_id)}
-                          className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline"
-                          title="Open load"
-                        >
-                          <LinkIcon className="w-3.5 h-3.5" />
-                          {r.current_load_reference || r.current_load_id}
-                        </a>
-                      ) : (
-                        <span className="text-zinc-500">—</span>
-                      )}
-                    </Td>
-                    <Td>
-                      <div className="flex flex-col gap-1">
-                        <ExpiryPill label="Reg" date={r.registration_expiry} />
-                        <ExpiryPill label="Insp" date={r.inspection_expiry} />
-                        <ExpiryPill label="IFTA" date={r.ifta_expiry} />
-                        <ExpiryPill label="Ins" date={r.insurance_expiry} />
-                      </div>
-                    </Td>
-                    <Td mono>{r.odometer_miles ?? "—"}</Td>
-                    <Td className="text-right pr-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <IconBtn title="View audit" onClick={() => openAudit(r)}>
-                          <Clock className="w-4 h-4" />
-                        </IconBtn>
-                        <IconBtn title="Edit" onClick={() => openEdit(r)}>
-                          <PencilLine className="w-4 h-4" />
-                        </IconBtn>
-                        <IconBtn title="Deactivate" onClick={() => deactivate(r)}>
-                          <Trash2 className="w-4 h-4" />
-                        </IconBtn>
-                      </div>
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <span>Loading…</span>
         )}
       </div>
 
-      {/* Create/Edit modal */}
-      <Modal
-        open={showForm}
-        onClose={() => {
-          if (!saving) setShowForm(false);
-        }}
-        title={editing ? `Edit Truck — ${editing.truck_number}` : "Add Truck"}
-        footer={
-          <div className="flex items-center justify-between">
-            {errorMsg ? (
-              <div className="text-sm text-red-600 dark:text-red-300">{errorMsg}</div>
-            ) : (
-              <div className="text-sm text-zinc-500">Fields with “*” are required.</div>
-            )}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowForm(false)}
-                disabled={saving}
-                className="px-3 py-2 rounded-xl border border-zinc-200 dark:border-neutral-800 hover:bg-zinc-50 dark:hover:bg-neutral-900"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={saveForm}
-                disabled={saving}
-                className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-black text-white hover:bg-black/90 disabled:opacity-60"
-              >
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                <span>{editing ? "Save Changes" : "Create Truck"}</span>
-              </button>
-            </div>
-          </div>
-        }
-      >
-        <form className="grid grid-cols-1 md:grid-cols-2 gap-3" onSubmit={(e) => e.preventDefault()}>
-          <Field label="Truck # *">
-            <input
-              required
-              value={form.truck_number}
-              onChange={(e) => setForm((f) => ({ ...f, truck_number: e.target.value }))}
-              className="inp"
-              placeholder="AC-101"
-            />
-          </Field>
-          <Field label="VIN">
-            <input
-              value={form.vin}
-              onChange={(e) => setForm((f) => ({ ...f, vin: e.target.value }))}
-              className="inp"
-              placeholder="1HTMMMMM0PH123456"
-            />
-          </Field>
-
-          <Field label="Make">
-            <input
-              value={form.make}
-              onChange={(e) => setForm((f) => ({ ...f, make: e.target.value }))}
-              className="inp"
-              placeholder="Freightliner"
-            />
-          </Field>
-          <Field label="Model">
-            <input
-              value={form.model}
-              onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
-              className="inp"
-              placeholder="Cascadia"
-            />
-          </Field>
-
-          <Field label="Model Year">
-            <input
-              type="number"
-              value={form.model_year}
-              onChange={(e) => setForm((f) => ({ ...f, model_year: e.target.value }))}
-              className="inp"
-              placeholder="2023"
-            />
-          </Field>
-          <Field label="Status">
-            <select
-              value={form.status}
-              onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
-              className="inp"
-            >
-              <option>ACTIVE</option>
-              <option>IN_REPAIR</option>
-              <option>INACTIVE</option>
-              <option>RETIRED</option>
-            </select>
-          </Field>
-
-          <Field label="Assigned Driver">
-            <select
-              value={form.current_driver_id || ""}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, current_driver_id: e.target.value || null }))
-              }
-              className="inp"
-            >
-              <option value="">— None —</option>
-              {drivers.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.last_name}, {d.first_name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Assigned Load">
-            <select
-              value={form.current_load_id || ""}
-              onChange={(e) => setForm((f) => ({ ...f, current_load_id: e.target.value || null }))}
-              className="inp"
-            >
-              <option value="">— None —</option>
-              {loads.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.reference} ({l.status})
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <Field label="Registration Expiry">
-            <input
-              type="date"
-              value={form.registration_expiry || ""}
-              onChange={(e) => setForm((f) => ({ ...f, registration_expiry: e.target.value }))}
-              className="inp"
-            />
-          </Field>
-          <Field label="Inspection Expiry">
-            <input
-              type="date"
-              value={form.inspection_expiry || ""}
-              onChange={(e) => setForm((f) => ({ ...f, inspection_expiry: e.target.value }))}
-              className="inp"
-            />
-          </Field>
-
-          <Field label="IFTA Expiry">
-            <input
-              type="date"
-              value={form.ifta_expiry || ""}
-              onChange={(e) => setForm((f) => ({ ...f, ifta_expiry: e.target.value }))}
-              className="inp"
-            />
-          </Field>
-          <Field label="Insurance Expiry">
-            <input
-              type="date"
-              value={form.insurance_expiry || ""}
-              onChange={(e) => setForm((f) => ({ ...f, insurance_expiry: e.target.value }))}
-              className="inp"
-            />
-          </Field>
-
-          <Field label="Odometer (mi)">
-            <input
-              type="number"
-              step="0.1"
-              value={form.odometer_miles}
-              onChange={(e) => setForm((f) => ({ ...f, odometer_miles: e.target.value }))}
-              className="inp"
-              placeholder="152340.0"
-            />
-          </Field>
-          <Field label="Maint. Due (mi)">
-            <input
-              type="number"
-              step="0.1"
-              value={form.maintenance_due_miles}
-              onChange={(e) => setForm((f) => ({ ...f, maintenance_due_miles: e.target.value }))}
-              className="inp"
-              placeholder="160000.0"
-            />
-          </Field>
-
-          <Field label="Last Service Date">
-            <input
-              type="date"
-              value={form.last_service_date || ""}
-              onChange={(e) => setForm((f) => ({ ...f, last_service_date: e.target.value }))}
-              className="inp"
-            />
-          </Field>
-          <div className="md:col-span-2">
-            <Field label="Notes">
-              <textarea
-                rows={3}
-                value={form.notes}
-                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                className="inp"
-                placeholder="Maintenance notes, special permits, etc."
-              />
-            </Field>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Audit modal */}
-      <Modal
-        open={showAudit}
-        onClose={() => setShowAudit(false)}
-        title={
-          auditTruck
-            ? `Audit — ${auditTruck.truck_number} (${auditTruck.make || "—"} ${auditTruck.model || "—"})`
-            : "Audit"
-        }
-      >
-        {auditLoading ? (
-          <div className="flex items-center gap-2 text-zinc-500">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span>Loading audit…</span>
-          </div>
-        ) : auditRows.length === 0 ? (
-          <div className="text-sm text-zinc-500">No audit entries.</div>
-        ) : (
-          <div className="space-y-3">
-            {auditRows.map((a) => (
-              <div
-                key={a.id}
-                className="rounded-xl border border-zinc-200 dark:border-neutral-800 p-3 bg-white dark:bg-neutral-950"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-4 h-4 text-zinc-500" />
-                    <span className="text-xs text-zinc-500">
-                      {new Date(a.changed_at).toLocaleString()}
-                    </span>
-                  </div>
-                  <span
-                    className={cx(
-                      "text-xs px-2 py-1 rounded-lg",
-                      a.action === "INSERT"
-                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200"
-                        : a.action === "UPDATE"
-                        ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200"
-                        : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200"
-                    )}
-                  >
-                    {a.action}
-                  </span>
-                </div>
-                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
-                  <div className="text-xs">
-                    <div className="font-medium mb-1">Old</div>
-                    <pre className="p-2 rounded-lg bg-zinc-50 dark:bg-neutral-900 overflow-x-auto">
-{JSON.stringify(a.old_row, null, 2)}
-                    </pre>
-                  </div>
-                  <div className="text-xs">
-                    <div className="font-medium mb-1">New</div>
-                    <pre className="p-2 rounded-lg bg-zinc-50 dark:bg-neutral-900 overflow-x-auto">
-{JSON.stringify(a.new_row, null, 2)}
-                    </pre>
-                  </div>
-                </div>
-              </div>
+      {/* Filters */}
+      <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4 mb-4">
+        <div className="relative">
+          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 opacity-70" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search truck #, VIN, make/model, driver…"
+            className="w-full pl-9 pr-3 py-2 rounded-xl border bg-transparent outline-none"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm opacity-70">Status</span>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="flex-1 px-3 py-2 rounded-xl border bg-transparent"
+          >
+            <option value="ALL">All</option>
+            {STATUS_CHOICES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
             ))}
-          </div>
-        )}
-      </Modal>
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm opacity-70">Compliance</span>
+          <select
+            value={complianceFilter}
+            onChange={(e) => setComplianceFilter(e.target.value)}
+            className="flex-1 px-3 py-2 rounded-xl border bg-transparent"
+          >
+            <option value="ALL">All</option>
+            <option value="OVERDUE">Overdue</option>
+            <option value="DUE_SOON">Due ≤ 7 days</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm opacity-70">Driver</span>
+          <select
+            value={hasDriver}
+            onChange={(e) => setHasDriver(e.target.value)}
+            className="flex-1 px-3 py-2 rounded-xl border bg-transparent"
+          >
+            <option value="ANY">Any</option>
+            <option value="HAS">Has driver</option>
+            <option value="NONE">Unassigned</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Sort row */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2 text-sm">
+          <Filter className="w-4 h-4" />
+          <span className="opacity-70">Sort by</span>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="px-2 py-1 rounded-lg border bg-transparent"
+          >
+            <option value="EARLIEST_DUE">Earliest Compliance Due</option>
+            <option value="TRUCK_NUMBER">Truck #</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-2 text-xs opacity-70">
+          <Info className="w-4 h-4" />
+          <span className="hidden md:inline">
+            Tooltips: hover over Reg/Insp/IFTA/Ins to see labels
+          </span>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="overflow-x-auto rounded-xl border">
+        <table className="min-w-full text-sm">
+          <thead className="text-left text-[var(--text-soft)]">
+            <tr className="bg-black/10">
+              <th className="px-3 py-3">Truck #</th>
+              <th className="px-3 py-3">VIN</th>
+              <th className="px-3 py-3">Make / Model / Year</th>
+              <th className="px-3 py-3">Status</th>
+              <th className="px-3 py-3">Driver</th>
+              <th className="px-3 py-3">Compliance</th>
+              <th className="px-3 py-3">Odometer</th>
+              <th className="px-3 py-3">Docs</th>
+              <th className="px-3 py-3 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={9} className="px-3 py-10 text-center">
+                  <div className="inline-flex items-center gap-2 text-[var(--text-soft)]">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Loading trucks…
+                  </div>
+                </td>
+              </tr>
+            ) : error ? (
+              <tr>
+                <td colSpan={9} className="px-3 py-6">
+                  <div className="flex items-start gap-2 text-red-300">
+                    <AlertTriangle className="w-4 h-4 mt-0.5" />
+                    <div>
+                      <div className="font-medium">Failed to load</div>
+                      <div className="opacity-80">{error}</div>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            ) : filtered.length === 0 ? (
+              <tr>
+                <td colSpan={9} className="px-3 py-10 text-center opacity-70">
+                  No trucks match your filters.
+                </td>
+              </tr>
+            ) : (
+              filtered.map((t, idx) => {
+                const zebra = idx % 2 === 1 ? "bg-black/5" : "";
+                const reg = duePill(t.reg_due);
+                const insp = duePill(t.insp_due);
+                const ifta = duePill(t.ifta_due);
+                const ins = duePill(t.ins_due);
+
+                const statusBadge =
+                  (t.status || "").toUpperCase() === "ACTIVE"
+                    ? "bg-sky-500/20 text-sky-300 border border-sky-500/25"
+                    : (t.status || "").toUpperCase() === "MAINTENANCE"
+                    ? "bg-violet-500/20 text-violet-300 border border-violet-500/25"
+                    : "bg-zinc-500/20 text-zinc-300 border border-zinc-500/25";
+
+                const hasDocs = !!docPresence[t.id];
+
+                if (!menuAnchorRef.current[t.id])
+                  menuAnchorRef.current[t.id] = { current: null };
+
+                return (
+                  <tr key={t.id} className={cx(zebra, "border-t relative")}>
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      {t.truck_number ?? "—"}
+                    </td>
+                    <td className="px-3 py-3">{t.vin ?? "—"}</td>
+                    <td className="px-3 py-3">
+                      {(t.make || "—") +
+                        " / " +
+                        (t.model || "—") +
+                        " / " +
+                        (t.year || "—")}
+                    </td>
+                    <td className="px-3 py-3">
+                      <span
+                        className={cx(
+                          "px-2 py-1 rounded-lg text-xs",
+                          statusBadge
+                        )}
+                      >
+                        {(t.status || "—").toUpperCase()}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3">
+                      {t.driver_id ? (
+                        <button
+                          className="underline underline-offset-2 hover:opacity-90"
+                          onClick={() =>
+                            alert(
+                              `TODO: open driver profile for ${
+                                driversById[t.driver_id] || "Driver"
+                              }`
+                            )
+                          }
+                        >
+                          {driversById[t.driver_id] || "Driver"}
+                        </button>
+                      ) : (
+                        <span className="opacity-60">Unassigned</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span title="Registration">
+                          <span
+                            className={cx(
+                              "px-2 py-1 rounded-full text-xs",
+                              reg.className
+                            )}
+                          >
+                            Reg: {reg.text}
+                          </span>
+                        </span>
+                        <span title="Inspection">
+                          <span
+                            className={cx(
+                              "px-2 py-1 rounded-full text-xs",
+                              insp.className
+                            )}
+                          >
+                            Insp: {insp.text}
+                          </span>
+                        </span>
+                        <span title="IFTA (Fuel Tax)">
+                          <span
+                            className={cx(
+                              "px-2 py-1 rounded-full text-xs",
+                              ifta.className
+                            )}
+                          >
+                            IFTA: {ifta.text}
+                          </span>
+                        </span>
+                        <span title="Insurance">
+                          <span
+                            className={cx(
+                              "px-2 py-1 rounded-full text-xs",
+                              ins.className
+                            )}
+                          >
+                            Ins: {ins.text}
+                          </span>
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-3">{t.odometer ?? "—"}</td>
+                    <td className="px-3 py-3">
+                      <button
+                        className={cx(
+                          "inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-xs",
+                          hasDocs
+                            ? "border-emerald-500/40 text-emerald-300 bg-emerald-500/10"
+                            : "hover:bg-[var(--bg-hover)]"
+                        )}
+                        title={hasDocs ? "View documents" : "Add documents"}
+                        onClick={() => openDocs(t)}
+                      >
+                        <Paperclip className="w-4 h-4" />
+                        {hasDocs ? "Files" : "Add"}
+                      </button>
+                    </td>
+                    <td className="px-3 py-3 text-right relative">
+                      <button
+                        ref={(el) =>
+                          (menuAnchorRef.current[t.id].current = el)
+                        }
+                        className="px-2 py-1 rounded-lg border text-xs hover:bg-[var(--bg-hover)] inline-flex items-center gap-1"
+                        onClick={() => setMenuFor(menuFor === t.id ? null : t.id)}
+                        aria-haspopup="menu"
+                        aria-expanded={menuFor === t.id}
+                        aria-controls={`menu-${t.id}`}
+                      >
+                        <MoreVertical className="w-4 h-4" />
+                        Actions
+                      </button>
+
+                      {menuFor === t.id && (
+                        <div id={`menu-${t.id}`} className="relative">
+                          <ActionsMenu
+                            anchorRef={menuAnchorRef.current[t.id]}
+                            onClose={() => setMenuFor(null)}
+                            onEdit={() => {
+                              setActiveTruck(t);
+                              setEditOpen(true);
+                            }}
+                            onOdometer={() => {
+                              setActiveTruck(t);
+                              setOdoOpen(true);
+                            }}
+                            onAssign={() => {
+                              setActiveTruck(t);
+                              setAssignOpen(true);
+                            }}
+                            onUnassign={async () => {
+                              await unassignDriver(t);
+                            }}
+                            onDocs={() => openDocs(t)}
+                            onMaint={() => {
+                              setActiveTruck(t);
+                              setMaintOpen(true);
+                            }}
+                            onOpenPM={() => {
+                              setActiveTruck(t);
+                              setPmOpen(true);
+                            }}
+                          />
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* MODALS / DRAWERS */}
+      <TruckDocumentsModal
+        open={docsOpen}
+        onClose={closeDocs}
+        truck={activeTruck}
+      />
+      <OdometerModal
+        open={odoOpen}
+        onClose={() => setOdoOpen(false)}
+        truck={activeTruck}
+        onSaved={refetch}
+      />
+      <PMSchedulerModal
+        open={pmOpen}
+        onClose={() => setPmOpen(false)}
+        truck={activeTruck}
+        onSaved={refetch}
+      />
+      <AssignDriverModal
+        open={assignOpen}
+        onClose={() => setAssignOpen(false)}
+        truck={activeTruck}
+        onSaved={refetch}
+      />
+      <EditComplianceModal
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        truck={activeTruck}
+        onSaved={refetch}
+      />
+      <MaintenanceModal
+        open={maintOpen}
+        onClose={() => setMaintOpen(false)}
+        truck={activeTruck}
+        onSaved={refetch}
+      />
+
+      <PMAlertsDrawer
+        open={alertsOpen}
+        onClose={() => setAlertsOpen(false)}
+        alerts={alerts}
+        onResolve={resolveAlert}
+        onGotoTruck={goToTruckRow}
+        refetching={alertsLoading}
+        onRefresh={fetchAlerts}
+      />
     </div>
   );
 }
-
-/* --------------------------------- bits ---------------------------------- */
-function Th({ children, className = "" }) {
-  return (
-    <th className={cx("px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide", className)}>
-      {children}
-    </th>
-  );
-}
-function Td({ children, className = "", mono = false }) {
-  return (
-    <td className={cx("px-3 py-2 align-top", mono && "font-mono", className)}>{children}</td>
-  );
-}
-function IconBtn({ title, onClick, children }) {
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      className="p-2 rounded-lg border border-zinc-200 dark:border-neutral-800 hover:bg-zinc-50 dark:hover:bg-neutral-900"
-    >
-      {children}
-    </button>
-  );
-}
-function Field({ label, children }) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-xs text-zinc-600 dark:text-zinc-400">{label}</span>
-      {children}
-    </label>
-  );
-}
-function TruckIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="w-6 h-6 text-zinc-600 dark:text-zinc-300">
-      <path
-        fill="currentColor"
-        d="M18 6h-5v7h9V9l-4-3zM2 13h10V6H2v7zm3 6a2 2 0 1 0 0-4a2 2 0 0 0 0 4m12 0a2 2 0 1 0 0-4a2 2 0 0 0 0 4"
-      />
-    </svg>
-  );
-}
-
-/* --------------------------------- styles -------------------------------- */
-const style = document.createElement("style");
-style.innerHTML = `
-.inp {
-  @apply w-full px-3 py-2 rounded-xl border border-zinc-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-300 dark:focus:ring-neutral-700;
-}
-`;
-document.head.appendChild(style);

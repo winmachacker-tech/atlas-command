@@ -1,5 +1,13 @@
-.backup
-.git
-.github
-node_modules
+﻿node_modules
 dist
+build
+.vercel/cache
+.vscode
+.DS_Store
+*.log
+*.tmp
+.backup
+**/.backup/**
+.env
+.env.*
+!.env.example

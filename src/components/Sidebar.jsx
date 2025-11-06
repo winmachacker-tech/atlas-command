@@ -8,13 +8,17 @@ import {
   Users,
   Route as RouteIcon,
   CreditCard,
+  UserRound,
+  Paintbrush,
+  Bell,
+  Plug,
+  Shield,
 } from "lucide-react";
 
 /**
  * Sidebar for Atlas Command
  * - Consistent enterprise styling
- * - Keeps all existing routes
- * - Adds working "Team Management" link under Settings
+ * - Settings section with Appearance
  */
 
 export default function Sidebar() {
@@ -66,6 +70,16 @@ export default function Sidebar() {
         </NavLink>
 
         <NavLink
+          to="/drivers"
+          className={({ isActive }) =>
+            `${linkBase} ${isActive ? linkActive : linkInactive}`
+          }
+        >
+          <Users className="h-4 w-4" />
+          Drivers
+        </NavLink>
+
+        <NavLink
           to="/in-transit"
           className={({ isActive }) =>
             `${linkBase} ${isActive ? linkActive : linkInactive}`
@@ -96,19 +110,57 @@ export default function Sidebar() {
         </div>
 
         <NavLink
-          to="/settings"
-          end
+          to="/settings/profile"
           className={({ isActive }) =>
             `${linkBase} ${isActive ? linkActive : linkInactive}`
           }
         >
-          <Settings className="h-4 w-4" />
-          General Settings
+          <UserRound className="h-4 w-4" />
+          Profile & Account
         </NavLink>
 
-        {/* ✅ Team Management Link */}
         <NavLink
-          to="/settings/teammanagement"
+          to="/settings/appearance"
+          className={({ isActive }) =>
+            `${linkBase} ${isActive ? linkActive : linkInactive}`
+          }
+        >
+          <Paintbrush className="h-4 w-4" />
+          Appearance
+        </NavLink>
+
+        <NavLink
+          to="/settings/notifications"
+          className={({ isActive }) =>
+            `${linkBase} ${isActive ? linkActive : linkInactive}`
+          }
+        >
+          <Bell className="h-4 w-4" />
+          Notifications
+        </NavLink>
+
+        <NavLink
+          to="/settings/integrations"
+          className={({ isActive }) =>
+            `${linkBase} ${isActive ? linkActive : linkInactive}`
+          }
+        >
+          <Plug className="h-4 w-4" />
+          Integrations
+        </NavLink>
+
+        <NavLink
+          to="/settings/security"
+          className={({ isActive }) =>
+            `${linkBase} ${isActive ? linkActive : linkInactive}`
+          }
+        >
+          <Shield className="h-4 w-4" />
+          Security
+        </NavLink>
+
+        <NavLink
+          to="/settings/team"
           className={({ isActive }) =>
             `${linkBase} ${isActive ? linkActive : linkInactive}`
           }
