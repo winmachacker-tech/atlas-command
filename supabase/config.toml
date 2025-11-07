@@ -1,0 +1,8 @@
+# supabase/config.toml
+# Configure Edge Function behavior and allow preflight CORS requests
+# for the ai-chat function (only this one).
+
+[functions]
+
+[functions."ai-chat"]
+verify_jwt = false

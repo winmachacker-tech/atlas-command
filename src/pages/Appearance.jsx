@@ -1,6 +1,7 @@
 // src/pages/Appearance.jsx
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { supabase } from "../lib/supabase";
+import { useTheme } from "../context/ThemeProvider"; // ✅ NEW
 import {
   Loader2,
   Save,
@@ -84,64 +85,27 @@ export default function Appearance() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
   const [user, setUser] = useState(null);
-  const [form, setForm] = useState(DEFAULTS);
+  
+  // ✅ Use ThemeProvider context
+  const { theme, accent, setTheme, setAccent } = useTheme();
+  
+  const [form, setForm] = useState({
+    theme: theme,
+    accent: accent,
+    font_scale: "md",
+  });
 
   const patch = (k, v) => {
     setForm((f) => ({ ...f, [k]: v }));
     
-    // Apply changes immediately for instant preview
+    // ✅ Apply changes immediately via context
     if (k === "theme") {
-      applyTheme(v);
+      setTheme(v);
     } else if (k === "accent") {
-      applyAccent(v);
+      setAccent(v);
     } else if (k === "font_scale") {
       applyFontScale(v);
     }
-  };
-
-  // Apply theme immediately
-  const applyTheme = (theme) => {
-    const root = document.documentElement;
-    
-    if (theme === "light") {
-      root.classList.remove("dark");
-      root.classList.add("light");
-    } else if (theme === "dark") {
-      root.classList.remove("light");
-      root.classList.add("dark");
-    } else {
-      // System theme
-      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-      root.classList.remove("light", "dark");
-      if (prefersDark) {
-        root.classList.add("dark");
-      } else {
-        root.classList.add("light");
-      }
-    }
-  };
-
-  // Apply accent color immediately
-  const applyAccent = (accent) => {
-    const root = document.documentElement;
-    
-    // Map accent names to CSS variable values
-    const accentColors = {
-      emerald: { primary: "#10b981", hover: "#059669" },
-      sky: { primary: "#0ea5e9", hover: "#0284c7" },
-      violet: { primary: "#8b5cf6", hover: "#7c3aed" },
-      amber: { primary: "#f59e0b", hover: "#d97706" },
-      rose: { primary: "#f43f5e", hover: "#e11d48" },
-      cyan: { primary: "#06b6d4", hover: "#0891b2" },
-      lime: { primary: "#84cc16", hover: "#65a30d" },
-      pink: { primary: "#ec4899", hover: "#db2777" },
-    };
-
-    const colors = accentColors[accent] || accentColors.emerald;
-    
-    // Update CSS variables
-    root.style.setProperty("--accent-primary", colors.primary);
-    root.style.setProperty("--accent-hover", colors.hover);
   };
 
   // Apply font scale immediately
@@ -188,33 +152,28 @@ export default function Appearance() {
         if (!isMounted) return;
 
         if (data) {
-          setForm({ ...DEFAULTS, ...data });
-          // Apply immediately
-          applyTheme(data.theme || DEFAULTS.theme);
-          applyAccent(data.accent || DEFAULTS.accent);
+          setForm({
+            theme: data.theme || theme,
+            accent: data.accent || accent,
+            font_scale: data.font_scale || DEFAULTS.font_scale,
+          });
+          // Apply font scale (theme/accent handled by context)
           applyFontScale(data.font_scale || DEFAULTS.font_scale);
         } else {
           // Try localStorage as fallback
           try {
-            const localTheme = localStorage.getItem("atlas.theme");
-            const localAccent = localStorage.getItem("atlas.accent");
             const localFont = localStorage.getItem("atlas.fontScale");
             
             const loadedForm = {
-              theme: localTheme || DEFAULTS.theme,
-              accent: localAccent || DEFAULTS.accent,
+              theme: theme,
+              accent: accent,
               font_scale: localFont || DEFAULTS.font_scale,
             };
             
             setForm(loadedForm);
-            // Apply immediately
-            applyTheme(loadedForm.theme);
-            applyAccent(loadedForm.accent);
             applyFontScale(loadedForm.font_scale);
           } catch {
-            setForm(DEFAULTS);
-            applyTheme(DEFAULTS.theme);
-            applyAccent(DEFAULTS.accent);
+            setForm({ theme, accent, font_scale: DEFAULTS.font_scale });
             applyFontScale(DEFAULTS.font_scale);
           }
         }
@@ -237,10 +196,8 @@ export default function Appearance() {
     setMsg(null);
 
     try {
-      // Save to localStorage immediately for instant feedback
+      // Save font scale to localStorage (theme/accent already handled by context)
       try {
-        localStorage.setItem("atlas.theme", form.theme);
-        localStorage.setItem("atlas.accent", form.accent);
         localStorage.setItem("atlas.fontScale", form.font_scale);
       } catch {}
 
@@ -262,8 +219,8 @@ export default function Appearance() {
           throw error;
         }
       } catch (dbError) {
-        // If DB save fails, localStorage still worked
-        console.warn("Database save failed, using localStorage only:", dbError);
+        // If DB save fails, context/localStorage still worked
+        console.warn("Database save failed, using context/localStorage only:", dbError);
       }
 
       setMsg({ kind: "success", text: "Appearance saved successfully!" });

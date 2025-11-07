@@ -12,18 +12,23 @@
   <body>
     <div id="root"></div>
     <style id="dark-bridge-inline">
-  /* Soft-dark variables (not pitch black) */
+  /* TRUE DARK THEME - Soft-dark variables */
   html[data-theme="dark"] {
-    --bg-base:      #0f131a;
-    --bg-surface:   #171c26;
-    --text-base:    #eaecef;
-    --text-muted:   #a2a9b3;
-    --border-weak:  #222630;
-    --border-strong:#2b303b;
+    --bg-base:      #0a0a0b;   /* VERY dark page background */
+    --bg-surface:   #111116;   /* dark cards/panels */
+    --bg-panel:     #0f1014;   /* VERY dark dropdowns/modals */
+    --bg-hover:     #1a1a20;   /* hover state */
+    --bg-active:    #1e1e26;   /* active state */
+    --text-base:    #e8e9eb;   /* high-contrast text */
+    --text-muted:   #8a8f98;   /* secondary text */
+    --border:       #1f2128;   /* main border */
+    --border-subtle:#16171c;   /* subtle border */
+    --border-weak:  #16171c;
+    --border-strong:#2b2d35;
     color-scheme: dark;
   }
 
-  /* Force page background & text even if Tailwind has bg-white */
+  /* Force page background & text */
   html[data-theme="dark"] body {
     background: var(--bg-base) !important;
     color: var(--text-base) !important;
@@ -49,12 +54,12 @@
 
   /* Sidebar hover/active in soft-dark using brand */
   html[data-theme="dark"] aside nav a:hover {
-    background-color: #1b2130 !important;
+    background-color: var(--bg-hover) !important;
     border-color: var(--ac-primary-300) !important;
   }
   html[data-theme="dark"] aside nav a.active,
   html[data-theme="dark"] aside nav a[aria-current="page"] {
-    background-color: #1b2130 !important;
+    background-color: var(--bg-active) !important;
     border-color: var(--ac-primary-400) !important;
     box-shadow: inset 0 0 0 1px var(--ac-primary-300);
   }
@@ -90,7 +95,7 @@
   html[data-theme="dark"] .divide-zinc-200 > :not([hidden]) ~ :not([hidden]),
   html[data-theme="dark"] .divide-gray-200 > :not([hidden]) ~ :not([hidden]),
   html[data-theme="dark"] .divide-neutral-200 > :not([hidden]) ~ :not([hidden]) {
-    border-color: #262b36 !important;
+    border-color: var(--border-strong) !important;
   }
 </style>
 

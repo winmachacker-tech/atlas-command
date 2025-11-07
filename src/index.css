@@ -1,6 +1,5 @@
 /* src/index.css */
 /* Tailwind layers */
-@import "./styles/dark-bridge.css";
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -13,6 +12,7 @@
   /* Base surfaces & text (LIGHT) */
   --bg-base:    #ffffff;
   --bg-surface: #f8f9fa;  /* subtle card/table background */
+  --bg-panel:   #ffffff;  /* SOLID panel background (dropdowns, modals) */
   --text-base:  #0f172a;  /* slate-900 */
   --text-muted: #6b7280;  /* gray-500 */
 
@@ -34,11 +34,14 @@
 }
 
 html.dark {
-  /* Base surfaces & text (DARK) */
-  --bg-base:    #0b0b0c;   /* near black */
-  --bg-surface: #161618;   /* card/table bg */
-  --text-base:  #f9fafb;   /* gray-50 */
-  --text-muted: #9ca3af;   /* gray-400 */
+  /* Base surfaces & text (DARK) - TRUE DARK THEME */
+  --bg-base:      #0a0a0b;   /* page background - VERY dark */
+  --bg-surface:   #111116;   /* card/table bg - dark */
+  --bg-panel:     #0f1014;   /* SOLID panel background (dropdowns, modals) - VERY dark */
+  --bg-hover:     #1a1a20;   /* hover state */
+  --bg-active:    #1e1e26;   /* active state */
+  --text-base:    #e8e9eb;   /* high-contrast text */
+  --text-muted:   #8a8f98;   /* secondary text */
 
   /* Keep emerald accent in dark; tune low tones for contrast */
   --accent-50:  #06261b;
@@ -52,12 +55,14 @@ html.dark {
   --accent-800: #097354;
   --accent-900: #075a44;
 
-  --border-weak:  #26272b;
-  --border-strong:#313238;
+  --border:         #1f2128;   /* main border */
+  --border-subtle:  #16171c;   /* subtle border */
+  --border-weak:    #16171c;
+  --border-strong:  #2b2d35;
 }
 
 /* ----------------------------- Optional accents --------------------------- */
-/* Switch by setting <html data-accent="blue|violet|amber|rose|sky|zinc"> */
+/* Switch by setting <html data-accent="blue|violet|amber|rose|sky|zinc|cyan|lime|pink"> */
 
 html[data-accent="zinc"] {
   --accent-50:#fafafa; --accent-100:#f4f4f5; --accent-200:#e4e4e7; --accent-300:#d4d4d8;
@@ -88,6 +93,21 @@ html[data-accent="sky"] {
   --accent-50:#f0f9ff; --accent-100:#e0f2fe; --accent-200:#bae6fd; --accent-300:#7dd3fc;
   --accent-400:#38bdf8; --accent-500:#0ea5e9; --accent-600:#0284c7; --accent-700:#0369a1;
   --accent-800:#075985; --accent-900:#0c4a6e;
+}
+html[data-accent="cyan"] {
+  --accent-50:#ecfeff; --accent-100:#cffafe; --accent-200:#a5f3fc; --accent-300:#67e8f9;
+  --accent-400:#22d3ee; --accent-500:#06b6d4; --accent-600:#0891b2; --accent-700:#0e7490;
+  --accent-800:#155e75; --accent-900:#164e63;
+}
+html[data-accent="lime"] {
+  --accent-50:#f7fee7; --accent-100:#ecfccb; --accent-200:#d9f99d; --accent-300:#bef264;
+  --accent-400:#a3e635; --accent-500:#84cc16; --accent-600:#65a30d; --accent-700:#4d7c0f;
+  --accent-800:#3f6212; --accent-900:#365314;
+}
+html[data-accent="pink"] {
+  --accent-50:#fdf2f8; --accent-100:#fce7f3; --accent-200:#fbcfe8; --accent-300:#f9a8d4;
+  --accent-400:#f472b6; --accent-500:#ec4899; --accent-600:#db2777; --accent-700:#be185d;
+  --accent-800:#9d174d; --accent-900:#831843;
 }
 
 /* ------------------------------- App scaffolds ---------------------------- */
@@ -149,9 +169,9 @@ html.dark *::-webkit-scrollbar-thumb { background: rgba(120, 120, 128, .45); }
 .dark .border-zinc-200,
 .dark .border-gray-200,
 .dark .border-neutral-200 { border-color: var(--border-weak) !important; }
+
 /* ==========================================================================
    Atlas Command — Accent outlines for tiles & icons (non-breaking)
-   Paste at the very bottom of src/index.css
    Uses your existing --ac-primary scale injected by ThemeProvider.
    ========================================================================== */
 
@@ -202,28 +222,11 @@ main svg.lucide {
   stroke: var(--ac-primary-600);
 }
 
-/* 4) Dark-mode safety (keep it gentle but readable)
-   If you want darker cards in dark mode, comment this out. */
-html.dark main .rounded-2xl.border,
-html.dark main .surface-card {
-  background-color: var(--ac-primary-50) !important; /* still light pastel */
-  border-color: var(--ac-primary-300) !important;
-}/* ==========================================================================
-   Soft-Dark global theme (keeps brand color accents)
+/* ==========================================================================
+   Dark Mode Card Styling - Keep cards dark with accent borders
    ========================================================================== */
 
-/* Softer dark neutrals (not pure black) */
-html.dark {
-  --bg-base:      #0f131a;   /* page background */
-  --bg-surface:   #171c26;   /* cards / panels */
-  --text-base:    #eaecef;   /* high-contrast text */
-  --text-muted:   #a2a9b3;   /* secondary text */
-
-  --border-weak:  #222630;
-  --border-strong:#2b303b;
-}
-
-/* Cards / tiles: subtle elevation + brand outline (no heavy pastel fill) */
+/* Cards / tiles: subtle elevation + brand outline */
 html.dark main .surface-card,
 html.dark main .rounded-2xl.border {
   background-color: var(--bg-surface) !important;

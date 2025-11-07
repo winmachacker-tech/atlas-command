@@ -20,10 +20,11 @@ import {
   Shield,
   CreditCard,
   RefreshCw,
+  Bot,
 } from "lucide-react";
-import ThemeMenu from "../components/ThemeMenu.jsx";
 import { supabase } from "../lib/supabase";
-import { trackLogout } from "../lib/activityTracker"; // ✅ NEW
+import { trackLogout } from "../lib/activityTracker";
+import AIQuickLauncher from "../components/AIQuickLauncher";
 
 /* -------------------------- tiny class joiner -------------------------- */
 function cx(...a) {
@@ -182,9 +183,10 @@ function AvatarMenu({ onSignOut }) {
       {open && (
         <div
           role="menu"
-          className="absolute right-0 mt-2 w-56 rounded-xl border border-[var(--border)] bg-[var(--bg-panel)] shadow-lg overflow-hidden z-40"
+          className="absolute right-0 mt-2 w-56 rounded-xl border border-[var(--border)] bg-[var(--bg-panel)] shadow-2xl overflow-hidden z-50"
+          style={{ backgroundColor: 'var(--bg-panel)' }}
         >
-          <div className="px-3 py-2 text-xs text-[var(--text-muted)]">
+          <div className="px-3 py-2 text-xs text-[var(--text-muted)] bg-[var(--bg-surface)]">
             {email || "Signed in"}
           </div>
           <button
@@ -192,7 +194,7 @@ function AvatarMenu({ onSignOut }) {
               setOpen(false);
               nav("/profile");
             }}
-            className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] transition"
+            className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] transition text-[var(--text-base)]"
             role="menuitem"
           >
             Profile &amp; Account
@@ -202,10 +204,10 @@ function AvatarMenu({ onSignOut }) {
               setOpen(false);
               nav("/settings/appearance");
             }}
-            className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] transition"
+            className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] transition text-[var(--text-base)]"
             role="menuitem"
           >
-            Appearance
+            Appearance &amp; Theme
           </button>
           <div className="my-1 h-px bg-[var(--border-subtle)]" />
           <button
@@ -328,8 +330,7 @@ function NotificationBell() {
         <div
           className={cx(
             "absolute right-0 mt-2 w-[360px] max-w-[90vw] rounded-xl z-40 overflow-hidden",
-            // SOLID panel (no transparency) + stronger shadow + subtle ring
-            "bg-[var(--bg-panel)] border border-[var(--border)] shadow-2xl ring-1 ring-black/10"
+            "bg-[var(--bg-panel)] border border-[var(--border)] shadow-2xl"
           )}
         >
           <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border-subtle)]">
@@ -449,9 +450,7 @@ export default function MainLayout() {
 
   const signOut = useCallback(async () => {
     try {
-      // ✅ Track logout before signing out
       trackLogout().catch(err => console.error("Failed to track logout:", err));
-      
       await supabase.auth.signOut();
     } finally {
       navigate("/login", { replace: true });
@@ -541,13 +540,22 @@ export default function MainLayout() {
                   Team Management
                 </SideLink>
               </SideGroup>
+
+              {/* AI Tools */}
+              <SideGroup
+                id="ai"
+                title="AI Tools"
+                icon={Bot}
+                defaultOpen={true}
+              >
+                <SideLink to="/dispatch-ai" icon={Bot}>
+                  Dispatch AI (Lab)
+                </SideLink>
+              </SideGroup>
             </nav>
 
             {/* Footer actions */}
             <div className="mt-auto pt-3 space-y-2">
-              <div className="px-2">
-                <ThemeMenu />
-              </div>
               <button
                 onClick={signOut}
                 className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-base)] hover:bg-[var(--bg-hover)] transition"
@@ -576,13 +584,12 @@ export default function MainLayout() {
               <span className="font-semibold">Atlas Command</span>
               <div className="flex items-center gap-2">
                 <NotificationBell />
-                <ThemeMenu />
               </div>
             </div>
           </div>
 
           {/* Desktop top bar */}
-          <div className="hidden md:block sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg-panel)]/80 backdrop-blur">
+          <div className="hidden md:block sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg-panel)] backdrop-blur-sm">
             <div className="flex items-center justify-end px-6 py-3 gap-2">
               <NotificationBell />
               <AvatarMenu onSignOut={signOut} />
@@ -592,6 +599,7 @@ export default function MainLayout() {
           {/* Routed content */}
           <div className="p-4 md:p-6">
             <Outlet />
+            <AIQuickLauncher />
           </div>
         </main>
       </div>

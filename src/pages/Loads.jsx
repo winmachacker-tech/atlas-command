@@ -18,13 +18,15 @@ import {
   Save,
   MoreVertical,
   UserCheck,
-  FileText,            // 👈 NEW: for Documents button
+  FileText,            // for Documents button
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import AddLoadModal from "../components/AddLoadModal";
 import AssignDriverModal from "../components/AssignDriverModal";
 import EditLoadModal from "../components/EditLoadModal";
-import LoadDocuments from "../components/LoadDocuments"; // ✅ keep a single import
+import LoadDocuments from "../components/LoadDocuments";
+import { Link } from "react-router-dom";
+
 
 /** MUST match DB enum/check */
 const STATUS_CHOICES = [
@@ -115,7 +117,7 @@ export default function Loads() {
   // Edit load
   const [editingLoad, setEditingLoad] = useState(null);
 
-  // Documents workflow 👇
+  // Documents workflow
   const [docsLoad, setDocsLoad] = useState(null);
 
   const [me, setMe] = useState({ email: "", id: "" });
@@ -137,7 +139,7 @@ export default function Loads() {
           .from("loads")
           .select(`
             *,
-            driver:v_drivers_active!loads_driver_id_fkey(id, first_name, last_name)
+            driver:drivers!loads_driver_id_fkey(id, first_name, last_name)
           `)
           .order("created_at", { ascending: false });
         if (error) throw error;
@@ -160,7 +162,7 @@ export default function Loads() {
         .from("loads")
         .select(`
           *,
-          driver:v_drivers_active!loads_driver_id_fkey(id, first_name, last_name)
+          driver:drivers!loads_driver_id_fkey(id, first_name, last_name)
         `)
         .eq("id", id)
         .single();
@@ -207,7 +209,10 @@ export default function Loads() {
         .from("loads")
         .update({ status: next, updated_at: new Date().toISOString() })
         .eq("id", id)
-        .select()
+        .select(`
+          *,
+          driver:drivers!loads_driver_id_fkey(id, first_name, last_name)
+        `)
         .single();
       if (error) throw error;
       setLoads((prev) => prev.map((l) => (l.id === id ? data : l)));
@@ -230,7 +235,10 @@ export default function Loads() {
       updated_at: new Date().toISOString(),
     };
     try {
-      const { data, error } = await supabase.from("loads").update(full).eq("id", loadId).select().single();
+      const { data, error } = await supabase.from("loads").update(full).eq("id", loadId).select(`
+        *,
+        driver:drivers!loads_driver_id_fkey(id, first_name, last_name)
+      `).single();
       if (error) {
         // Retry minimal if optional cols missing
         if (String(error?.message || "").includes("column") || error?.code === "42703") {
@@ -238,10 +246,13 @@ export default function Loads() {
             .from("loads")
             .update({ status: "PROBLEM", updated_at: new Date().toISOString() })
             .eq("id", loadId)
-            .select()
+            .select(`
+              *,
+              driver:drivers!loads_driver_id_fkey(id, first_name, last_name)
+            `)
             .single();
           if (e2) throw e2;
-          setLoads((prev) => prev.map((l) => (l.id === loadId ? data2 : l)));
+          setLoads((prev) => prev.map((l) => (l.id === loadId ? data2 : l))); // fixed prev.id bug
         } else {
           throw error;
         }
@@ -257,14 +268,20 @@ export default function Loads() {
     const basic = { status: "IN_TRANSIT", updated_at: new Date().toISOString() };
     const full = { ...basic, problem_note: null, problem_priority: null, problem_owner: null, problem_flagged_at: null };
     try {
-      const { data, error } = await supabase.from("loads").update(full).eq("id", loadId).select().single();
+      const { data, error } = await supabase.from("loads").update(full).eq("id", loadId).select(`
+        *,
+        driver:drivers!loads_driver_id_fkey(id, first_name, last_name)
+      `).single();
       if (error) {
         if (String(error?.message || "").includes("column") || error?.code === "42703") {
           const { data: data2, error: e2 } = await supabase
             .from("loads")
             .update(basic)
             .eq("id", loadId)
-            .select()
+            .select(`
+              *,
+              driver:drivers!loads_driver_id_fkey(id, first_name, last_name)
+            `)
             .single();
           if (e2) throw e2;
           setLoads((prev) => prev.map((l) => (l.id === loadId ? data2 : l)));
@@ -293,7 +310,10 @@ export default function Loads() {
         .from("loads")
         .update({ notes: notes ?? null, updated_at: new Date().toISOString() })
         .eq("id", loadId)
-        .select()
+        .select(`
+          *,
+          driver:drivers!loads_driver_id_fkey(id, first_name, last_name)
+        `)
         .single();
       if (error) {
         if (String(error?.message || "").includes("column") || error?.code === "42703") {
@@ -419,7 +439,20 @@ export default function Loads() {
               <tbody>
                 {visibleRows.map((l) => (
                   <tr key={l.id} className="border-t border-white/10 hover:bg-white/5">
-                    <Td>{l.reference || "—"}</Td>
+                    {/* 🔗 Only change: make Load # a link to /loads/:id */}
+                    <Td>
+                      {l.id ? (
+                        <Link
+                          to={`/loads/${l.id}`}
+                          className="text-emerald-400 hover:underline font-medium"
+                        >
+                          {l.reference || "—"}
+                        </Link>
+                      ) : (
+                        l.reference || "—"
+                      )}
+                    </Td>
+
                     <Td>{l.shipper || "—"}</Td>
                     <Td>
                       {l.driver ? (
@@ -527,7 +560,7 @@ export default function Loads() {
                           <Ico as={StickyNote} />
                         </IconButton>
 
-                        {/* Documents - icon button 👇 */}
+                        {/* Documents - icon button */}
                         <IconButton
                           title="Documents"
                           onClick={() => setDocsLoad(l)}
@@ -566,8 +599,12 @@ export default function Loads() {
         <EditLoadModal
           load={editingLoad}
           onClose={() => setEditingLoad(null)}
-          onUpdated={(updatedLoad) => {
-            setLoads((prev) => prev.map((l) => (l.id === updatedLoad.id ? updatedLoad : l)));
+          onUpdated={async (updatedLoad) => {
+            // ensure embedded driver is hydrated
+            const fresh = await refreshOne(updatedLoad.id);
+            if (fresh) {
+              setLoads((prev) => prev.map((l) => (l.id === fresh.id ? fresh : l)));
+            }
             setEditingLoad(null);
           }}
         />
@@ -578,8 +615,12 @@ export default function Loads() {
         <AssignDriverModal
           load={assigningDriverLoad}
           onClose={() => setAssigningDriverLoad(null)}
-          onAssigned={(updatedLoad) => {
-            setLoads((prev) => prev.map((l) => (l.id === updatedLoad.id ? updatedLoad : l)));
+          onAssigned={async (updatedLoad) => {
+            // updatedLoad may not include embedded driver; refresh to hydrate
+            const fresh = await refreshOne(updatedLoad.id);
+            if (fresh) {
+              setLoads((prev) => prev.map((l) => (l.id === fresh.id ? fresh : l)));
+            }
             setAssigningDriverLoad(null);
           }}
         />
@@ -618,7 +659,10 @@ export default function Loads() {
                   updated_at: new Date().toISOString(),
                 })
                 .eq("id", viewingProblemLoad.id)
-                .select()
+                .select(`
+                  *,
+                  driver:drivers!loads_driver_id_fkey(id, first_name, last_name)
+                `)
                 .single();
 
               if (error) {
@@ -649,7 +693,7 @@ export default function Loads() {
         />
       )}
 
-      {/* Documents modal 👇 */}
+      {/* Documents modal */}
       {!!docsLoad && (
         <DocumentsModal
           load={docsLoad}
@@ -1080,7 +1124,7 @@ function NotesModal({ load, onClose, onSave }) {
 function DocumentsModal({ load, onClose }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-      <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[var(--bg-base,#0B0B0F)] p-4">
+    <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[var(--bg-base,#0B0B0F)] p-4">
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-white/10">

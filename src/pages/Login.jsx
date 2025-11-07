@@ -9,7 +9,10 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const nav = useNavigate();
   const location = useLocation();
-  const from = location.state?.from?.pathname || "/";
+  
+  // ✅ Get redirect from query params (not location state)
+  const params = new URLSearchParams(location.search);
+  const redirectTo = params.get("redirect") || location.state?.from?.pathname || "/";
 
   async function onLogin(e) {
     e.preventDefault();
@@ -24,7 +27,7 @@ export default function Login() {
       // ✅ Track successful login
       trackLogin().catch(err => console.error("Failed to track login:", err));
       
-      nav(from, { replace: true });
+      nav(redirectTo, { replace: true });
     } catch (err) {
       // ✅ Track failed login
       trackFailedLogin(err.message).catch(e => console.error("Failed to track failed login:", e));

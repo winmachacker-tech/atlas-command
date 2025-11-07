@@ -27,6 +27,7 @@ import {
 import { supabase } from "../lib/supabase";
 import TruckDocumentsModal from "../components/TruckDocumentsModal.jsx";
 import PMSchedulerModal from "../components/PMSchedulerModal.jsx";
+import { Link } from "react-router-dom"; // 👈 ADDED
 
 /** Status options must match DB enum/check */
 const STATUS_CHOICES = ["ACTIVE", "INACTIVE", "MAINTENANCE"];
@@ -34,6 +35,19 @@ const STATUS_CHOICES = ["ACTIVE", "INACTIVE", "MAINTENANCE"];
 /** Helper: join class names */
 function cx(...a) {
   return a.filter(Boolean).join(" ");
+}
+
+/** Helpers for driver name (replace full_name) */
+function driverDisplayName(d) {
+  if (!d) return "Driver";
+  const fn = (d.first_name || "").trim();
+  const ln = (d.last_name || "").trim();
+  const name = [fn, ln].filter(Boolean).join(" ");
+  return name || "Driver";
+}
+function driverNameFromMap(map, id) {
+  const n = map[id];
+  return n || "Driver";
 }
 
 /** Compute days from today to a due date (ISO string or Date). Negative = overdue */
@@ -302,10 +316,12 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
     async function load() {
       try {
         setErr(null);
+        // 🔧 swapped full_name -> first_name, last_name
         const { data, error } = await supabase
           .from("drivers")
-          .select("id, full_name, status")
-          .order("full_name", { ascending: true });
+          .select("id, first_name, last_name, status")
+          .order("last_name", { ascending: true })
+          .order("first_name", { ascending: true });
         if (error) throw error;
         if (mounted) setDrivers(data || []);
       } catch (e) {
@@ -326,7 +342,8 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
   if (!open || !truck) return null;
 
   const filtered = (drivers || []).filter((d) => {
-    const hay = [d.full_name, d.status].filter(Boolean).join(" ").toLowerCase();
+    const name = driverDisplayName(d);
+    const hay = [name, d.status].filter(Boolean).join(" ").toLowerCase();
     return hay.includes(q.trim().toLowerCase());
   });
 
@@ -394,34 +411,35 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
                 <td className="px-3 py-3 opacity-70">No drivers</td>
               </tr>
             ) : (
-              filtered.map((d) => (
-                <tr
-                  key={d.id}
-                  className={cx(
-                    "border-b",
-                    selected === d.id ? "bg-black/10" : "hover:bg-black/5"
-                  )}
-                >
-                  <td className="px-3 py-2">
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="driver"
-                        checked={selected === d.id}
-                        onChange={() => setSelected(d.id)}
-                      />
-                      <div>
-                        <div className="font-medium">
-                          {d.full_name || "Driver"}
+              filtered.map((d) => {
+                const name = driverDisplayName(d);
+                return (
+                  <tr
+                    key={d.id}
+                    className={cx(
+                      "border-b",
+                      selected === d.id ? "bg-black/10" : "hover:bg-black/5"
+                    )}
+                  >
+                    <td className="px-3 py-2">
+                      <label className="flex items-center gap-3 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="driver"
+                          checked={selected === d.id}
+                          onChange={() => setSelected(d.id)}
+                        />
+                        <div>
+                          <div className="font-medium">{name}</div>
+                          <div className="text-xs opacity-70">
+                            {d.status || "—"}
+                          </div>
                         </div>
-                        <div className="text-xs opacity-70">
-                          {d.status || "—"}
-                        </div>
-                      </div>
-                    </label>
-                  </td>
-                </tr>
-              ))
+                      </label>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -1031,13 +1049,14 @@ export default function Trucks() {
         );
         let map = {};
         if (ids.length) {
+          // 🔧 swapped full_name -> first_name,last_name
           const { data: dData, error: dErr } = await supabase
             .from("drivers")
-            .select("id, full_name")
+            .select("id, first_name, last_name")
             .in("id", ids);
           if (dErr) throw dErr;
           map = (dData || []).reduce((acc, d) => {
-            acc[d.id] = d.full_name || "Driver";
+            acc[d.id] = driverDisplayName(d);
             return acc;
           }, {});
         }
@@ -1108,13 +1127,14 @@ export default function Trucks() {
       );
       let map = {};
       if (ids.length) {
+        // 🔧 swapped full_name -> first_name,last_name
         const { data: dData, error: dErr } = await supabase
           .from("drivers")
-          .select("id, full_name")
+          .select("id, first_name, last_name")
           .in("id", ids);
         if (dErr) throw dErr;
         map = (dData || []).reduce((acc, d) => {
-          acc[d.id] = d.full_name || "Driver";
+          acc[d.id] = driverDisplayName(d);
           return acc;
         }, {});
       }
@@ -1208,7 +1228,7 @@ export default function Trucks() {
               t.make,
               t.model,
               t.year,
-              driversById[t.driver_id],
+              driverNameFromMap(driversById, t.driver_id),
             ]
               .filter(Boolean)
               .join(" ")
@@ -1297,7 +1317,7 @@ export default function Trucks() {
         t.model ?? "",
         t.year ?? "",
         (t.status || "").toUpperCase(),
-        driversById[t.driver_id] ?? "",
+        driverNameFromMap(driversById, t.driver_id) ?? "",
         t.odometer ?? "",
         t.reg_due ?? "",
         t.insp_due ?? "",
@@ -1333,8 +1353,7 @@ export default function Trucks() {
   /** Jump to truck in table from alert drawer */
   function goToTruckRow(truckId) {
     setAlertsOpen(false);
-    // Optional: you could auto-focus search with the truck number here if desired
-    // For now we rely on visual scan; future: programmatic scroll into view
+    // Optional: could focus a specific row if needed
   }
 
   return (
@@ -1353,7 +1372,6 @@ export default function Trucks() {
           >
             <Bell className="w-4 h-4" />
             Alerts
-            {/* Tiny counter (shows only when we already loaded) */}
             {alertsLoading ? (
               <Loader2 className="w-4 h-4 animate-spin ml-1" />
             ) : alerts?.length ? (
@@ -1558,9 +1576,45 @@ export default function Trucks() {
                 return (
                   <tr key={t.id} className={cx(zebra, "border-t relative")}>
                     <td className="px-3 py-3 whitespace-nowrap">
-                      {t.truck_number ?? "—"}
+                      {/* 👇 LINK to truck profile */}
+                      {t.truck_number ? (
+                        <Link
+                          to={`/trucks/${t.id}`}
+                          className="underline underline-offset-2 hover:opacity-90"
+                          title="Open truck profile"
+                        >
+                          {t.truck_number}
+                        </Link>
+                      ) : (
+                        <Link
+                          to={`/trucks/${t.id}`}
+                          className="underline underline-offset-2 hover:opacity-90"
+                          title="Open truck profile"
+                        >
+                          —
+                        </Link>
+                      )}
                     </td>
-                    <td className="px-3 py-3">{t.vin ?? "—"}</td>
+                    <td className="px-3 py-3">
+                      {/* 👇 LINK to truck profile */}
+                      {t.vin ? (
+                        <Link
+                          to={`/trucks/${t.id}`}
+                          className="underline underline-offset-2 hover:opacity-90"
+                          title="Open truck profile"
+                        >
+                          {t.vin}
+                        </Link>
+                      ) : (
+                        <Link
+                          to={`/trucks/${t.id}`}
+                          className="underline underline-offset-2 hover:opacity-90"
+                          title="Open truck profile"
+                        >
+                          —
+                        </Link>
+                      )}
+                    </td>
                     <td className="px-3 py-3">
                       {(t.make || "—") +
                         " / " +
@@ -1580,18 +1634,13 @@ export default function Trucks() {
                     </td>
                     <td className="px-3 py-3">
                       {t.driver_id ? (
-                        <button
+                        <Link
                           className="underline underline-offset-2 hover:opacity-90"
-                          onClick={() =>
-                            alert(
-                              `TODO: open driver profile for ${
-                                driversById[t.driver_id] || "Driver"
-                              }`
-                            )
-                          }
+                          to={`/drivers/${t.driver_id}`} // 👈 LINK to driver profile
+                          title="Open driver profile"
                         >
-                          {driversById[t.driver_id] || "Driver"}
-                        </button>
+                          {driverNameFromMap(driversById, t.driver_id)}
+                        </Link>
                       ) : (
                         <span className="opacity-60">Unassigned</span>
                       )}

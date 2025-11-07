@@ -1,5 +1,6 @@
 // src/pages/Drivers.jsx
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { Link } from "react-router-dom";
 import {
   Plus,
   RefreshCw,
@@ -11,6 +12,7 @@ import {
   CheckCircle2,
   Loader2,
   Search,
+  Eye, // ✅ added
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 
@@ -224,7 +226,14 @@ export default function Drivers() {
                   <tr key={d.id} className="border-t border-zinc-800/70 hover:bg-zinc-900/30 transition">
                     <td className="px-4 py-4">
                       <div className="flex flex-col">
-                        <span className="font-medium">{fullName}</span>
+                        {/* ✅ make name clickable to profile */}
+                        <Link
+                          to={`/drivers/${d.id}`}
+                          className="font-medium hover:underline underline-offset-2"
+                          title="Open driver profile"
+                        >
+                          {fullName}
+                        </Link>
                         <span className="text-xs text-zinc-400">{d.email || "—"}</span>
                       </div>
                     </td>
@@ -238,6 +247,16 @@ export default function Drivers() {
                     </td>
                     <td className="px-4 py-4">
                       <div className="flex items-center justify-end gap-2">
+                        {/* ✅ profile button */}
+                        <Link
+                          to={`/drivers/${d.id}`}
+                          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-zinc-700/60 hover:bg-zinc-800/40"
+                          title="Open profile"
+                        >
+                          <Eye className="h-4 w-4" />
+                          Profile
+                        </Link>
+
                         <select
                           disabled={busy}
                           value={d.status || "ACTIVE"}

@@ -24,13 +24,16 @@ const Trucks         = lazy(() =>
     default: () => <div className="p-6">Trucks</div>,
   }))
 );
-const Settings       = lazy(() => import("./pages/Settings.jsx")); // ✅ single source of truth
+const Settings       = lazy(() => import("./pages/Settings.jsx"));
 const TeamManagement = lazy(() => import("./pages/TeamManagement.jsx"));
 const Login          = lazy(() =>
   import("./pages/Login.jsx").catch(() => ({
     default: () => <div className="p-6">Login</div>,
   }))
 );
+
+/* ✅ NEW: Dispatch AI (Lab) page */
+const DispatchAI     = lazy(() => import("./pages/DispatchAI.jsx"));
 
 export default function App() {
   return (
@@ -54,6 +57,9 @@ export default function App() {
           <Route path="billing" element={<Billing />} />
           <Route path="drivers" element={<Drivers />} />
           <Route path="trucks" element={<Trucks />} />
+
+          {/* ✅ NEW: Dispatch AI route */}
+          <Route path="dispatch-ai" element={<DispatchAI />} />
 
           {/* ✅ Settings lives as a nested route under the protected layout */}
           <Route path="settings" element={<Settings />} />
