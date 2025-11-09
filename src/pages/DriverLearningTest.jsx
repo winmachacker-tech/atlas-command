@@ -3,10 +3,9 @@ import { useState } from "react";
 import { supabase } from "../lib/supabase";
 import DriverPreferences, {
   getDriverPreferences,
-  saveDriverPreferences,
-  recordThumb,
-  getDriverRecentFeedback,
+  saveDriverPreferences
 } from "../components/DriverPreferences.jsx";
+
 
 function cx(...a) {
   return a.filter(Boolean).join(" ");
