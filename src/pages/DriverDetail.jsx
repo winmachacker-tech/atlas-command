@@ -6,8 +6,6 @@ import {
   Loader2,
   ArrowLeft,
   Truck,
-  Mail,
-  Phone,
   IdCard,
   Upload,
   Trash2,
@@ -15,12 +13,22 @@ import {
   Image as ImageIcon,
   FileText,
 } from "lucide-react";
+import AIRecPanel from "../components/AIRecPanel";
+import DriverPreferences from "../components/DriverPreferences.jsx";
+import DispatchThumbsBar from "../components/DispatchThumbsBar.jsx";
+
 
 /* ---------- helpers (match Drivers.jsx style) ---------- */
-function cx(...a) { return a.filter(Boolean).join(" "); }
+function cx(...a) {
+  return a.filter(Boolean).join(" ");
+}
 function fmtDate(d) {
   if (!d) return "—";
-  try { return new Date(d).toLocaleString(); } catch { return "—"; }
+  try {
+    return new Date(d).toLocaleString();
+  } catch {
+    return "—";
+  }
 }
 function getField(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj ?? {}, key) ? obj[key] : undefined;
@@ -34,6 +42,7 @@ function getCdlNumber(obj) {
   return null;
 }
 
+/* ============================== PAGE ============================== */
 export default function DriverDetail() {
   const { id } = useParams();
   const [row, setRow] = useState(null);
@@ -56,11 +65,7 @@ export default function DriverDetail() {
     async function run() {
       setLoading(true);
       setErr("");
-      const { data, error } = await supabase
-        .from("drivers")
-        .select("*")
-        .eq("id", id)
-        .maybeSingle();
+      const { data, error } = await supabase.from("drivers").select("*").eq("id", id).maybeSingle();
       if (!ignore) {
         if (error) {
           setErr(error.message);
@@ -75,7 +80,9 @@ export default function DriverDetail() {
     // realtime updates
     const ch = supabase
       .channel(`driver:${id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "drivers", filter: `id=eq.${id}` },
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "drivers", filter: `id=eq.${id}` },
         (payload) => setRow((prev) => ({ ...(prev || {}), ...(payload.new || {}) }))
       )
       .subscribe();
@@ -87,7 +94,10 @@ export default function DriverDetail() {
 
   async function refreshRow() {
     const { data, error } = await supabase.from("drivers").select("*").eq("id", id).maybeSingle();
-    if (error) { setErr(error.message); return; }
+    if (error) {
+      setErr(error.message);
+      return;
+    }
     setRow(data);
   }
 
@@ -109,7 +119,8 @@ export default function DriverDetail() {
     try {
       const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
       const path = `${id}/avatar.${ext}`;
-      const { error: upErr } = await supabase.storage
+      const { error: upErr } = await supabase
+        .storage
         .from("driver-photos")
         .upload(path, file, { upsert: true, cacheControl: "3600" });
       if (upErr) throw upErr;
@@ -191,13 +202,15 @@ export default function DriverDetail() {
       setDocsBusy(false);
     }
   }
-  useEffect(() => { listDocs(); }, [id]);
+  useEffect(() => {
+    listDocs();
+  }, [id]);
 
   // ---------- Derived field names ----------
   const cdlNumber = getCdlNumber(row || {});
-  const cdlClass  = getField(row || {}, "cdl_class");
-  const cdlExp    = getField(row || {}, "cdl_exp");
-  const medExp    = getField(row || {}, "med_exp");
+  const cdlClass = getField(row || {}, "cdl_class");
+  const cdlExp = getField(row || {}, "cdl_exp");
+  const medExp = getField(row || {}, "med_exp");
 
   // ---------- Render ----------
   if (loading) {
@@ -313,21 +326,36 @@ export default function DriverDetail() {
 
           {/* Info grid */}
           <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Info label="Phone">
-              {row.phone || "—"}
-            </Info>
+            <Info label="Phone">{row.phone || "—"}</Info>
             <Info label="CDL # " icon={<IdCard className="w-4 h-4" />}>
               {cdlNumber || "—"}
             </Info>
-            <Info label="CDL Class">
-              {cdlClass || "—"}
-            </Info>
+            <Info label="CDL Class">{cdlClass || "—"}</Info>
             <Info label="CDL Expiration">
-              {row.cdl_exp ? new Date(row.cdl_exp).toLocaleDateString() : (cdlExp ? new Date(cdlExp).toLocaleDateString() : "—")}
+              {row.cdl_exp
+                ? new Date(row.cdl_exp).toLocaleDateString()
+                : cdlExp
+                ? new Date(cdlExp).toLocaleDateString()
+                : "—"}
             </Info>
             <Info label="Medical Expiration">
-              {row.med_exp ? new Date(row.med_exp).toLocaleDateString() : (medExp ? new Date(medExp).toLocaleDateString() : "—")}
+              {row.med_exp
+                ? new Date(row.med_exp).toLocaleDateString()
+                : medExp
+                ? new Date(medExp).toLocaleDateString()
+                : "—"}
             </Info>
+          </div>
+
+          {/* AI Recommendations Panel */}
+          <div className="mt-6">
+            <AIRecPanel context_type="DRIVER" context_id={id} />
+          </div>
+
+          {/* Preferences + Thumbs (both scoped by driverId) */}
+          <div className="mt-6 space-y-4">
+            <DriverPreferences driverId={id} />
+            <DispatchThumbsBar driverId={id} compact debugMode />
           </div>
 
           {/* Timestamps */}
