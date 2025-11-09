@@ -1,10 +1,12 @@
 // src/pages/DriverLearningTest.jsx
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
-import DriverPreferences, {
+import DriverPreferences from "../components/DriverPreferences.jsx";
+, import {
   getDriverPreferences,
   saveDriverPreferences
-} from "../components/DriverPreferences.jsx";
+  saveDriverPreferences
+} from "../lib/driverPreferences.js";
 
 
 function cx(...a) {
