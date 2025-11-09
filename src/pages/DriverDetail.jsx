@@ -15,8 +15,8 @@ import {
 } from "lucide-react";
 import AIRecPanel from "../components/AIRecPanel";
 import DriverPreferences from "../components/DriverPreferences.jsx";
-import DispatchThumbsBar from "../components/DispatchThumbsBar.jsx";
-
+/** ✅ FIX: use the correct component/file name */
+import DriverThumbsBar from "../components/DriverThumbsBar.jsx";
 
 /* ---------- helpers (match Drivers.jsx style) ---------- */
 function cx(...a) {
@@ -355,7 +355,8 @@ export default function DriverDetail() {
           {/* Preferences + Thumbs (both scoped by driverId) */}
           <div className="mt-6 space-y-4">
             <DriverPreferences driverId={id} />
-            <DispatchThumbsBar driverId={id} compact debugMode />
+            {/* ✅ FIX: use DriverThumbsBar instead of DispatchThumbsBar */}
+            <DriverThumbsBar driverId={id} compact debugMode />
           </div>
 
           {/* Timestamps */}
