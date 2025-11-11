@@ -1,0 +1,187 @@
+-- FILE: supabase/migrations/20251110_2039_customers_seed_safemode.sql
+-- Purpose: Safely seed/link customers from loads even if loads has strict status/role triggers.
+-- Strategy: backfill loads.customer_id while triggers are disabled, then re-enable.
+-- Idempotent: only sets loads.customer_id where it's NULL.
+
+-- 0) Ensure loads.customer_id exists (idempotent)
+do $$
+declare
+  has_customer_id boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='loads' and column_name='customer_id'
+  ) into has_customer_id;
+
+  if not has_customer_id then
+    alter table public.loads add column customer_id uuid null;
+  end if;
+end$$;
+
+-- 1) Detect source columns on loads
+do $$
+declare
+  loads_has_customer_name boolean;
+  loads_has_customer      boolean;
+begin
+  select exists (
+    select 1
+      from information_schema.columns
+     where table_schema='public' and table_name='customers' and column_name='company_name'
+  ) into strict loads_has_customer_name;  -- reuse var for strict check to fail early (must have company_name in customers)
+exception when others then
+  -- no-op; just to ensure customers.company_name exists via separate check below
+  null;
+end$$;
+
+-- 2) Verify customers.company_name exists (NOT NULL) and optionally customers.name
+do $$
+declare
+  customers_has_company_name boolean;
+  customers_has_name         boolean;
+begin
+  select exists (
+    select 1
+      from information_schema.columns
+     where table_schema='public' and table_name='customers' and column_name='company_name'
+  ) into customers_has_company_name;
+
+  if not customers_has_company_name then
+    raise exception 'public.customers must have company_name column';
+  end if;
+end$$;
+
+-- 3) Seed customers (company_name + name) from whichever loads column exists (customer_name or customer)
+--    Use WHERE NOT EXISTS (no UNIQUE needed).
+do $$
+declare
+  loads_has_customer_name boolean;
+  loads_has_customer      boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='loads' and column_name='customer_name'
+  ) into loads_has_customer_name;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='loads' and column_name='customer'
+  ) into loads_has_customer;
+
+  if loads_has_customer_name then
+    insert into public.customers (company_name, name)
+    select s.n, s.n
+      from (
+        select distinct btrim(customer_name) as n
+          from public.loads
+         where customer_name is not null and btrim(customer_name) <> ''
+      ) s
+     where not exists (
+       select 1 from public.customers c
+        where btrim(c.company_name) = s.n
+           or (c.name is not null and btrim(c.name) = s.n)
+     );
+  end if;
+
+  if loads_has_customer then
+    insert into public.customers (company_name, name)
+    select s.n, s.n
+      from (
+        select distinct btrim(customer) as n
+          from public.loads
+         where customer is not null and btrim(customer) <> ''
+      ) s
+     where not exists (
+       select 1 from public.customers c
+        where btrim(c.company_name) = s.n
+           or (c.name is not null and btrim(c.name) = s.n)
+     );
+  end if;
+end$$;
+
+-- 4) BACKFILL loads.customer_id with triggers disabled (safe mode)
+--    We match by company_name first, then by name for legacy rows.
+do $$
+declare
+  loads_has_customer_name boolean;
+  loads_has_customer      boolean;
+begin
+  -- detect source columns
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='loads' and column_name='customer_name'
+  ) into loads_has_customer_name;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='loads' and column_name='customer'
+  ) into loads_has_customer;
+
+  -- disable triggers on loads while we set customer_id
+  begin
+    alter table public.loads disable trigger all;
+
+    -- 4a) match by company_name
+    if loads_has_customer_name then
+      update public.loads l
+         set customer_id = c.id
+        from public.customers c
+       where l.customer_id is null
+         and btrim(l.customer_name) <> ''
+         and btrim(c.company_name) = btrim(l.customer_name);
+    end if;
+
+    if loads_has_customer then
+      update public.loads l
+         set customer_id = c.id
+        from public.customers c
+       where l.customer_id is null
+         and btrim(l.customer) <> ''
+         and btrim(c.company_name) = btrim(l.customer);
+    end if;
+
+    -- 4b) if still null, match by customers.name
+    if loads_has_customer_name then
+      update public.loads l
+         set customer_id = c.id
+        from public.customers c
+       where l.customer_id is null
+         and btrim(l.customer_name) <> ''
+         and c.name is not null
+         and btrim(c.name) = btrim(l.customer_name);
+    end if;
+
+    if loads_has_customer then
+      update public.loads l
+         set customer_id = c.id
+        from public.customers c
+       where l.customer_id is null
+         and btrim(l.customer) <> ''
+         and c.name is not null
+         and btrim(c.name) = btrim(l.customer);
+    end if;
+
+  exception when others then
+    -- always re-enable even if something fails
+    alter table public.loads enable trigger all;
+    raise;
+  end;
+
+  -- re-enable triggers
+  alter table public.loads enable trigger all;
+end$$;
+
+-- 5) Add FK + index (idempotent)
+do $$
+begin
+  alter table public.loads
+    add constraint loads_customer_id_fkey
+    foreign key (customer_id) references public.customers(id)
+    on update cascade on delete set null;
+exception when duplicate_object then null;
+end$$;
+
+create index if not exists idx_loads_customer_id on public.loads(customer_id);
+
+-- 6) Minimal grants (adjust to your RLS model)
+grant select, insert, update on public.customers to anon, authenticated;

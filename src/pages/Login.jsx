@@ -1,7 +1,7 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { trackLogin, trackFailedLogin } from "../lib/activityTracker"; // ✅ NEW
+import { trackLogin, trackFailedLogin } from "../lib/activityTracker"; // âœ… NEW
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -10,7 +10,7 @@ export default function Login() {
   const nav = useNavigate();
   const location = useLocation();
   
-  // ✅ Get redirect from query params (not location state)
+  // âœ… Get redirect from query params (not location state)
   const params = new URLSearchParams(location.search);
   const redirectTo = params.get("redirect") || location.state?.from?.pathname || "/";
 
@@ -24,12 +24,12 @@ export default function Login() {
       });
       if (error) throw error;
       
-      // ✅ Track successful login
+      // âœ… Track successful login
       trackLogin().catch(err => console.error("Failed to track login:", err));
       
       nav(redirectTo, { replace: true });
     } catch (err) {
-      // ✅ Track failed login
+      // âœ… Track failed login
       trackFailedLogin(err.message).catch(e => console.error("Failed to track failed login:", e));
       
       alert(err.message || "Login failed");
@@ -40,7 +40,7 @@ export default function Login() {
 
   return (
     <div className="relative min-h-screen w-full overflow-hidden">
-      {/* 🔷 Background */}
+      {/* ðŸ”· Background */}
       <div
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{
@@ -51,10 +51,10 @@ export default function Login() {
         }}
       ></div>
 
-      {/* 🔷 Overlay */}
+      {/* ðŸ”· Overlay */}
       <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/40 to-black/70"></div>
 
-      {/* 🔷 Login Card */}
+      {/* ðŸ”· Login Card */}
       <div className="relative z-10 flex min-h-screen items-center justify-center p-6">
         <div className="w-full max-w-md rounded-2xl border border-white/10 bg-white/10 backdrop-blur-xl p-8 shadow-2xl">
           <h1 className="text-2xl font-semibold text-white mb-1 text-center">
@@ -91,7 +91,7 @@ export default function Login() {
               disabled={busy}
               className="w-full mt-4 rounded-xl bg-blue-600 hover:bg-blue-700 py-2 font-medium text-white shadow transition-colors disabled:opacity-70"
             >
-              {busy ? "Signing in…" : "Sign in"}
+              {busy ? "Signing inâ€¦" : "Sign in"}
             </button>
           </form>
 
@@ -103,7 +103,7 @@ export default function Login() {
           </div>
 
           <p className="text-xs text-center text-gray-400 mt-8">
-            © {new Date().getFullYear()} Atlas Command Systems
+            Â© {new Date().getFullYear()} Atlas Command Systems
           </p>
         </div>
       </div>

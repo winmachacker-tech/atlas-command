@@ -1,0 +1,150 @@
+-- FILE: supabase/migrations/20251111_0001_customers_seed_readonly_and_ai_best_drivers.sql
+-- Purpose:
+--   A) Seed customers from loads (READ-ONLY against loads; no updates to loads to avoid triggers).
+--   B) Create RPC public.rpc_ai_best_drivers_for_lane(lane_key text, limit_count int default 10).
+-- Notes:
+--   - Your customers table has company_name (NOT NULL), and optional name. We fill both.
+--   - We do NOT touch loads.customer_id here (your triggers complained). Linking can be done later.
+
+-- ===== A) Customers seeding (read-only against loads) =====
+
+-- Sanity: ensure customers.company_name exists (NOT NULL)
+do $$
+declare
+  customers_has_company_name boolean;
+  customers_has_name         boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='customers' and column_name='company_name'
+  ) into customers_has_company_name;
+
+  if not customers_has_company_name then
+    raise exception 'public.customers must have column company_name (NOT NULL)';
+  end if;
+
+  -- optional 'name' column
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='customers' and column_name='name'
+  ) into customers_has_name;
+end$$;
+
+-- Detect loads source columns (read-only)
+do $$
+declare
+  loads_has_customer_name boolean;
+  loads_has_customer      boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='loads' and column_name='customer_name'
+  ) into loads_has_customer_name;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='loads' and column_name='customer'
+  ) into loads_has_customer;
+
+  if not loads_has_customer_name and not loads_has_customer then
+    raise notice 'No customer text column on public.loads (expected customer_name or customer). Seeding skipped.';
+    return;
+  end if;
+
+  -- Insert unique names into customers (company_name, name) from loads.customer_name
+  if loads_has_customer_name then
+    insert into public.customers (company_name, name)
+    select s.n, s.n
+    from (
+      select distinct btrim(customer_name) as n
+      from public.loads
+      where customer_name is not null and btrim(customer_name) <> ''
+    ) s
+    where not exists (
+      select 1 from public.customers c
+      where btrim(c.company_name) = s.n
+         or (c.name is not null and btrim(c.name) = s.n)
+    );
+  end if;
+
+  -- Also seed from loads.customer (if present)
+  if loads_has_customer then
+    insert into public.customers (company_name, name)
+    select s.n, s.n
+    from (
+      select distinct btrim(customer) as n
+      from public.loads
+      where customer is not null and btrim(customer) <> ''
+    ) s
+    where not exists (
+      select 1 from public.customers c
+      where btrim(c.company_name) = s.n
+         or (c.name is not null and btrim(c.name) = s.n)
+    );
+  end if;
+end$$;
+
+-- Minimal grants (adjust to your RLS model)
+grant select, insert, update on public.customers to anon, authenticated;
+
+-- ===== B) RPC: best drivers for lane (stub using overall fit_score) =====
+
+-- Safety extensions (no-op if present)
+create extension if not exists "uuid-ossp";
+create extension if not exists "pgcrypto";
+
+-- Assumed tables:
+--   public.drivers (id uuid pk, full_name text, is_active boolean, ...)
+--   public.driver_fit_scores (driver_id uuid, up_events int, down_events int, fit_score numeric, last_feedback_at timestamptz, updated_at timestamptz)
+
+create or replace function public.rpc_ai_best_drivers_for_lane(
+  lane_key text,
+  limit_count int default 10
+)
+returns table (
+  driver_id uuid,
+  driver_name text,
+  fit_score numeric,
+  up_events int,
+  down_events int,
+  last_feedback_at timestamptz
+)
+language sql
+stable
+as $$
+  /*
+    TEMP behavior:
+      - Ignores lane_key for now and returns top drivers by overall fit_score.
+      - This unblocks the UI immediately.
+
+    FUTURE upgrade:
+      - Join/weight by lane signals when driver_feedback carries lane_key consistently.
+  */
+  select
+    d.id as driver_id,
+    coalesce(d.full_name, '') as driver_name,
+    coalesce(s.fit_score, 0) as fit_score,
+    coalesce(s.up_events, 0) as up_events,
+    coalesce(s.down_events, 0) as down_events,
+    s.last_feedback_at
+  from public.drivers d
+  left join public.driver_fit_scores s
+    on s.driver_id = d.id
+  where coalesce(d.is_active, true) = true
+  order by coalesce(s.fit_score, 0) desc nulls last, d.id
+  limit greatest(limit_count, 0)
+$$;
+
+comment on function public.rpc_ai_best_drivers_for_lane(text, int)
+  is 'Return top drivers by overall fit_score. Accepts lane_key (unused for now) and limit_count. Replace with lane-aware logic once lane signals exist.';
+
+revoke all on function public.rpc_ai_best_drivers_for_lane(text, int) from public;
+grant execute on function public.rpc_ai_best_drivers_for_lane(text, int) to anon, authenticated, service_role;
+
+-- Ask PostgREST to reload the schema so the RPC becomes visible immediately
+do $$
+begin
+  perform pg_notify('pgrst', 'reload schema');
+exception when others then
+  null;
+end$$;

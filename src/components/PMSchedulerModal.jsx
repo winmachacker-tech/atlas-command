@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import {
   X,
   Plus,
@@ -48,7 +48,7 @@ export default function PMSchedulerModal({ open, onClose, truck, onSaved }) {
     const name =
       [truck.truck_number, truck.vin, `${truck.make || ""} ${truck.model || ""}`.trim(), truck.id]
         .filter(Boolean)[0] || "Truck";
-    return `PM Scheduler • ${name}`;
+    return `PM Scheduler â€¢ ${name}`;
   }, [truck]);
 
   useEffect(() => {
@@ -101,7 +101,7 @@ export default function PMSchedulerModal({ open, onClose, truck, onSaved }) {
     } catch (e) {
       setErr(
         (e?.message || "").includes("does not exist")
-          ? "PM tables not found. I’ll provide the SQL migration next."
+          ? "PM tables not found. Iâ€™ll provide the SQL migration next."
           : e?.message || "Failed to load PM policies."
       );
     } finally {
@@ -262,7 +262,7 @@ export default function PMSchedulerModal({ open, onClose, truck, onSaved }) {
         else if (daysDiff <= 7) dateStatus = { kind: "SOON", badge: "bg-amber-500/20 text-amber-300 border-amber-500/30", detail: `${fmtDate(next)} (+${daysDiff}d)` };
         else dateStatus = { kind: "OK", badge: "bg-emerald-500/15 text-emerald-300 border-emerald-500/25", detail: fmtDate(next) };
       } else {
-        dateStatus = { kind: "NA", badge: "text-[var(--text-soft)]", detail: "—" };
+        dateStatus = { kind: "NA", badge: "text-[var(--text-soft)]", detail: "â€”" };
       }
     }
 
@@ -277,14 +277,14 @@ export default function PMSchedulerModal({ open, onClose, truck, onSaved }) {
         else if (delta <= 1000) milesStatus = { kind: "SOON", badge: "bg-amber-500/20 text-amber-300 border-amber-500/30", detail: `${nextOdo.toLocaleString()} (+${delta}mi)` };
         else milesStatus = { kind: "OK", badge: "bg-emerald-500/15 text-emerald-300 border-emerald-500/25", detail: nextOdo.toLocaleString() };
       } else {
-        milesStatus = { kind: "NA", badge: "text-[var(--text-soft)]", detail: "—" };
+        milesStatus = { kind: "NA", badge: "text-[var(--text-soft)]", detail: "â€”" };
       }
     }
 
     // merge: worst wins (OVERDUE > SOON > OK > NA)
     const order = { OVERDUE: 3, SOON: 2, OK: 1, NA: 0 };
     const both = [dateStatus, milesStatus].filter(Boolean);
-    if (both.length === 0) return { label: "—", badge: "text-[var(--text-soft)]", detail: "—" };
+    if (both.length === 0) return { label: "â€”", badge: "text-[var(--text-soft)]", detail: "â€”" };
     let winner = both[0];
     for (const s of both) {
       if (order[s.kind] > order[winner.kind]) winner = s;
@@ -293,7 +293,7 @@ export default function PMSchedulerModal({ open, onClose, truck, onSaved }) {
       winner.kind === "OVERDUE" ? "Overdue"
       : winner.kind === "SOON" ? "Due Soon"
       : winner.kind === "OK" ? "OK"
-      : "—";
+      : "â€”";
     return { label, badge: winner.badge, detail: winner.detail };
   }
 
@@ -301,7 +301,7 @@ export default function PMSchedulerModal({ open, onClose, truck, onSaved }) {
     try {
       return new Date(d).toLocaleDateString();
     } catch {
-      return "—";
+      return "â€”";
     }
   }
 
@@ -415,7 +415,7 @@ export default function PMSchedulerModal({ open, onClose, truck, onSaved }) {
                     value={form.name}
                     onChange={(e) => setField("name", e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border bg-transparent"
-                    placeholder="PM A, DOT, Tires…"
+                    placeholder="PM A, DOT, Tiresâ€¦"
                   />
                 </div>
                 <div>
@@ -448,7 +448,7 @@ export default function PMSchedulerModal({ open, onClose, truck, onSaved }) {
                     value={form.last_service_odo}
                     onChange={(e) => setField("last_service_odo", e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border bg-transparent"
-                    placeholder={Number.isFinite(truck?.odometer) ? `≤ ${truck.odometer}` : "e.g. 452000"}
+                    placeholder={Number.isFinite(truck?.odometer) ? `â‰¤ ${truck.odometer}` : "e.g. 452000"}
                   />
                 </div>
                 <div>
@@ -523,7 +523,7 @@ export default function PMSchedulerModal({ open, onClose, truck, onSaved }) {
               </thead>
               <tbody>
                 {busy && policies.length === 0 ? (
-                  <tr><td colSpan={5} className="px-3 py-10 text-center"><Loader2 className="inline w-4 h-4 animate-spin" /> Loading…</td></tr>
+                  <tr><td colSpan={5} className="px-3 py-10 text-center"><Loader2 className="inline w-4 h-4 animate-spin" /> Loadingâ€¦</td></tr>
                 ) : policies.length === 0 ? (
                   <tr><td colSpan={5} className="px-3 py-8 text-center opacity-70">No PM policies yet. Use templates above to add.</td></tr>
                 ) : (
@@ -533,17 +533,17 @@ export default function PMSchedulerModal({ open, onClose, truck, onSaved }) {
                     const intervalStr = [
                       (p.interval_miles != null ? `${p.interval_miles.toLocaleString()} mi` : null),
                       (p.interval_days != null ? `${p.interval_days} d` : null),
-                    ].filter(Boolean).join(" / ") || "—";
+                    ].filter(Boolean).join(" / ") || "â€”";
                     const lastStr = [
                       (p.last_service_odo != null ? `${p.last_service_odo.toLocaleString()} mi` : null),
                       (p.last_service_date ? new Date(p.last_service_date).toLocaleDateString() : null),
-                    ].filter(Boolean).join(" • ") || "—";
+                    ].filter(Boolean).join(" â€¢ ") || "â€”";
 
                     return (
                       <tr key={p.id} className={zebra}>
                         <td className="px-3 py-3">
                           <div className="font-medium flex items-center gap-2">
-                            <Wrench className="w-4 h-4" /> {p.name || "—"}
+                            <Wrench className="w-4 h-4" /> {p.name || "â€”"}
                             {p.active === false && (
                               <span className="text-xs opacity-60">(inactive)</span>
                             )}
@@ -590,7 +590,7 @@ export default function PMSchedulerModal({ open, onClose, truck, onSaved }) {
           {/* Log service inline form */}
           {logFor && (
             <div className="rounded-xl border p-4">
-              <div className="font-medium mb-2">Log Service • {logFor.name}</div>
+              <div className="font-medium mb-2">Log Service â€¢ {logFor.name}</div>
               <div className="grid md:grid-cols-5 gap-3">
                 <div>
                   <label className="text-sm block mb-1 opacity-80">Service Date</label>
@@ -609,7 +609,7 @@ export default function PMSchedulerModal({ open, onClose, truck, onSaved }) {
                     value={logForm.service_odo}
                     onChange={(e) => setLogField("service_odo", e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border bg-transparent"
-                    placeholder={Number.isFinite(truck?.odometer) ? `≈ ${truck.odometer}` : "e.g. 453000"}
+                    placeholder={Number.isFinite(truck?.odometer) ? `â‰ˆ ${truck.odometer}` : "e.g. 453000"}
                   />
                 </div>
                 <div>
@@ -666,3 +666,4 @@ export default function PMSchedulerModal({ open, onClose, truck, onSaved }) {
     </div>
   );
 }
+

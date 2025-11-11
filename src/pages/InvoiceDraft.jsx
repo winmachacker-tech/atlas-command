@@ -1,4 +1,4 @@
-// src/pages/InvoiceDraft.jsx
+﻿// src/pages/InvoiceDraft.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Loader2, Download, FileText, ChevronLeft, Plus, Trash2, CheckCircle2 } from "lucide-react";
@@ -70,12 +70,12 @@ async function getInvoicePDFBlob({ invoice, load, org, userProfile }) {
   y += 14; doc.setFont("helvetica", "normal");
 
   const bill = [
-    field(load, "bill_to.name") || field(load, "consignee.name") || "—",
+    field(load, "bill_to.name") || field(load, "consignee.name") || "â€”",
     field(load, "bill_to.address"),
     [field(load, "bill_to.city"), field(load, "bill_to.state"), field(load, "bill_to.zip")].filter(Boolean).join(", "),
   ].filter(Boolean);
   const ship = [
-    field(load, "shipper.name") || "—",
+    field(load, "shipper.name") || "â€”",
     field(load, "origin.address"),
     [field(load, "origin.city"), field(load, "origin.state"), field(load, "origin.zip")].filter(Boolean).join(", "),
   ].filter(Boolean);
@@ -92,11 +92,11 @@ async function getInvoicePDFBlob({ invoice, load, org, userProfile }) {
   doc.setFont("helvetica", "normal");
   let yy = y + 34;
   [
-    `Load #: ${field(load, "reference", "—")}   PO: ${field(load, "po_number", "—")}   PRO: ${field(load, "pro_number", "—")}`,
-    `PU: ${field(load, "pickup_date", "—")}  @ ${[field(load, "origin.city"), field(load, "origin.state")].filter(Boolean).join(", ")}`,
-    `DEL: ${field(load, "delivery_date", "—")}  @ ${[field(load, "destination.city"), field(load, "destination.state")].filter(Boolean).join(", ")}`,
-    `Equipment: ${field(load, "equipment_type", "—")}   Weight: ${field(load, "weight", "—")}   Miles: ${field(load, "miles", "—")}`,
-    `Dispatcher: ${field(load, "dispatcher_name", "—")}   Driver: ${field(load, "driver_name", "—")}   Truck: ${field(load, "truck_number", "—")}   Trailer: ${field(load, "trailer_number", "—")}`,
+    `Load #: ${field(load, "reference", "â€”")}   PO: ${field(load, "po_number", "â€”")}   PRO: ${field(load, "pro_number", "â€”")}`,
+    `PU: ${field(load, "pickup_date", "â€”")}  @ ${[field(load, "origin.city"), field(load, "origin.state")].filter(Boolean).join(", ")}`,
+    `DEL: ${field(load, "delivery_date", "â€”")}  @ ${[field(load, "destination.city"), field(load, "destination.state")].filter(Boolean).join(", ")}`,
+    `Equipment: ${field(load, "equipment_type", "â€”")}   Weight: ${field(load, "weight", "â€”")}   Miles: ${field(load, "miles", "â€”")}`,
+    `Dispatcher: ${field(load, "dispatcher_name", "â€”")}   Driver: ${field(load, "driver_name", "â€”")}   Truck: ${field(load, "truck_number", "â€”")}   Trailer: ${field(load, "trailer_number", "â€”")}`,
   ].forEach((line) => (t(line, margin + 12, yy), (yy += 14)));
   y += 92 + 16;
 
@@ -180,7 +180,7 @@ export default function InvoiceDraft() {
     address2: "",
     phone: "",
     email: "",
-    footer: "Remit to: ACH preferred • Net 15",
+    footer: "Remit to: ACH preferred â€¢ Net 15",
   });
 
   const [invoice, setInvoice] = useState(() => ({
@@ -241,7 +241,7 @@ export default function InvoiceDraft() {
             data?.reference ? `Reference: ${data.reference}` : null,
             data?.dispatcher_name ? `Dispatcher: ${data.dispatcher_name}` : null,
             data?.driver_name ? `Driver: ${data.driver_name}` : null,
-          ].filter(Boolean).join(" • "),
+          ].filter(Boolean).join(" â€¢ "),
           items: prev.items?.length ? prev.items : defaultItems,
         }));
       } catch (e) {
@@ -350,7 +350,7 @@ export default function InvoiceDraft() {
       <div className="p-6 text-[var(--text-base)]">
         <div className="flex items-center gap-2 opacity-80">
           <Loader2 className="h-5 w-5 animate-spin" />
-          <span>Loading draft invoice…</span>
+          <span>Loading draft invoiceâ€¦</span>
         </div>
       </div>
     );
@@ -366,7 +366,7 @@ export default function InvoiceDraft() {
           Back
         </button>
         <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-red-200">
-          <div className="font-semibold">Couldn’t load the load</div>
+          <div className="font-semibold">Couldnâ€™t load the load</div>
           <div className="text-sm opacity-90 mt-1">{error}</div>
         </div>
       </div>
@@ -385,7 +385,7 @@ export default function InvoiceDraft() {
           </div>
           {userProfile?.company_name && (
             <div className="text-xs mt-1 text-[var(--text-muted)]">
-              Company: <span className="font-medium">{userProfile.company_name}</span> • User: {userProfile.full_name || "—"}
+              Company: <span className="font-medium">{userProfile.company_name}</span> â€¢ User: {userProfile.full_name || "â€”"}
             </div>
           )}
         </div>
@@ -599,7 +599,7 @@ export default function InvoiceDraft() {
       <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="rounded-2xl border border-white/10 p-4">
           <div className="text-sm uppercase tracking-wider text-[var(--text-muted)] mb-2">Customer</div>
-          <div className="font-medium">{field(load, "bill_to.name") || field(load, "consignee.name") || "—"}</div>
+          <div className="font-medium">{field(load, "bill_to.name") || field(load, "consignee.name") || "â€”"}</div>
           <div className="text-sm opacity-80">{field(load, "bill_to.address")}</div>
           <div className="text-sm opacity-80">
             {[field(load, "bill_to.city"), field(load, "bill_to.state"), field(load, "bill_to.zip")].filter(Boolean).join(", ")}
@@ -621,3 +621,4 @@ export default function InvoiceDraft() {
     </div>
   );
 }
+

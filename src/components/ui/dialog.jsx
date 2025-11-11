@@ -1,4 +1,4 @@
-import * as React from "react";
+﻿import * as React from "react";
 
 export function Dialog({ open, onOpenChange, children }) {
   if (!open) return null;
@@ -43,3 +43,4 @@ export function DialogClose({ asChild, children }) {
     </button>
   );
 }
+

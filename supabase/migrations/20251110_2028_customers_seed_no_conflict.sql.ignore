@@ -1,0 +1,127 @@
+-- FILE: supabase/migrations/20251110_2028_customers_seed_no_conflict.sql
+-- Purpose: Seed/link customers from loads without using ON CONFLICT (so it works
+--          even if customers.name is not unique yet). Idempotent & safe.
+
+-- 1) Ensure customers table exists
+create table if not exists public.customers (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  created_at timestamptz not null default now()
+);
+
+-- 2) OPTIONAL but helpful: try to add a unique index on name.
+--    If you already have dupes, this will fail gracefully and we continue.
+do $$
+begin
+  create unique index if not exists uq_customers_name on public.customers (name);
+exception when others then
+  -- If duplicates exist or some other issue, just continue; seeding below does not require uniqueness.
+  raise notice 'Could not create unique index uq_customers_name (likely duplicate names present). Continuing without it.';
+end$$;
+
+-- 3) Ensure loads.customer_id exists
+do $$
+declare
+  has_customer_id boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'loads' and column_name = 'customer_id'
+  ) into has_customer_id;
+
+  if not has_customer_id then
+    alter table public.loads add column customer_id uuid null;
+  end if;
+end$$;
+
+-- 4) Seed customers from whichever column exists on loads (customer_name or customer)
+do $$
+declare
+  has_customer_name boolean;
+  has_customer      boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'loads' and column_name = 'customer_name'
+  ) into has_customer_name;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'loads' and column_name = 'customer'
+  ) into has_customer;
+
+  if has_customer_name then
+    insert into public.customers (name)
+    select s.n
+    from (
+      select distinct btrim(customer_name) as n
+      from public.loads
+      where customer_name is not null and btrim(customer_name) <> ''
+    ) s
+    where not exists (
+      select 1 from public.customers c where c.name = s.n
+    );
+
+  elsif has_customer then
+    insert into public.customers (name)
+    select s.n
+    from (
+      select distinct btrim(customer) as n
+      from public.loads
+      where customer is not null and btrim(customer) <> ''
+    ) s
+    where not exists (
+      select 1 from public.customers c where c.name = s.n
+    );
+
+  else
+    raise notice 'No customer column found on public.loads (expected customer_name or customer). Skipping seed.';
+  end if;
+end$$;
+
+-- 5) Backfill loads.customer_id from customers.name
+do $$
+declare
+  has_customer_name boolean;
+  has_customer      boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'loads' and column_name = 'customer_name'
+  ) into has_customer_name;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'loads' and column_name = 'customer'
+  ) into has_customer;
+
+  if has_customer_name then
+    update public.loads l
+    set customer_id = c.id
+    from public.customers c
+    where l.customer_id is null
+      and c.name = btrim(l.customer_name);
+
+  elsif has_customer then
+    update public.loads l
+    set customer_id = c.id
+    from public.customers c
+    where l.customer_id is null
+      and c.name = btrim(l.customer);
+  end if;
+end$$;
+
+-- 6) Add FK + index (idempotent)
+do $$
+begin
+  alter table public.loads
+    add constraint loads_customer_id_fkey
+    foreign key (customer_id) references public.customers(id)
+    on update cascade on delete set null;
+exception when duplicate_object then null;
+end$$;
+
+create index if not exists idx_loads_customer_id on public.loads(customer_id);
+
+-- 7) Minimal grants (adjust to your RLS model)
+grant select, insert, update on public.customers to anon, authenticated;

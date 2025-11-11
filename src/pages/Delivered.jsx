@@ -1,4 +1,4 @@
-// src/pages/Delivered.jsx
+﻿// src/pages/Delivered.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
@@ -23,7 +23,7 @@ function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
 function fmtDate(d) {
-  if (!d) return "—";
+  if (!d) return "â€”";
   try {
     return new Date(d).toLocaleDateString();
   } catch {
@@ -337,7 +337,7 @@ export default function DeliveredPage() {
               setQ(e.target.value);
               setPage(1);
             }}
-            placeholder="Search ref, shipper, origin, destination…"
+            placeholder="Search ref, shipper, origin, destinationâ€¦"
             className="w-full rounded-lg border border-white/10 bg-transparent px-9 py-2 outline-none placeholder:opacity-60"
           />
         </div>
@@ -410,7 +410,7 @@ export default function DeliveredPage() {
                   <td colSpan={11} className="p-6 text-center opacity-70">
                     <span className="inline-flex items-center gap-2">
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      Loading delivered loads…
+                      Loading delivered loadsâ€¦
                     </span>
                   </td>
                 </tr>
@@ -431,13 +431,13 @@ export default function DeliveredPage() {
                     key={r.id}
                     className="border-t border-white/10 hover:bg-white/5"
                   >
-                    <Td className="font-medium">{r.reference ?? "—"}</Td>
-                    <Td>{r.shipper ?? "—"}</Td>
+                    <Td className="font-medium">{r.reference ?? "â€”"}</Td>
+                    <Td>{r.shipper ?? "â€”"}</Td>
                     <Td className="whitespace-pre-wrap">
-                      {r.origin ?? "—"}
+                      {r.origin ?? "â€”"}
                     </Td>
                     <Td className="whitespace-pre-wrap">
-                      {r.destination ?? "—"}
+                      {r.destination ?? "â€”"}
                     </Td>
                     <Td>{fmtDate(r.pickup_date)}</Td>
                     <Td>{fmtDate(r.delivery_date)}</Td>
@@ -532,7 +532,7 @@ export default function DeliveredPage() {
                       )}
                     </Td>
 
-                    <Td className="max-w-[24rem] truncate">{r.notes ?? "—"}</Td>
+                    <Td className="max-w-[24rem] truncate">{r.notes ?? "â€”"}</Td>
                   </tr>
                 ))}
             </tbody>
@@ -542,7 +542,7 @@ export default function DeliveredPage() {
         {/* Footer / Pagination */}
         <div className="flex flex-col items-center justify-between gap-3 border-t border-white/10 p-3 sm:flex-row">
           <div className="text-xs opacity-70">
-            Showing {count === 0 ? 0 : showingFrom}–{showingTo} of {count}
+            Showing {count === 0 ? 0 : showingFrom}â€“{showingTo} of {count}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -582,3 +582,4 @@ function Th({ children }) {
 function Td({ children, className }) {
   return <td className={cx("px-4 py-3 align-top", className)}>{children}</td>;
 }
+

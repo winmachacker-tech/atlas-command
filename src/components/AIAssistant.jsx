@@ -1,4 +1,4 @@
-// src/components/AIAssistant.jsx
+﻿// src/components/AIAssistant.jsx
 // Drop-in Dispatch AI panel that streams via useAIStream()
 // - Uses your existing Tailwind/Lucide stack
 // - No external deps, mounts anywhere in your layout
@@ -285,7 +285,7 @@ export default function AIAssistant({ className = "" }) {
         {isStreaming && (
           <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 px-2 py-1 text-xs text-zinc-400">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Streaming…
+            Streamingâ€¦
           </div>
         )}
 
@@ -319,7 +319,7 @@ export default function AIAssistant({ className = "" }) {
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask Dispatch AI… (e.g., 'Draft a customer update for Load 12345 with a 30 min delay')"
+            placeholder="Ask Dispatch AIâ€¦ (e.g., 'Draft a customer update for Load 12345 with a 30 min delay')"
             rows={2}
             className="min-h-[44px] w-full resize-y rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
             onKeyDown={(e) => {
@@ -367,3 +367,4 @@ export default function AIAssistant({ className = "" }) {
     </div>
   );
 }
+

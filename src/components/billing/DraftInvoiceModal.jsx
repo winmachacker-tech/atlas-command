@@ -1,4 +1,4 @@
-// src/components/billing/DraftInvoiceModal.jsx
+﻿// src/components/billing/DraftInvoiceModal.jsx
 import { useEffect, useMemo, useState } from "react";
 import { X, Loader2 } from "lucide-react";
 import { supabase } from "../../lib/supabase";
@@ -48,7 +48,7 @@ function defaultNotes(load) {
     load?.dispatcher_name ? `Dispatcher: ${load.dispatcher_name}` : null,
     load?.driver_name ? `Driver: ${load.driver_name}` : null,
   ].filter(Boolean);
-  return parts.join(" • ");
+  return parts.join(" â€¢ ");
 }
 
 /* ------------------------------ component ------------------------------ */
@@ -108,7 +108,7 @@ export default function DraftInvoiceModal({
 
   const statusLabel = useMemo(() => {
     // Fallback to Delivered if not provided
-    return (load?.status || "Delivered") + " —";
+    return (load?.status || "Delivered") + " â€”";
   }, [load]);
 
   async function handleSave() {
@@ -224,7 +224,7 @@ export default function DraftInvoiceModal({
                 rows={4}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Add any billing notes…"
+                placeholder="Add any billing notesâ€¦"
                 className="mt-1 w-full rounded-xl bg-transparent border border-white/10 px-3 py-2 outline-none focus:border-white/20"
               />
             </div>
@@ -252,3 +252,4 @@ export default function DraftInvoiceModal({
     </div>
   );
 }
+

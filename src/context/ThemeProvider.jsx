@@ -1,4 +1,4 @@
-// src/context/ThemeProvider.jsx
+﻿// src/context/ThemeProvider.jsx
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 const STORAGE_KEY = "atlas-theme";            // persisted preference

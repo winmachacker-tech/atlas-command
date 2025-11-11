@@ -1,4 +1,4 @@
-// src/lib/activityTracker.js
+﻿// src/lib/activityTracker.js
 import { supabase } from "./supabase";
 
 /**

@@ -1,0 +1,112 @@
+-- FILE: supabase/migrations/20251110_2015_customers_upsert_fix.sql
+-- Purpose: Robustly seed/normalize customers from loads.* and link rows
+-- Notes:
+--  - Works whether loads has customer_name OR customer (or neither).
+--  - No-op if customers already exist or source column is missing.
+
+-- 1) Safety: make sure table exists (won't overwrite)
+create table if not exists public.customers (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  created_at timestamptz not null default now()
+);
+
+-- 2) Seed customers from loads using whichever column exists
+do $$
+declare
+  has_customer_name boolean;
+  has_customer      boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'loads' and column_name = 'customer_name'
+  ) into has_customer_name;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'loads' and column_name = 'customer'
+  ) into has_customer;
+
+  if has_customer_name then
+    insert into public.customers(name)
+    select distinct trim(customer_name)
+    from public.loads
+    where customer_name is not null and btrim(customer_name) <> ''
+    on conflict (name) do nothing;
+
+  elsif has_customer then
+    insert into public.customers(name)
+    select distinct trim(customer)
+    from public.loads
+    where customer is not null and btrim(customer) <> ''
+    on conflict (name) do nothing;
+
+  else
+    raise notice 'No customer column found on public.loads (expected customer_name or customer). Skipping seed.';
+  end if;
+end$$;
+
+-- 3) If loads has a customers FK column, link it up. Create if missing.
+--    We use a nullable column, then backfill, then FK it.
+do $$
+declare
+  has_customer_id boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'loads' and column_name = 'customer_id'
+  ) into has_customer_id;
+
+  if not has_customer_id then
+    alter table public.loads add column customer_id uuid null;
+  end if;
+end$$;
+
+-- 4) Backfill loads.customer_id from the best available name column
+do $$
+declare
+  has_customer_name boolean;
+  has_customer      boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'loads' and column_name = 'customer_name'
+  ) into has_customer_name;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'loads' and column_name = 'customer'
+  ) into has_customer;
+
+  if has_customer_name then
+    update public.loads l
+    set customer_id = c.id
+    from public.customers c
+    where l.customer_id is null
+      and c.name = trim(l.customer_name);
+
+  elsif has_customer then
+    update public.loads l
+    set customer_id = c.id
+    from public.customers c
+    where l.customer_id is null
+      and c.name = trim(l.customer);
+  end if;
+end$$;
+
+-- 5) Add FK (idempotent)
+do $$
+begin
+  alter table public.loads
+    add constraint loads_customer_id_fkey
+    foreign key (customer_id) references public.customers(id) on update cascade on delete set null;
+exception when duplicate_object then
+  -- already added
+  null;
+end$$;
+
+-- 6) Helpful index (idempotent)
+create index if not exists idx_loads_customer_id on public.loads(customer_id);
+
+-- 7) Minimal grants (adjust to your policy model)
+grant select, insert, update on public.customers to anon, authenticated;

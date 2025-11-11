@@ -1,4 +1,4 @@
-// src/pages/Security.jsx
+﻿// src/pages/Security.jsx
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
@@ -176,7 +176,7 @@ export default function Security() {
         <div className="mx-auto max-w-5xl">
           <div className="flex items-center gap-2 text-white/70">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span>Loading security settings…</span>
+            <span>Loading security settingsâ€¦</span>
           </div>
         </div>
       </div>

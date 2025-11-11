@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { MailPlus, Loader2, X } from "lucide-react";
 
@@ -129,7 +129,7 @@ export default function InviteButton({ onInvited }) {
         type="button"
         disabled
         className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-900 text-zinc-400"
-        title="Checking permissions…"
+        title="Checking permissionsâ€¦"
       >
         <Loader2 className="h-4 w-4 animate-spin" />
         Invite
@@ -230,3 +230,4 @@ export default function InviteButton({ onInvited }) {
     </>
   );
 }
+

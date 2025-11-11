@@ -1,4 +1,4 @@
-// src/pages/Billing.jsx
+﻿// src/pages/Billing.jsx
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
@@ -29,11 +29,11 @@ function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
 function fmtDate(d) {
-  if (!d) return "—";
+  if (!d) return "â€”";
   try { return new Date(d).toLocaleDateString(); } catch { return String(d); }
 }
 function fmtDateTime(d) {
-  if (!d) return "—";
+  if (!d) return "â€”";
   try { return new Date(d).toLocaleString(); } catch { return String(d); }
 }
 const money = (n) => Number(Number(n || 0).toFixed(2));
@@ -118,7 +118,7 @@ export default function BillingPage() {
       if (showInvoiced) {
         query = query.or("invoice_number.not.is.null,invoiced_at.not.is.null");
       } else {
-        // 👇 PostgREST likes explicit eq.true for bool filters
+        // ðŸ‘‡ PostgREST likes explicit eq.true for bool filters
         query = query.or([`status.eq.${READY_STATUS}`, `billing_ready.eq.true`].join(","));
       }
 
@@ -260,13 +260,13 @@ export default function BillingPage() {
       y += 16;
       doc.setFont("helvetica", "normal");
       const lines = [
-        `Reference: ${loadRow.reference || "—"}`,
+        `Reference: ${loadRow.reference || "â€”"}`,
         `Delivered: ${fmtDate(loadRow.delivery_date)}`,
-        `Origin: ${loadRow.origin || "—"}`,
-        `Destination: ${loadRow.destination || "—"}`,
-        `Dispatcher: ${loadRow.dispatcher_name || "—"}`,
-        `Driver: ${loadRow.driver_name || "—"}`,
-        `PO: ${loadRow.po_number || "—"}  •  PRO: ${loadRow.pro_number || "—"}`,
+        `Origin: ${loadRow.origin || "â€”"}`,
+        `Destination: ${loadRow.destination || "â€”"}`,
+        `Dispatcher: ${loadRow.dispatcher_name || "â€”"}`,
+        `Driver: ${loadRow.driver_name || "â€”"}`,
+        `PO: ${loadRow.po_number || "â€”"}  â€¢  PRO: ${loadRow.pro_number || "â€”"}`,
       ];
       lines.forEach((t) => { doc.text(t, margin, y); y += 14; });
       y += 8;
@@ -311,7 +311,7 @@ export default function BillingPage() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      console.log("[PDF] ✅ PDF downloaded!");
+      console.log("[PDF] âœ… PDF downloaded!");
 
       // 5) Update invoice status (without pdf_url since it's local)
       const { error: updErr } = await supabase
@@ -326,7 +326,7 @@ export default function BillingPage() {
         // Don't fail the whole operation since PDF was downloaded successfully
       }
 
-      console.log("[PDF] ✅ PDF generation complete!");
+      console.log("[PDF] âœ… PDF generation complete!");
       setBanner("Invoice PDF downloaded to your computer.");
       await fetchPage(page);
     } catch (e) {
@@ -466,7 +466,7 @@ export default function BillingPage() {
       <div className="grid grid-cols-1 gap-3 rounded-xl border border-white/10 bg-white/5 p-3 sm:grid-cols-2 lg:grid-cols-7">
         <div className="relative sm:col-span-2">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 opacity-60" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search reference or shipper…" className="w-full rounded-lg border border-white/10 bg-transparent px-9 py-2 outline-none placeholder:opacity-60" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search reference or shipperâ€¦" className="w-full rounded-lg border border-white/10 bg-transparent px-9 py-2 outline-none placeholder:opacity-60" />
         </div>
 
         <div className="relative">
@@ -518,7 +518,7 @@ export default function BillingPage() {
               {loading && (
                 <tr>
                   <td colSpan={12} className="p-6 text-center opacity-70">
-                    <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</span>
+                    <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Loadingâ€¦</span>
                   </td>
                 </tr>
               )}
@@ -534,8 +534,8 @@ export default function BillingPage() {
                 return (
                   <tr key={r.id} className="border-t border-white/10 hover:bg-white/5">
                     <Td><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleRow(r.id)} /></Td>
-                    <Td className="font-medium">{r.reference ?? "—"}</Td>
-                    <Td>{r.shipper ?? "—"}</Td>
+                    <Td className="font-medium">{r.reference ?? "â€”"}</Td>
+                    <Td>{r.shipper ?? "â€”"}</Td>
                     <Td>{fmtDate(r.delivery_date)}</Td>
                     <Td>
                       {r.pod_url ? (
@@ -544,17 +544,17 @@ export default function BillingPage() {
                         </a>
                       ) : (<span className="text-xs opacity-60">No POD</span>)}
                     </Td>
-                    <Td>{typeof r.billed_amount === "number" ? fmtUSD(r.billed_amount) : "—"}</Td>
-                    <Td><span className="rounded-md border border-white/10 px-2 py-1 text-xs">{r.status ?? "—"}</span></Td>
-                    <Td>{r.assigned_biller ?? "—"}</Td>
-                    <Td>{r.invoice_number ?? "—"}</Td>
+                    <Td>{typeof r.billed_amount === "number" ? fmtUSD(r.billed_amount) : "â€”"}</Td>
+                    <Td><span className="rounded-md border border-white/10 px-2 py-1 text-xs">{r.status ?? "â€”"}</span></Td>
+                    <Td>{r.assigned_biller ?? "â€”"}</Td>
+                    <Td>{r.invoice_number ?? "â€”"}</Td>
                     <Td>
                       {r.invoice_pdf_url ? (
                         <a href={r.invoice_pdf_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-xs hover:bg-white/5">
                           Open PDF <ExternalLink className="h-3 w-3 opacity-70" />
                         </a>
                       ) : (
-                        <span className="text-xs opacity-60">—</span>
+                        <span className="text-xs opacity-60">â€”</span>
                       )}
                     </Td>
                     <Td>{fmtDateTime(r.invoiced_at)}</Td>
@@ -608,7 +608,7 @@ export default function BillingPage() {
 
         {/* Footer / Pagination */}
         <div className="flex flex-col items-center justify-between gap-3 border-t border-white/10 p-3 sm:flex-row">
-          <div className="text-xs opacity-70">Showing {count === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}–{Math.min(count, page * PAGE_SIZE)} of {count}</div>
+          <div className="text-xs opacity-70">Showing {count === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}â€“{Math.min(count, page * PAGE_SIZE)} of {count}</div>
           <div className="flex items-center gap-2">
             <button className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-3 py-2 text-sm hover:bg-white/5 disabled:opacity-40" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1 || loading}>
               <ChevronLeft className="h-4 w-4" /> Prev
@@ -643,3 +643,4 @@ function Th({ children }) {
 function Td({ children, className }) {
   return <td className={cx("px-4 py-3 align-top", className)}>{children}</td>;
 }
+

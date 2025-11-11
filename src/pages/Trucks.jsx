@@ -1,4 +1,4 @@
-// src/pages/Trucks.jsx
+﻿// src/pages/Trucks.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus,
@@ -27,7 +27,7 @@ import {
 import { supabase } from "../lib/supabase";
 import TruckDocumentsModal from "../components/TruckDocumentsModal.jsx";
 import PMSchedulerModal from "../components/PMSchedulerModal.jsx";
-import { Link } from "react-router-dom"; // 👈 ADDED
+import { Link } from "react-router-dom"; // ðŸ‘ˆ ADDED
 
 /** Status options must match DB enum/check */
 const STATUS_CHOICES = ["ACTIVE", "INACTIVE", "MAINTENANCE"];
@@ -62,9 +62,9 @@ function daysUntil(d) {
 
 function fmtDate(d) {
   try {
-    return d ? new Date(d).toLocaleDateString() : "—";
+    return d ? new Date(d).toLocaleDateString() : "â€”";
   } catch {
-    return "—";
+    return "â€”";
   }
 }
 
@@ -72,7 +72,7 @@ function fmtDate(d) {
 function duePill(d) {
   const n = daysUntil(d);
   if (n === null) {
-    return { text: "—", className: "bg-transparent text-[var(--text-soft)]" };
+    return { text: "â€”", className: "bg-transparent text-[var(--text-soft)]" };
   }
   if (n < 0) {
     return {
@@ -134,7 +134,7 @@ function ActionsMenu({
   return (
     <div
       ref={menuRef}
-      className="absolute z-50 mt-2 min-w-[240px] rounded-xl border bg-[var(--panel)] shadow-xl overflow-hidden"
+      className="absolute z-50 mt-2 min-w-[240px] rounded-lg bg-[#2d2d2d] shadow-2xl overflow-hidden"
       style={{ right: 0 }}
     >
       <button
@@ -142,7 +142,7 @@ function ActionsMenu({
           onEdit?.();
           onClose?.();
         }}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 text-sm text-left transition-colors"
       >
         <Edit3 className="w-4 h-4" /> Edit compliance & status
       </button>
@@ -151,7 +151,7 @@ function ActionsMenu({
           onOdometer?.();
           onClose?.();
         }}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 text-sm text-left transition-colors"
       >
         <Gauge className="w-4 h-4" /> Update odometer
       </button>
@@ -160,7 +160,7 @@ function ActionsMenu({
           onAssign?.();
           onClose?.();
         }}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 text-sm text-left transition-colors"
       >
         <UserCheck className="w-4 h-4" /> Assign / Change driver
       </button>
@@ -169,7 +169,7 @@ function ActionsMenu({
           onUnassign?.();
           onClose?.();
         }}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 text-sm text-left transition-colors"
       >
         <UserX className="w-4 h-4" /> Unassign driver
       </button>
@@ -178,7 +178,7 @@ function ActionsMenu({
           onDocs?.();
           onClose?.();
         }}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 text-sm text-left transition-colors"
       >
         <FileText className="w-4 h-4" /> Documents
       </button>
@@ -187,7 +187,7 @@ function ActionsMenu({
           onMaint?.();
           onClose?.();
         }}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 text-sm text-left transition-colors"
       >
         <Hammer className="w-4 h-4" /> Maintenance log
       </button>
@@ -197,7 +197,7 @@ function ActionsMenu({
           onOpenPM?.();
           onClose?.();
         }}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] text-sm"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 text-sm text-left transition-colors"
       >
         <Wrench className="w-4 h-4" /> PM Scheduler
       </button>
@@ -265,7 +265,7 @@ function OdometerModal({ open, onClose, truck, onSaved }) {
 
   return (
     <ModalShell
-      title={`Update Odometer • ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      title={`Update Odometer â€¢ ${truck.truck_number ?? truck.vin ?? truck.id}`}
       onClose={onClose}
       footer={
         <>
@@ -280,7 +280,7 @@ function OdometerModal({ open, onClose, truck, onSaved }) {
             disabled={busy}
             className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50"
           >
-            {busy ? "Saving…" : "Save"}
+            {busy ? "Savingâ€¦" : "Save"}
           </button>
         </>
       }
@@ -316,7 +316,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
     async function load() {
       try {
         setErr(null);
-        // 🔧 swapped full_name -> first_name, last_name
+        // ðŸ”§ swapped full_name -> first_name, last_name
         const { data, error } = await supabase
           .from("drivers")
           .select("id, first_name, last_name, status")
@@ -368,7 +368,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
 
   return (
     <ModalShell
-      title={`Assign Driver • ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      title={`Assign Driver â€¢ ${truck.truck_number ?? truck.vin ?? truck.id}`}
       onClose={onClose}
       footer={
         <>
@@ -383,7 +383,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
             disabled={busy}
             className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50"
           >
-            {busy ? "Saving…" : "Save"}
+            {busy ? "Savingâ€¦" : "Save"}
           </button>
         </>
       }
@@ -399,7 +399,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Type a driver name or status…"
+          placeholder="Type a driver name or statusâ€¦"
           className="w-full pl-9 pr-3 py-2 rounded-xl border bg-transparent outline-none"
         />
       </div>
@@ -432,7 +432,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
                         <div>
                           <div className="font-medium">{name}</div>
                           <div className="text-xs opacity-70">
-                            {d.status || "—"}
+                            {d.status || "â€”"}
                           </div>
                         </div>
                       </label>
@@ -516,7 +516,7 @@ function EditComplianceModal({ open, onClose, truck, onSaved }) {
 
   return (
     <ModalShell
-      title={`Edit Compliance & Status • ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      title={`Edit Compliance & Status â€¢ ${truck.truck_number ?? truck.vin ?? truck.id}`}
       onClose={onClose}
       footer={
         <>
@@ -531,7 +531,7 @@ function EditComplianceModal({ open, onClose, truck, onSaved }) {
             disabled={busy}
             className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50"
           >
-            {busy ? "Saving…" : "Save"}
+            {busy ? "Savingâ€¦" : "Save"}
           </button>
         </>
       }
@@ -607,7 +607,7 @@ function MaintenanceModal({ open, onClose, truck, onSaved }) {
     } catch (e) {
       setErr(
         (e?.message || "").includes("does not exist")
-          ? "Table truck_maintenance not found. I’ll send you the SQL migration next."
+          ? "Table truck_maintenance not found. I'll send you the SQL migration next."
           : e?.message || "Failed to load maintenance."
       );
     } finally {
@@ -697,7 +697,7 @@ function MaintenanceModal({ open, onClose, truck, onSaved }) {
 
   return (
     <ModalShell
-      title={`Maintenance • ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      title={`Maintenance â€¢ ${truck.truck_number ?? truck.vin ?? truck.id}`}
       onClose={onClose}
       maxWidth="max-w-3xl"
       footer={
@@ -713,7 +713,7 @@ function MaintenanceModal({ open, onClose, truck, onSaved }) {
             disabled={busy}
             className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50"
           >
-            {busy ? "Saving…" : editing ? "Update Entry" : "Add Entry"}
+            {busy ? "Savingâ€¦" : editing ? "Update Entry" : "Add Entry"}
           </button>
         </>
       }
@@ -794,7 +794,7 @@ function MaintenanceModal({ open, onClose, truck, onSaved }) {
             {busy && rows.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-3 py-10 text-center">
-                  <Loader2 className="inline w-4 h-4 animate-spin" /> Loading…
+                  <Loader2 className="inline w-4 h-4 animate-spin" /> Loadingâ€¦
                 </td>
               </tr>
             ) : rows.length === 0 ? (
@@ -811,16 +811,16 @@ function MaintenanceModal({ open, onClose, truck, onSaved }) {
                     <td className="px-3 py-3 whitespace-nowrap">
                       {fmtDate(r.date)}
                     </td>
-                    <td className="px-3 py-3">{r.type || "—"}</td>
+                    <td className="px-3 py-3">{r.type || "â€”"}</td>
                     <td className="px-3 py-3 whitespace-nowrap">
-                      {r.odometer ?? "—"}
+                      {r.odometer ?? "â€”"}
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
                       {r.cost != null
                         ? `$${Number(r.cost).toLocaleString()}`
-                        : "—"}
+                        : "â€”"}
                     </td>
-                    <td className="px-3 py-3">{r.notes || "—"}</td>
+                    <td className="px-3 py-3">{r.notes || "â€”"}</td>
                     <td className="px-3 py-3 text-right">
                       <div className="inline-flex items-center gap-2">
                         <button
@@ -883,7 +883,7 @@ function PMAlertsDrawer({
               {refetching ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Refreshing…
+                  Refreshingâ€¦
                 </>
               ) : (
                 <>
@@ -936,7 +936,7 @@ function PMAlertsDrawer({
                           </div>
                         </div>
                         <div className="text-sm opacity-80 mt-1">
-                          {a.policy?.name || "Policy"} • {a.reason || "—"}
+                          {a.policy?.name || "Policy"} â€¢ {a.reason || "â€”"}
                         </div>
                         <div className="text-xs opacity-60 mt-1">
                           Opened {new Date(a.created_at).toLocaleString()}
@@ -970,7 +970,7 @@ function PMAlertsDrawer({
               <div className="opacity-70">
                 <Bell className="w-8 h-8 mx-auto mb-2 opacity-60" />
                 <div className="font-medium">No open PM alerts</div>
-                <div className="text-sm">You’re all set for now.</div>
+                <div className="text-sm">You're all set for now.</div>
               </div>
             </div>
           )}
@@ -1049,7 +1049,7 @@ export default function Trucks() {
         );
         let map = {};
         if (ids.length) {
-          // 🔧 swapped full_name -> first_name,last_name
+          // ðŸ”§ swapped full_name -> first_name,last_name
           const { data: dData, error: dErr } = await supabase
             .from("drivers")
             .select("id, first_name, last_name")
@@ -1127,7 +1127,7 @@ export default function Trucks() {
       );
       let map = {};
       if (ids.length) {
-        // 🔧 swapped full_name -> first_name,last_name
+        // ðŸ”§ swapped full_name -> first_name,last_name
         const { data: dData, error: dErr } = await supabase
           .from("drivers")
           .select("id, first_name, last_name")
@@ -1403,7 +1403,7 @@ export default function Trucks() {
             {refetching ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Refreshing…
+                Refreshingâ€¦
               </>
             ) : (
               <>
@@ -1427,11 +1427,11 @@ export default function Trucks() {
 
       <div className="text-xs text-[var(--text-soft)] mb-3">
         Track registrations, inspections, IFTA, insurance
-        <span className="mx-2">•</span>
+        <span className="mx-2">â€¢</span>
         {lastUpdated ? (
           <span>Last updated {lastUpdated.toLocaleTimeString()}</span>
         ) : (
-          <span>Loading…</span>
+          <span>Loadingâ€¦</span>
         )}
       </div>
 
@@ -1442,7 +1442,7 @@ export default function Trucks() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search truck #, VIN, make/model, driver…"
+            placeholder="Search truck #, VIN, make/model, driverâ€¦"
             className="w-full pl-9 pr-3 py-2 rounded-xl border bg-transparent outline-none"
           />
         </div>
@@ -1470,7 +1470,7 @@ export default function Trucks() {
           >
             <option value="ALL">All</option>
             <option value="OVERDUE">Overdue</option>
-            <option value="DUE_SOON">Due ≤ 7 days</option>
+            <option value="DUE_SOON">Due â‰¤ 7 days</option>
           </select>
         </div>
         <div className="flex items-center gap-2">
@@ -1531,7 +1531,7 @@ export default function Trucks() {
                 <td colSpan={9} className="px-3 py-10 text-center">
                   <div className="inline-flex items-center gap-2 text-[var(--text-soft)]">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Loading trucks…
+                    Loading trucksâ€¦
                   </div>
                 </td>
               </tr>
@@ -1576,7 +1576,7 @@ export default function Trucks() {
                 return (
                   <tr key={t.id} className={cx(zebra, "border-t relative")}>
                     <td className="px-3 py-3 whitespace-nowrap">
-                      {/* 👇 LINK to truck profile */}
+                      {/* ðŸ‘‡ LINK to truck profile */}
                       {t.truck_number ? (
                         <Link
                           to={`/trucks/${t.id}`}
@@ -1591,12 +1591,12 @@ export default function Trucks() {
                           className="underline underline-offset-2 hover:opacity-90"
                           title="Open truck profile"
                         >
-                          —
+                          â€”
                         </Link>
                       )}
                     </td>
                     <td className="px-3 py-3">
-                      {/* 👇 LINK to truck profile */}
+                      {/* ðŸ‘‡ LINK to truck profile */}
                       {t.vin ? (
                         <Link
                           to={`/trucks/${t.id}`}
@@ -1611,16 +1611,16 @@ export default function Trucks() {
                           className="underline underline-offset-2 hover:opacity-90"
                           title="Open truck profile"
                         >
-                          —
+                          â€”
                         </Link>
                       )}
                     </td>
                     <td className="px-3 py-3">
-                      {(t.make || "—") +
+                      {(t.make || "â€”") +
                         " / " +
-                        (t.model || "—") +
+                        (t.model || "â€”") +
                         " / " +
-                        (t.year || "—")}
+                        (t.year || "â€”")}
                     </td>
                     <td className="px-3 py-3">
                       <span
@@ -1629,14 +1629,14 @@ export default function Trucks() {
                           statusBadge
                         )}
                       >
-                        {(t.status || "—").toUpperCase()}
+                        {(t.status || "â€”").toUpperCase()}
                       </span>
                     </td>
                     <td className="px-3 py-3">
                       {t.driver_id ? (
                         <Link
                           className="underline underline-offset-2 hover:opacity-90"
-                          to={`/drivers/${t.driver_id}`} // 👈 LINK to driver profile
+                          to={`/drivers/${t.driver_id}`} // ðŸ‘ˆ LINK to driver profile
                           title="Open driver profile"
                         >
                           {driverNameFromMap(driversById, t.driver_id)}
@@ -1689,7 +1689,7 @@ export default function Trucks() {
                         </span>
                       </div>
                     </td>
-                    <td className="px-3 py-3">{t.odometer ?? "—"}</td>
+                    <td className="px-3 py-3">{t.odometer ?? "â€”"}</td>
                     <td className="px-3 py-3">
                       <button
                         className={cx(

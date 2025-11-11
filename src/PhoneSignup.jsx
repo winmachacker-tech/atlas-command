@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Loader2, ShieldCheck, Phone, KeyRound, CheckCircle2, XCircle } from "lucide-react";
@@ -49,7 +49,7 @@ export default function PhoneSignup() {
   const [msg, setMsg] = useState<{ type: "good" | "bad" | ""; text: string }>({ type: "", text: "" });
 
   useEffect(() => {
-    document.title = `${siteTitle} — Phone Signup`;
+    document.title = `${siteTitle} â€” Phone Signup`;
   }, []);
 
   async function requestOtp(e) {
@@ -109,7 +109,7 @@ export default function PhoneSignup() {
         // Not fatal to login, but show warning
         setMsg({ type: "bad", text: `Signed in, but profile init failed: ${ok.error}` });
       } else {
-        setMsg({ type: "good", text: "Phone verified. You’re in!" });
+        setMsg({ type: "good", text: "Phone verified. Youâ€™re in!" });
       }
 
       setPhase("done");
@@ -187,7 +187,7 @@ export default function PhoneSignup() {
                 />
               </div>
               <p className="mt-1 text-xs text-zinc-500">
-                Use E.164 format. We’ll text you a one-time code.
+                Use E.164 format. Weâ€™ll text you a one-time code.
               </p>
             </div>
 
@@ -252,10 +252,11 @@ export default function PhoneSignup() {
 
         {phase === "done" && (
           <div className="mt-4 text-sm text-emerald-100">
-            You’re signed in. Redirecting…
+            Youâ€™re signed in. Redirectingâ€¦
           </div>
         )}
       </div>
     </div>
   );
 }
+

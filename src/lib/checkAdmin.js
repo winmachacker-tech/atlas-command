@@ -1,4 +1,4 @@
-// src/lib/checkAdmin.js
+﻿// src/lib/checkAdmin.js
 import { supabase } from "./supabase";
 
 export async function checkAdmin() {
@@ -17,3 +17,4 @@ export async function checkAdmin() {
   if ((data.role || "").toLowerCase() === "admin") return true;
   return false;
 }
+

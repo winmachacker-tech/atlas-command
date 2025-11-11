@@ -1,4 +1,4 @@
-// src/pages/AdminEquipment.jsx
+﻿// src/pages/AdminEquipment.jsx
 import { useState } from "react";
 import { Loader2, CheckCircle, XCircle } from "lucide-react";
 import { supabase } from "../lib/supabase";
@@ -189,7 +189,7 @@ export default function AdminEquipment() {
         >
           {loading ? (
             <span className="inline-flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" /> Saving…
+              <Loader2 className="h-4 w-4 animate-spin" /> Savingâ€¦
             </span>
           ) : (
             "Save Equipment Type"
@@ -199,3 +199,4 @@ export default function AdminEquipment() {
     </div>
   );
 }
+

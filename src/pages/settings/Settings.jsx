@@ -1,4 +1,4 @@
-// src/pages/settings/Profile.jsx
+﻿// src/pages/settings/Profile.jsx
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import {
@@ -13,7 +13,7 @@ import {
  * Profile & Account (no internal sidebar)
  * - Standalone page for /settings/profile
  * - Fetches basic user + metadata and allows update
- * - No SettingsLayout, no left menu — clean content only
+ * - No SettingsLayout, no left menu â€” clean content only
  */
 export { default } from "../Settings.jsx";
 export default function Profile() {
@@ -105,7 +105,7 @@ export default function Profile() {
         {loading ? (
           <div className="flex items-center gap-2 text-[var(--text-muted)]">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Loading profile…
+            Loading profileâ€¦
           </div>
         ) : (
           <form onSubmit={onSave} className="space-y-5">
@@ -174,7 +174,7 @@ export default function Profile() {
                 {saving ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Saving…
+                    Savingâ€¦
                   </>
                 ) : (
                   <>
@@ -190,3 +190,4 @@ export default function Profile() {
     </div>
   );
 }
+

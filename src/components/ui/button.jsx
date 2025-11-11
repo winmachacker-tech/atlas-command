@@ -1,4 +1,4 @@
-export function Button({ children, onClick, variant = "default", size = "md", disabled = false, className = "" }) {
+﻿export function Button({ children, onClick, variant = "default", size = "md", disabled = false, className = "" }) {
   const base =
     "inline-flex items-center justify-center rounded-md font-medium transition-colors focus:outline-none disabled:opacity-50";
   const variants = {
@@ -20,3 +20,4 @@ export function Button({ children, onClick, variant = "default", size = "md", di
     </button>
   );
 }
+

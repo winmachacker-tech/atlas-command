@@ -1,4 +1,4 @@
-// src/main.jsx
+﻿// src/main.jsx
 import "./styles/dark-bridge.css";
 import React, { StrictMode, Suspense, lazy } from "react";
 import ReactDOM from "react-dom/client";
@@ -15,29 +15,36 @@ import AuthGuard from "./components/AuthGuard.jsx";
 import { ThemeProvider } from "./context/ThemeProvider.jsx";
 
 /* Lazy pages */
-const Dashboard      = lazy(() => import("./pages/Dashboard.jsx"));
-const Loads          = lazy(() => import("./pages/Loads.jsx"));
-const LoadDetails    = lazy(() => import("./pages/LoadDetails.jsx"));
-const InTransit      = lazy(() => import("./pages/InTransit.jsx"));
-const Delivered      = lazy(() => import("./pages/Delivered.jsx"));
-const Activity       = lazy(() => import("./pages/Activity.jsx"));
-const Settings       = lazy(() => import("./pages/Settings.jsx"));
-const Trucks         = lazy(() => import("./pages/Trucks.jsx"));
-const TruckProfile   = lazy(() => import("./pages/TruckProfile.jsx"));
-const Drivers        = lazy(() => import("./pages/Drivers.jsx"));
-const DriverDetail   = lazy(() => import("./pages/DriverDetail.jsx"));
-const Billing        = lazy(() => import("./pages/Billing.jsx"));
-const TeamManagement = lazy(() => import("./pages/TeamManagement.jsx"));
-const Profile        = lazy(() => import("./pages/Profile.jsx"));
-const Appearance     = lazy(() => import("./pages/Appearance.jsx"));
-const Integrations   = lazy(() => import("./pages/Integrations.jsx"));
-const Security       = lazy(() => import("./pages/Security.jsx"));
-const Notifications  = lazy(() => import("./pages/Notifications.jsx").catch(() => ({ default: () => <div className="p-6">Notifications page coming soon</div> })));
-const Login          = lazy(() => import("./pages/Login.jsx"));
-const Signup         = lazy(() => import("./pages/Signup.jsx"));
+const Dashboard         = lazy(() => import("./pages/Dashboard.jsx"));
+const Loads             = lazy(() => import("./pages/Loads.jsx"));
+const LoadDetails       = lazy(() => import("./pages/LoadDetails.jsx"));
+const InTransit         = lazy(() => import("./pages/InTransit.jsx"));
+const Delivered         = lazy(() => import("./pages/Delivered.jsx"));
+const Activity          = lazy(() => import("./pages/Activity.jsx"));
+const Settings          = lazy(() => import("./pages/Settings.jsx"));
+const Trucks            = lazy(() => import("./pages/Trucks.jsx"));
+const TruckProfile      = lazy(() => import("./pages/TruckProfile.jsx"));
+const Drivers           = lazy(() => import("./pages/Drivers.jsx"));
+const DriverDetail      = lazy(() => import("./pages/DriverDetail.jsx"));
+const Billing           = lazy(() => import("./pages/Billing.jsx"));
+const TeamManagement    = lazy(() => import("./pages/TeamManagement.jsx"));
+const Profile           = lazy(() => import("./pages/Profile.jsx"));
+const Appearance        = lazy(() => import("./pages/Appearance.jsx"));
+const Integrations      = lazy(() => import("./pages/Integrations.jsx"));
+const Security          = lazy(() => import("./pages/Security.jsx"));
+const Notifications     = lazy(() => import("./pages/Notifications.jsx").catch(() => ({ default: () => <div className="p-6">Notifications page coming soon</div> })));
+const Login             = lazy(() => import("./pages/Login.jsx"));
+const Signup            = lazy(() => import("./pages/Signup.jsx"));
+const Customers         = lazy(() => import("./pages/Customers.jsx"));
+const CustomerDetail    = lazy(() => import("./pages/CustomerDetail.jsx"));
 
-// ✅ NEW: Add Dispatch AI page
-const DispatchAI     = lazy(() => import("./pages/DispatchAI.jsx").catch(() => ({ default: () => <div className="p-6">Dispatch AI (Lab) - Coming soon</div> })));
+// AI & Learning pages
+const DispatchAI        = lazy(() => import("./pages/DispatchAI.jsx").catch(() => ({ default: () => <div className="p-6">Dispatch AI (Lab) - Coming soon</div> })));
+const AIRecommendations = lazy(() => import("./pages/AIRecommendations.jsx"));
+const AIInsights        = lazy(() => import("./pages/AIInsights.jsx").catch(() => ({ default: () => <div className="p-6">AI Insights</div> })));
+const AILabProof        = lazy(() => import("./pages/AILabProof.jsx"));
+const DriverLearning    = lazy(() => import("./pages/DriverLearning.jsx").catch(() => ({ default: () => <div className="p-6">Error loading Driver Learning page</div> })));
+const DriverLearningTest = lazy(() => import("./pages/DriverLearningTest.jsx"));
 
 function AppRoutes() {
   return (
@@ -65,12 +72,24 @@ function AppRoutes() {
                   <Route path="drivers/:id" element={<DriverDetail />} />
                   <Route path="trucks" element={<Trucks />} />
                   <Route path="trucks/:id" element={<TruckProfile />} />
+                  <Route path="customers" element={<Customers />} />
+                  <Route path="customers/:id" element={<CustomerDetail />} />
+
+                  {/* Learning */}
+                  <Route path="learning" element={<DriverLearning />} />
 
                   {/* Accounting */}
                   <Route path="billing" element={<Billing />} />
 
-                  {/* ✅ NEW: AI Tools */}
+                  {/* AI Tools */}
                   <Route path="dispatch-ai" element={<DispatchAI />} />
+                  <Route path="ai" element={<AIRecommendations />} />
+                  <Route path="ai-recommendations" element={<AIRecommendations />} />
+                  <Route path="ai-insights" element={<AIInsights />} />
+                  <Route path="ai-lab-proof" element={<AILabProof />} />
+
+                  {/* Admin */}
+                  <Route path="admin/driver-learning-test" element={<DriverLearningTest />} />
 
                   {/* Settings & Admin - Each has its own route */}
                   <Route path="profile" element={<Profile />} />

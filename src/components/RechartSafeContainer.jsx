@@ -1,4 +1,4 @@
-// src/components/RechartSafeContainer.jsx
+﻿// src/components/RechartSafeContainer.jsx
 import { useEffect, useRef, useState } from "react";
 
 /**
@@ -36,3 +36,4 @@ export default function RechartSafeContainer({ className = "h-64 w-full", childr
   );
 }
 // Ready for the next step?
+

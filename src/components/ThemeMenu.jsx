@@ -1,4 +1,4 @@
-// src/components/ThemeMenu.jsx
+﻿// src/components/ThemeMenu.jsx
 import { useEffect, useRef, useState } from "react";
 import { Sun, Moon, Monitor, ChevronDown } from "lucide-react";
 

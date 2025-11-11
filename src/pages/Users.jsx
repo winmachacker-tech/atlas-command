@@ -1,4 +1,4 @@
-// src/pages/Users.jsx
+﻿// src/pages/Users.jsx
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
@@ -21,7 +21,7 @@ import {
 function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
-const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString() : "—");
+const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString() : "â€”");
 
 /* ------------------------------ admin resolver ---------------------------- */
 async function resolveIsAdmin() {
@@ -254,7 +254,7 @@ export default function Users() {
         /forbidden|admin only/i.test(raw)
           ? "Unauthorized. Only admins can send invites."
           : /unauthorized|no user token/i.test(raw)
-          ? "Unauthorized. Your session may have expired—refresh your token."
+          ? "Unauthorized. Your session may have expiredâ€”refresh your token."
           : raw || "Failed to send invite.";
 
       setInviteMsg({ type: "error", text: msg });
@@ -331,7 +331,7 @@ export default function Users() {
             <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-zinc-500" />
             <input
               className="w-72 rounded-lg border border-zinc-800 bg-zinc-950/60 px-8 py-2 text-sm text-zinc-100 placeholder-zinc-500 outline-none focus:ring-1 focus:ring-zinc-700"
-              placeholder="Search by email or name…"
+              placeholder="Search by email or nameâ€¦"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && loadUsers()}
@@ -407,8 +407,8 @@ export default function Users() {
             ) : (
               rows.map((u) => (
                 <tr key={u.id} className="hover:bg-zinc-900/40">
-                  <td className="px-4 py-3 text-sm text-zinc-200">{u.email || "—"}</td>
-                  <td className="px-4 py-3 text-sm text-zinc-300">{u.full_name || "—"}</td>
+                  <td className="px-4 py-3 text-sm text-zinc-200">{u.email || "â€”"}</td>
+                  <td className="px-4 py-3 text-sm text-zinc-300">{u.full_name || "â€”"}</td>
                   <td className="px-4 py-3">
                     {u.is_admin ? (
                       <Badge tone="green">
@@ -520,3 +520,4 @@ export default function Users() {
     </div>
   );
 }
+

@@ -1,4 +1,4 @@
-// src/components/AddLoadModal.jsx
+﻿// src/components/AddLoadModal.jsx
 import { useState, useEffect } from "react";
 import { X, Loader2, Plus, ChevronDown, Pencil, Save } from "lucide-react";
 import { supabase } from "../lib/supabase";
@@ -548,7 +548,7 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                   type="text"
                   value={formData.temperature}
                   onChange={(e) => handleChange("temperature", e.target.value)}
-                  placeholder="e.g. 35°F"
+                  placeholder="e.g. 35Â°F"
                   className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
                 />
               </div>

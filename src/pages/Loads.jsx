@@ -1,4 +1,4 @@
-// src/pages/Loads.jsx
+﻿// src/pages/Loads.jsx
 import { useEffect, useMemo, useState } from "react";
 import {
   Plus,
@@ -18,7 +18,9 @@ import {
   Save,
   MoreVertical,
   UserCheck,
-  FileText,            // for Documents button
+  FileText,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import AddLoadModal from "../components/AddLoadModal";
@@ -26,7 +28,9 @@ import AssignDriverModal from "../components/AssignDriverModal";
 import EditLoadModal from "../components/EditLoadModal";
 import LoadDocuments from "../components/LoadDocuments";
 import { Link } from "react-router-dom";
-
+import DispatchAIBox from "../components/DispatchAIBox";
+import { fitLoadForDriver } from "../lib/driverFit";
+import DriverFitPill from "../components/DriverFitPill.jsx";
 
 /** MUST match DB enum/check */
 const STATUS_CHOICES = [
@@ -102,6 +106,28 @@ export default function Loads() {
   const [fetchError, setFetchError] = useState("");
   const [isAddOpen, setIsAddOpen] = useState(false);
 
+  async function leaveFeedback(load, accepted, note = null) {
+    try {
+      if (!load?.id || !load?.driver?.id) {
+        alert("Load or driver missing for feedback.");
+        return;
+      }
+      const payload = {
+        load_id: load.id,
+        driver_id: load.driver.id,
+        accepted,
+        rating: accepted ? "up" : "down",
+        note,
+      };
+      const { error } = await supabase
+        .from("dispatch_feedback_events")
+        .insert(payload);
+      if (error) throw error;
+    } catch (e) {
+      alert(e?.message || "Failed to save feedback.");
+    }
+  }
+
   // Problems workflow
   const [showProblemsOnly, setShowProblemsOnly] = useState(false);
   const [priorityFilter, setPriorityFilter] = useState("ALL");
@@ -126,7 +152,6 @@ export default function Loads() {
     let active = true;
 
     (async () => {
-      // whoami for default owner
       try {
         const { data } = await supabase.auth.getUser();
         if (data?.user && active) setMe({ email: data.user.email || "", id: data.user.id });
@@ -155,7 +180,7 @@ export default function Loads() {
     return () => { active = false; };
   }, []);
 
-  // Freshen a single row (so modals show latest)
+  // Freshen a single row
   async function refreshOne(id) {
     try {
       const { data, error } = await supabase
@@ -175,11 +200,9 @@ export default function Loads() {
     }
   }
 
-  // Filtering logic
+  // Filtering
   const visibleRows = useMemo(() => {
     let rows = loads;
-
-    // Priority filter takes precedence: when set, show ONLY problem loads with that priority
     if (priorityFilter !== "ALL") {
       rows = rows.filter(
         (r) => r.status === "PROBLEM" && (r.problem_priority || "") === priorityFilter
@@ -187,7 +210,6 @@ export default function Loads() {
     } else if (showProblemsOnly) {
       rows = rows.filter((r) => r.status === "PROBLEM");
     }
-
     return rows;
   }, [loads, showProblemsOnly, priorityFilter]);
 
@@ -221,7 +243,6 @@ export default function Loads() {
     }
   }
 
-  // Problems workflow
   function openReport(load) { setReportingLoad(load); }
   function closeReport() { setReportingLoad(null); }
 
@@ -240,7 +261,6 @@ export default function Loads() {
         driver:drivers!loads_driver_id_fkey(id, first_name, last_name)
       `).single();
       if (error) {
-        // Retry minimal if optional cols missing
         if (String(error?.message || "").includes("column") || error?.code === "42703") {
           const { data: data2, error: e2 } = await supabase
             .from("loads")
@@ -252,7 +272,7 @@ export default function Loads() {
             `)
             .single();
           if (e2) throw e2;
-          setLoads((prev) => prev.map((l) => (l.id === loadId ? data2 : l))); // fixed prev.id bug
+          setLoads((prev) => prev.map((l) => (l.id === loadId ? data2 : l)));
         } else {
           throw error;
         }
@@ -334,22 +354,29 @@ export default function Loads() {
 
   /* ------------------------------ Render ------------------------------ */
   return (
-    <div className="p-6">
+    <div className="p-3 sm:p-6 space-y-4 sm:space-y-6">
+      {/* AI dispatch input */}
+      <DispatchAIBox
+        onAssigned={() => {
+          console.log("Driver assigned successfully");
+        }}
+      />
+
       {/* Header */}
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-4 sm:mb-6 flex flex-col sm:flex-row sm:flex-wrap items-start sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5">
             <Ico as={ShieldCheck} className="text-amber-400" />
           </div>
           <div>
-            <h1 className="text-xl font-semibold">Loads</h1>
-            <p className="text-sm text-white/60">Create, track, and manage loads.</p>
+            <h1 className="text-lg sm:text-xl font-semibold">Loads</h1>
+            <p className="text-xs sm:text-sm text-white/60">Create, track, and manage loads.</p>
           </div>
         </div>
 
         <button
           onClick={() => setIsAddOpen(true)}
-          className="inline-flex items-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400 focus:outline-none"
+          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400 focus:outline-none"
         >
           <Ico as={Plus} />
           Add Load
@@ -357,8 +384,8 @@ export default function Loads() {
       </div>
 
       {/* Problems toolbar */}
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <label className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-sm">
+      <div className="mb-3 sm:mb-4 flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2 sm:gap-3">
+        <label className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-xs sm:text-sm">
           <input
             type="checkbox"
             className="accent-amber-500"
@@ -367,7 +394,8 @@ export default function Loads() {
           />
           <span className="inline-flex items-center gap-1">
             <Ico as={Bug} />
-            Show problems only
+            <span className="hidden sm:inline">Show problems only</span>
+            <span className="sm:hidden">Problems only</span>
           </span>
         </label>
 
@@ -382,25 +410,25 @@ export default function Loads() {
       </div>
 
       {/* Body */}
-      <div className="rounded-2xl border border-white/10">
+      <div className="rounded-xl sm:rounded-2xl border border-white/10">
         {loading ? (
-          <div className="grid place-items-center p-16">
+          <div className="grid place-items-center p-8 sm:p-16">
             <div className="inline-flex items-center gap-2 text-white/70">
               <Ico as={Loader2} className="animate-spin" />
-              <span>Loading loads…</span>
+              <span className="text-sm">Loading loads…</span>
             </div>
           </div>
         ) : visibleRows.length === 0 ? (
-          <div className="p-8">
-            <div className="grid place-items-center rounded-2xl border border-white/10 p-10">
+          <div className="p-4 sm:p-8">
+            <div className="grid place-items-center rounded-xl sm:rounded-2xl border border-white/10 p-6 sm:p-10">
               <div className="flex max-w-xl flex-col items-center text-center">
-                <div className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-white/5">
+                <div className="mb-3 inline-flex h-10 w-10 sm:h-12 sm:w-12 items-center justify-center rounded-xl sm:rounded-2xl bg-white/5">
                   <TruckGlyph />
                 </div>
-                <h2 className="text-lg font-semibold">
+                <h2 className="text-base sm:text-lg font-semibold">
                   {priorityFilter !== "ALL" || showProblemsOnly ? "No matching problem loads" : "No loads yet"}
                 </h2>
-                <p className="mt-1 text-sm text-white/60">
+                <p className="mt-1 text-xs sm:text-sm text-white/60">
                   {priorityFilter !== "ALL" || showProblemsOnly
                     ? "Adjust filters or priority to see more."
                     : "Create your first load to get started."}
@@ -418,171 +446,360 @@ export default function Loads() {
             </div>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-white/5">
-                <tr className="text-left">
-                  <Th>Load #</Th>
-                  <Th>Shipper</Th>
-                  <Th>Driver</Th>
-                  <Th>Origin</Th>
-                  <Th>Destination</Th>
-                  <Th>Pickup</Th>
-                  <Th>Delivery</Th>
-                  <Th>Rate</Th>
-                  <Th>Status</Th>
-                  <Th>Problem</Th>
-                  <Th>Updated</Th>
-                  <Th className="text-right">Actions</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRows.map((l) => (
-                  <tr key={l.id} className="border-t border-white/10 hover:bg-white/5">
-                    {/* 🔗 Only change: make Load # a link to /loads/:id */}
-                    <Td>
+          <>
+            {/* Desktop table view */}
+            <div className="hidden lg:block overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-white/5">
+                  <tr className="text-left">
+                    <Th>Load #</Th>
+                    <Th>Shipper</Th>
+                    <Th>Driver</Th>
+                    <Th>Origin</Th>
+                    <Th>Destination</Th>
+                    <Th>Pickup</Th>
+                    <Th>Delivery</Th>
+                    <Th>Rate</Th>
+                    <Th>Status</Th>
+                    <Th>Problem</Th>
+                    <Th>Updated</Th>
+                    <Th className="text-right">Actions</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleRows.map((l) => (
+                    <tr key={l.id} className="border-t border-white/10 hover:bg-white/5">
+                      <Td>
+                        {l.id ? (
+                          <Link
+                            to={`/loads/${l.id}`}
+                            className="text-emerald-400 hover:underline font-medium"
+                          >
+                            {l.reference || "—"}
+                          </Link>
+                        ) : (
+                          l.reference || "—"
+                        )}
+                      </Td>
+
+                      <Td>{l.shipper || "—"}</Td>
+                      <Td>
+                        {l.driver ? (
+                          <>
+                            <span className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 text-xs text-sky-300">
+                              <Ico as={UserCheck} />
+                              {l.driver.last_name}, {l.driver.first_name}
+                            </span>
+
+                            {/* 👇 NEW: Live global fit pill (from SQL) */}
+                            <div className="mt-1">
+                              <DriverFitPill driverId={l.driver.id} />
+                            </div>
+
+                            {/* Existing local fit-on-demand badge (kept) */}
+                            <div className="mt-1">
+                              <FitBadge load={l} />
+                            </div>
+
+                            <div className="mt-1">
+                              <ThumbButtons
+                                load={l}
+                                onFeedback={(accepted) => leaveFeedback(l, accepted)}
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-xs text-white/40">—</span>
+                        )}
+                      </Td>
+                      <Td>{l.origin || "—"}</Td>
+                      <Td>{l.destination || "—"}</Td>
+                      <Td>
+                        {l.pickup_date ? (
+                          <div className="text-xs">
+                            <div className="font-medium">{new Date(l.pickup_date).toLocaleDateString()}</div>
+                            {l.pickup_time && <div className="text-white/60">{l.pickup_time}</div>}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-white/40">—</span>
+                        )}
+                      </Td>
+                      <Td>
+                        {l.delivery_date ? (
+                          <div className="text-xs">
+                            <div className="font-medium">{new Date(l.delivery_date).toLocaleDateString()}</div>
+                            {l.delivery_time && <div className="text-white/60">{l.delivery_time}</div>}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-white/40">—</span>
+                        )}
+                      </Td>
+                      <Td>
+                        {l.rate ? (
+                          <span className="font-mono text-xs font-medium text-emerald-300">
+                            ${parseFloat(l.rate).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-white/40">—</span>
+                        )}
+                      </Td>
+                      <Td><StatusBadge value={l.status} /></Td>
+                      <Td>
+                        {l.status === "PROBLEM" ? (
+                          <div className="flex items-center gap-2">
+                            <PriorityBadge value={l.problem_priority} />
+                            <span className="inline-flex items-center gap-1 text-xs text-white/70">
+                              <Ico as={Clock} />
+                              {since(l.problem_flagged_at || l.updated_at)}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-white/40">—</span>
+                        )}
+                      </Td>
+                      <Td>{fmtDate(l.updated_at || l.created_at)}</Td>
+                      <Td className="text-right">
+                        <div className="inline-flex items-center gap-2">
+                          <BestDriverHint load={l} />
+
+                          {l.status === "PROBLEM" ? (
+                            <button
+                              onClick={() => resolveProblem(l.id)}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                            >
+                              <Ico as={CheckCircle2} />
+                              <span>Resolve</span>
+                            </button>
+                          ) : l.status === "IN_TRANSIT" ? (
+                            <button
+                              onClick={() => updateStatus(l.id, "DELIVERED")}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                            >
+                              <Ico as={CheckCircle2} />
+                              <span>Delivered</span>
+                            </button>
+                          ) : l.status === "DELIVERED" ? (
+                            <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 text-xs text-emerald-400">
+                              <Ico as={CheckCircle2} />
+                              <span>Complete</span>
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => setReportingLoad(l)}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/20 border border-red-500/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/30 transition-colors"
+                            >
+                              <Ico as={AlertTriangle} />
+                              <span>Report</span>
+                            </button>
+                          )}
+
+                          <IconButton
+                            title={l.driver_id ? "Change Driver" : "Assign Driver"}
+                            onClick={() => openAssignDriver(l)}
+                          >
+                            <Ico as={UserCheck} />
+                          </IconButton>
+
+                          <IconButton
+                            title="View/Edit Notes"
+                            onClick={() => openNotes(l)}
+                          >
+                            <Ico as={StickyNote} />
+                          </IconButton>
+
+                          <IconButton
+                            title="Documents"
+                            onClick={() => setDocsLoad(l)}
+                          >
+                            <Ico as={FileText} />
+                          </IconButton>
+
+                          <MoreActionsMenu
+                            load={l}
+                            onViewProblem={() => openViewProblem(l.id)}
+                            onSetTransit={() => updateStatus(l.id, "IN_TRANSIT")}
+                            onDelete={() => deleteLoad(l.id)}
+                            onEditLoad={() => setEditingLoad(l)}
+                          />
+                        </div>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile card view */}
+            <div className="lg:hidden space-y-3 p-3">
+              {visibleRows.map((l) => (
+                <div key={l.id} className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-3">
+                  {/* Header row */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
                       {l.id ? (
                         <Link
                           to={`/loads/${l.id}`}
-                          className="text-emerald-400 hover:underline font-medium"
+                          className="text-emerald-400 hover:underline font-medium text-sm block truncate"
                         >
                           {l.reference || "—"}
                         </Link>
                       ) : (
-                        l.reference || "—"
+                        <div className="text-sm font-medium truncate">{l.reference || "—"}</div>
                       )}
-                    </Td>
+                      <div className="text-xs text-white/60 mt-0.5">{l.shipper || "—"}</div>
+                    </div>
+                    <StatusBadge value={l.status} />
+                  </div>
 
-                    <Td>{l.shipper || "—"}</Td>
-                    <Td>
-                      {l.driver ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 text-xs text-sky-300">
-                          <Ico as={UserCheck} />
-                          {l.driver.last_name}, {l.driver.first_name}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-white/40">—</span>
-                      )}
-                    </Td>
-                    <Td>{l.origin || "—"}</Td>
-                    <Td>{l.destination || "—"}</Td>
-                    <Td>
+                  {/* Driver info */}
+                  {l.driver && (
+                    <div className="flex flex-col gap-1.5">
+                      <span className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 text-xs text-sky-300 w-fit">
+                        <Ico as={UserCheck} />
+                        {l.driver.last_name}, {l.driver.first_name}
+                      </span>
+
+                      {/* 👇 NEW: Live global fit pill (from SQL) */}
+                      <DriverFitPill driverId={l.driver.id} />
+
+                      {/* Existing local fit-on-demand badge (kept) */}
+                      <FitBadge load={l} />
+
+                      <div className="mt-1">
+                        <ThumbButtons
+                          load={l}
+                          onFeedback={(accepted) => leaveFeedback(l, accepted)}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Route info */}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <div className="text-white/60">Origin</div>
+                      <div className="font-medium truncate">{l.origin || "—"}</div>
+                    </div>
+                    <div>
+                      <div className="text-white/60">Destination</div>
+                      <div className="font-medium truncate">{l.destination || "—"}</div>
+                    </div>
+                  </div>
+
+                  {/* Dates */}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <div className="text-white/60">Pickup</div>
                       {l.pickup_date ? (
-                        <div className="text-xs">
+                        <div>
                           <div className="font-medium">{new Date(l.pickup_date).toLocaleDateString()}</div>
                           {l.pickup_time && <div className="text-white/60">{l.pickup_time}</div>}
                         </div>
                       ) : (
-                        <span className="text-xs text-white/40">—</span>
+                        <div className="text-white/40">—</div>
                       )}
-                    </Td>
-                    <Td>
+                    </div>
+                    <div>
+                      <div className="text-white/60">Delivery</div>
                       {l.delivery_date ? (
-                        <div className="text-xs">
+                        <div>
                           <div className="font-medium">{new Date(l.delivery_date).toLocaleDateString()}</div>
                           {l.delivery_time && <div className="text-white/60">{l.delivery_time}</div>}
                         </div>
                       ) : (
-                        <span className="text-xs text-white/40">—</span>
+                        <div className="text-white/40">—</div>
                       )}
-                    </Td>
-                    <Td>
+                    </div>
+                  </div>
+
+                  {/* Rate and problem info */}
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <div>
                       {l.rate ? (
                         <span className="font-mono text-xs font-medium text-emerald-300">
-                          ${parseFloat(l.rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          ${parseFloat(l.rate).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       ) : (
-                        <span className="text-xs text-white/40">—</span>
+                        <span className="text-white/40">—</span>
                       )}
-                    </Td>
-                    <Td><StatusBadge value={l.status} /></Td>
-                    <Td>
-                      {l.status === "PROBLEM" ? (
-                        <div className="flex items-center gap-2">
-                          <PriorityBadge value={l.problem_priority} />
-                          <span className="inline-flex items-center gap-1 text-xs text-white/70">
-                            <Ico as={Clock} />
-                            {since(l.problem_flagged_at || l.updated_at)}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-white/40">—</span>
-                      )}
-                    </Td>
-                    <Td>{fmtDate(l.updated_at || l.created_at)}</Td>
-                    <Td className="text-right">
-                      <div className="inline-flex items-center gap-2">
-                        {/* Primary action - prominent button */}
-                        {l.status === "PROBLEM" ? (
-                          <button
-                            onClick={() => resolveProblem(l.id)}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors"
-                          >
-                            <Ico as={CheckCircle2} />
-                            <span>Resolve</span>
-                          </button>
-                        ) : l.status === "IN_TRANSIT" ? (
-                          <button
-                            onClick={() => updateStatus(l.id, "DELIVERED")}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors"
-                          >
-                            <Ico as={CheckCircle2} />
-                            <span>Delivered</span>
-                          </button>
-                        ) : l.status === "DELIVERED" ? (
-                          <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 text-xs text-emerald-400">
-                            <Ico as={CheckCircle2} />
-                            <span>Complete</span>
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => setReportingLoad(l)}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/20 border border-red-500/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/30 transition-colors"
-                          >
-                            <Ico as={AlertTriangle} />
-                            <span>Report</span>
-                          </button>
-                        )}
-
-                        {/* Driver - icon button */}
-                        <IconButton
-                          title={l.driver_id ? "Change Driver" : "Assign Driver"}
-                          onClick={() => openAssignDriver(l)}
-                        >
-                          <Ico as={UserCheck} />
-                        </IconButton>
-
-                        {/* Notes - icon button */}
-                        <IconButton
-                          title="View/Edit Notes"
-                          onClick={() => openNotes(l)}
-                        >
-                          <Ico as={StickyNote} />
-                        </IconButton>
-
-                        {/* Documents - icon button */}
-                        <IconButton
-                          title="Documents"
-                          onClick={() => setDocsLoad(l)}
-                        >
-                          <Ico as={FileText} />
-                        </IconButton>
-
-                        {/* More actions - dropdown menu */}
-                        <MoreActionsMenu
-                          load={l}
-                          onViewProblem={() => openViewProblem(l.id)}
-                          onSetTransit={() => updateStatus(l.id, "IN_TRANSIT")}
-                          onDelete={() => deleteLoad(l.id)}
-                          onEditLoad={() => setEditingLoad(l)}
-                        />
+                    </div>
+                    {l.status === "PROBLEM" && (
+                      <div className="flex items-center gap-2">
+                        <PriorityBadge value={l.problem_priority} />
+                        <span className="inline-flex items-center gap-1 text-white/70">
+                          <Ico as={Clock} />
+                          {since(l.problem_flagged_at || l.updated_at)}
+                        </span>
                       </div>
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/10">
+                    {l.status === "PROBLEM" ? (
+                      <button
+                        onClick={() => resolveProblem(l.id)}
+                        className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                      >
+                        <Ico as={CheckCircle2} />
+                        <span>Resolve</span>
+                      </button>
+                    ) : l.status === "IN_TRANSIT" ? (
+                      <button
+                        onClick={() => updateStatus(l.id, "DELIVERED")}
+                        className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                      >
+                        <Ico as={CheckCircle2} />
+                        <span>Delivered</span>
+                      </button>
+                    ) : l.status === "DELIVERED" ? (
+                      <span className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 text-xs text-emerald-400">
+                        <Ico as={CheckCircle2} />
+                        <span>Complete</span>
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => setReportingLoad(l)}
+                        className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-red-500/20 border border-red-500/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/30 transition-colors"
+                      >
+                        <Ico as={AlertTriangle} />
+                        <span>Report</span>
+                      </button>
+                    )}
+
+                    <IconButton
+                      title={l.driver_id ? "Change Driver" : "Assign Driver"}
+                      onClick={() => openAssignDriver(l)}
+                    >
+                      <Ico as={UserCheck} />
+                    </IconButton>
+
+                    <IconButton
+                      title="View/Edit Notes"
+                      onClick={() => openNotes(l)}
+                    >
+                      <Ico as={StickyNote} />
+                    </IconButton>
+
+                    <IconButton
+                      title="Documents"
+                      onClick={() => setDocsLoad(l)}
+                    >
+                      <Ico as={FileText} />
+                    </IconButton>
+
+                    <MoreActionsMenu
+                      load={l}
+                      onViewProblem={() => openViewProblem(l.id)}
+                      onSetTransit={() => updateStatus(l.id, "IN_TRANSIT")}
+                      onDelete={() => deleteLoad(l.id)}
+                      onEditLoad={() => setEditingLoad(l)}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
 
@@ -600,7 +817,6 @@ export default function Loads() {
           load={editingLoad}
           onClose={() => setEditingLoad(null)}
           onUpdated={async (updatedLoad) => {
-            // ensure embedded driver is hydrated
             const fresh = await refreshOne(updatedLoad.id);
             if (fresh) {
               setLoads((prev) => prev.map((l) => (l.id === fresh.id ? fresh : l)));
@@ -616,7 +832,6 @@ export default function Loads() {
           load={assigningDriverLoad}
           onClose={() => setAssigningDriverLoad(null)}
           onAssigned={async (updatedLoad) => {
-            // updatedLoad may not include embedded driver; refresh to hydrate
             const fresh = await refreshOne(updatedLoad.id);
             if (fresh) {
               setLoads((prev) => prev.map((l) => (l.id === fresh.id ? fresh : l)));
@@ -731,7 +946,7 @@ function StatusBadge({ value }) {
   return (
     <span
       className={cx(
-        "inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-xs",
+        "inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-xs whitespace-nowrap",
         map[value] || "bg-white/10 text-white/70 border-white/20"
       )}
     >
@@ -752,7 +967,7 @@ function PriorityBadge({ value }) {
   return (
     <span
       className={cx(
-        "inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-xs",
+        "inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-xs whitespace-nowrap",
         map[value] || "bg-white/10 text-white/70 border-white/20"
       )}
     >
@@ -776,13 +991,11 @@ function MoreActionsMenu({ load, onViewProblem, onSetTransit, onDelete, onEditLo
 
       {isOpen && (
         <>
-          {/* Backdrop to close menu */}
           <div
             className="fixed inset-0 z-10"
             onClick={() => setIsOpen(false)}
           />
           
-          {/* Dropdown menu */}
           <div className="absolute right-0 top-full z-20 mt-1 min-w-[180px] rounded-lg border border-white/10 bg-[#0B0B0F] py-1 shadow-xl">
             <button
               onClick={() => {
@@ -939,7 +1152,7 @@ function ReportProblemModal({ load, me, onClose, onSubmit }) {
           </div>
         </div>
 
-        <div className="mt-4 flex items-center justify-end gap-2">
+        <div className="mt-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2">
           <button
             onClick={onClose}
             className="rounded-xl border border-white/10 px-3 py-2 text-sm hover:bg-white/5"
@@ -949,7 +1162,7 @@ function ReportProblemModal({ load, me, onClose, onSubmit }) {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="inline-flex items-center gap-2 rounded-xl bg-red-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-red-400 disabled:opacity-60"
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-red-400 disabled:opacity-60"
           >
             {saving ? <Ico as={Loader2} className="animate-spin" /> : <Ico as={AlertTriangle} />}
             Flag as Problem
@@ -1021,18 +1234,18 @@ function ViewProblemModal({ load, onClose, onResolve, onSave }) {
           </div>
         </div>
 
-        <div className="mt-4 flex items-center justify-end gap-2">
+        <div className="mt-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2">
           <button
             onClick={handleSave}
             disabled={saving}
-            className="inline-flex items-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400 disabled:opacity-60"
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400 disabled:opacity-60"
           >
             {saving ? <Ico as={Loader2} className="animate-spin" /> : <Ico as={Save} />}
             Save
           </button>
           <button
             onClick={onResolve}
-            className="inline-flex items-center gap-2 rounded-xl bg-emerald-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-emerald-400"
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-emerald-400"
           >
             <Ico as={CheckCircle2} />
             Resolve
@@ -1094,12 +1307,12 @@ function NotesModal({ load, onClose, onSave }) {
               onChange={(e) => setText(e.target.value)}
               placeholder="Anything relevant to this load…"
               rows={6}
-              className="w-full resize-y rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40"
+              className="w-full resize-y rounded-XL border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40"
             />
           </div>
         </div>
 
-        <div className="mt-4 flex items-center justify-end gap-2">
+        <div className="mt-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2">
           <button
             onClick={onClose}
             className="rounded-xl border border-white/10 px-3 py-2 text-sm hover:bg-white/5"
@@ -1109,7 +1322,7 @@ function NotesModal({ load, onClose, onSave }) {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="inline-flex items-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400 disabled:opacity-60"
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400 disabled:opacity-60"
           >
             {saving ? <Ico as={Loader2} className="animate-spin" /> : <Ico as={Save} />}
             Save Notes
@@ -1124,7 +1337,7 @@ function NotesModal({ load, onClose, onSave }) {
 function DocumentsModal({ load, onClose }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-    <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[var(--bg-base,#0B0B0F)] p-4">
+      <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[var(--bg-base,#0B0B0F)] p-4">
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-white/10">
@@ -1137,11 +1350,238 @@ function DocumentsModal({ load, onClose }) {
           <IconButton title="Close" onClick={onClose}><Ico as={X} /></IconButton>
         </div>
 
-        {/* LoadDocuments embedded */}
         <div className="mt-2">
           <LoadDocuments loadId={load?.id} />
         </div>
       </div>
     </div>
+  );
+}
+
+/* ----------------------------- Fit Badge (ADD) ----------------------------- */
+function FitBadge({ load }) {
+  const [state, setState] = useState({ status: "idle", text: "", title: "" });
+
+  function pickState(s) {
+    if (!s) return "";
+    const m = String(s).match(/,\s*([A-Za-z]{2})\b/);
+    if (m) return m[1].toUpperCase();
+    const t = String(s).trim().split(/\s+/)[0];
+    if (/^[A-Za-z]{2}$/.test(t)) return t.toUpperCase();
+    return "";
+  }
+
+  function toFitLoad(l) {
+    return {
+      origin_state: l.origin_state || pickState(l.origin),
+      dest_state: l.dest_state || pickState(l.destination),
+      equipment_type: l.equipment_type || l.trailer_type || l.equipment || null,
+      miles: l.miles ?? null,
+      lane_name: l.reference || undefined,
+    };
+  }
+
+  async function calc() {
+    if (!load?.driver?.id) return;
+    try {
+      setState({ status: "loading", text: "Calculating…", title: "" });
+      const { data, error } = await supabase.rpc("driver_preference_profile", { p_driver_id: load.driver.id });
+      if (error) throw error;
+
+      const fit = fitLoadForDriver(data, toFitLoad(load));
+      const t =
+        fit.verdict === "excellent" ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300" :
+        fit.verdict === "good"      ? "bg-sky-500/15 border-sky-500/30 text-sky-300" :
+        fit.verdict === "ok"        ? "bg-amber-500/15 border-amber-500/30 text-amber-300" :
+                                      "bg-red-500/15 border-red-500/30 text-red-300";
+
+      const title = [
+        `Score: ${fit.score} (${fit.verdict})`,
+        ...fit.reasons.map(r => `• ${r}`)
+      ].join("\n");
+
+      setState({ status: "ready", text: `Fit: ${fit.score} · ${fit.verdict}`, title, theme: t });
+    } catch (e) {
+      setState({ status: "error", text: "Fit: n/a", title: e?.message || "Unable to compute fit" });
+    }
+  }
+
+  if (!load?.driver?.id) return null;
+
+  const base =
+    state.status === "ready"
+      ? state.theme
+      : state.status === "loading"
+      ? "bg-white/10 border-white/20 text-white/70"
+      : state.status === "error"
+      ? "bg-red-500/15 border-red-500/30 text-red-300"
+      : "bg-white/10 border-white/20 text-white/60";
+
+  return (
+    <button
+      type="button"
+      onMouseEnter={() => state.status === "idle" && calc()}
+      onClick={() => calc()}
+      title={state.title || "Click to compute fit score"}
+      className={cx(
+        "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px]",
+        "transition-colors",
+        base
+      )}
+    >
+      {state.status === "loading" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+      <span>{state.text || "Fit: check"}</span>
+    </button>
+  );
+}
+
+/* ----------------------------- Thumb Buttons (ADD) ----------------------------- */
+function ThumbButtons({ load, onFeedback }) {
+  if (!load?.driver?.id) return null;
+
+  return (
+    <div className="inline-flex items-center gap-1 mt-1">
+      <button
+        type="button"
+        title="Good match (thumbs up)"
+        onClick={() => onFeedback(true)}
+        className="inline-flex items-center justify-center h-6 w-6 rounded-md border border-emerald-500/40 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
+      >
+        <ThumbsUp className="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
+        title="Poor match (thumbs down)"
+        onClick={() => onFeedback(false)}
+        className="inline-flex items-center justify-center h-6 w-6 rounded-md border border-red-500/40 bg-red-500/15 text-red-300 hover:bg-red-500/25"
+      >
+        <ThumbsDown className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+/* ----------------------------- Best Driver Hint (ADD) ----------------------------- */
+function BestDriverHint({ load }) {
+  const [state, setState] = useState({
+    status: "idle",
+    label: "Best match",
+    title: "Click to compute best driver",
+    theme: "bg-white/10 border-white/20 text-white/70",
+  });
+
+  if (!load) return null;
+
+  function pickState(s) {
+    if (!s) return "";
+    const m = String(s).match(/,\s*([A-Za-z]{2})\b/);
+    if (m) return m[1].toUpperCase();
+    const t = String(s).trim().split(/\s+/)[0];
+    if (/^[A-Za-z]{2}$/.test(t)) return t.toUpperCase();
+    return "";
+  }
+
+  function toFitLoad(l) {
+    return {
+      origin_state: l.origin_state || pickState(l.origin),
+      dest_state: l.dest_state || pickState(l.destination),
+      equipment_type: l.equipment_type || l.trailer_type || l.equipment || null,
+      miles: l.miles ?? null,
+      lane_name: l.reference || undefined,
+    };
+  }
+
+  async function compute() {
+    if (state.status === "loading") return;
+    setState((s) => ({ ...s, status: "loading", label: "Finding…", title: "" }));
+
+    try {
+      const { data: drivers, error: dErr } = await supabase
+        .from("drivers")
+        .select("id, first_name, last_name, status")
+        .eq("status", "ACTIVE")
+        .order("last_name", { ascending: true })
+        .limit(30);
+
+      if (dErr) throw dErr;
+      if (!drivers?.length) {
+        setState({
+          status: "error",
+          label: "No ACTIVE drivers",
+          title: "No candidates available",
+          theme: "bg-red-500/15 border-red-500/30 text-red-300",
+        });
+        return;
+      }
+
+      const fitLoad = toFitLoad(load);
+      let best = null;
+
+      await Promise.all(
+        drivers.map(async (drv) => {
+          try {
+            const { data: prefs, error: pErr } = await supabase
+              .rpc("driver_preference_profile", { p_driver_id: drv.id });
+            if (pErr) throw pErr;
+            const result = fitLoadForDriver(prefs || {}, fitLoad);
+            if (!best || result.score > best.score) {
+              best = { result, driver: drv };
+            }
+          } catch {}
+        })
+      );
+
+      if (!best) {
+        setState({
+          status: "error",
+          label: "Fit: n/a",
+          title: "Couldn’t compute any fits",
+          theme: "bg-red-500/15 border-red-500/30 text-red-300",
+        });
+        return;
+      }
+
+      const { result, driver } = best;
+      const theme =
+        result.verdict === "excellent"
+          ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+          : result.verdict === "good"
+          ? "bg-sky-500/15 border-sky-500/30 text-sky-300"
+          : result.verdict === "ok"
+          ? "bg-amber-500/15 border-amber-500/30 text-amber-300"
+          : "bg-red-500/15 border-red-500/30 text-red-300";
+
+      const name = `${driver.last_name || ""}${driver.last_name && driver.first_name ? ", " : ""}${driver.first_name || ""}`.trim();
+
+      setState({
+        status: "ready",
+        label: `Best: ${name || "Driver"} · ${result.score}`,
+        title: [`Score: ${result.score} (${result.verdict})`, ...result.reasons.map((r) => `• ${r}`)].join("\n"),
+        theme,
+      });
+    } catch (e) {
+      setState({
+        status: "error",
+        label: "Fit: error",
+        title: e?.message || "Unable to compute",
+        theme: "bg-red-500/15 border-red-500/30 text-red-300",
+      });
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onMouseEnter={() => state.status === "idle" && compute()}
+      onClick={compute}
+      title={state.title}
+      className={cx(
+        "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors",
+        state.theme
+      )}
+    >
+      {state.status === "loading" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+      <span className="truncate max-w-[220px]">{state.label}</span>
+    </button>
   );
 }

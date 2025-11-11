@@ -1,7 +1,7 @@
-// src/pages/Appearance.jsx
+﻿// src/pages/Appearance.jsx
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { supabase } from "../lib/supabase";
-import { useTheme } from "../context/ThemeProvider"; // ✅ NEW
+import { useTheme } from "../context/ThemeProvider"; // âœ… NEW
 import {
   Loader2,
   Save,
@@ -86,7 +86,7 @@ export default function Appearance() {
   const [msg, setMsg] = useState(null);
   const [user, setUser] = useState(null);
   
-  // ✅ Use ThemeProvider context
+  // âœ… Use ThemeProvider context
   const { theme, accent, setTheme, setAccent } = useTheme();
   
   const [form, setForm] = useState({
@@ -98,7 +98,7 @@ export default function Appearance() {
   const patch = (k, v) => {
     setForm((f) => ({ ...f, [k]: v }));
     
-    // ✅ Apply changes immediately via context
+    // âœ… Apply changes immediately via context
     if (k === "theme") {
       setTheme(v);
     } else if (k === "accent") {
@@ -237,7 +237,7 @@ export default function Appearance() {
         <div className="mx-auto max-w-4xl">
           <div className="flex items-center gap-2 text-white/70">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span>Loading your appearance settings…</span>
+            <span>Loading your appearance settingsâ€¦</span>
           </div>
         </div>
       </div>
@@ -278,7 +278,7 @@ export default function Appearance() {
               {saving ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Saving…
+                  Savingâ€¦
                 </>
               ) : (
                 <>

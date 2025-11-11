@@ -1,7 +1,9 @@
-// src/pages/DriverDetail.jsx
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿// src/pages/DriverDetail.jsx
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
+import DriverFitBadge from "../components/DriverFitBadge.jsx";
 import { supabase } from "../lib/supabase";
+import DriverCreateForm from "../components/DriverCreateForm.jsx";
 import {
   Loader2,
   ArrowLeft,
@@ -10,15 +12,22 @@ import {
   Upload,
   Trash2,
   RefreshCw,
-  Image as ImageIcon,
   FileText,
+  Phone,
+  Mail,
+  BadgeCheck,
 } from "lucide-react";
+
+/* Live refetch on DB changes (safe, single-subscription) */
+import useRealtimeRefetch from "../hooks/useRealtimeRefetch";
+
+/* Feature panels/components */
 import AIRecPanel from "../components/AIRecPanel";
 import DriverPreferences from "../components/DriverPreferences.jsx";
-/** ✅ FIX: use the correct component/file name */
 import DriverThumbsBar from "../components/DriverThumbsBar.jsx";
+import DriverFitChip from "../components/DriverFitChip.jsx";
 
-/* ---------- helpers (match Drivers.jsx style) ---------- */
+/* ---------------- helpers (match Drivers.jsx style) ---------------- */
 function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
@@ -30,475 +39,436 @@ function fmtDate(d) {
     return "—";
   }
 }
-function getField(obj, key) {
-  return Object.prototype.hasOwnProperty.call(obj ?? {}, key) ? obj[key] : undefined;
+function getField(obj, key, fallback = "—") {
+  if (!obj || typeof obj !== "object") return fallback;
+  if (!Object.prototype.hasOwnProperty.call(obj, key)) return fallback;
+  const v = obj[key];
+  if (v === null || v === undefined || v === "") return fallback;
+  return v;
 }
-function getCdlNumber(obj) {
-  const keys = ["cdl_number", "cdl", "cdlno", "cdl_num", "license_number", "license_no"];
+/** Try several keys and return the first value found (useful for schema drift). */
+function getFirstAvailable(obj, keys = [], fallback = "—") {
   for (const k of keys) {
-    const v = getField(obj, k);
-    if (v !== undefined && v !== null && `${v}`.trim() !== "") return v;
+    const val = getField(obj, k, null);
+    if (val !== null && val !== "—") return val;
   }
-  return null;
+  return fallback;
 }
 
-/* ============================== PAGE ============================== */
+/* ---------------- constants ---------------- */
+const DOC_BUCKET = "driver-docs"; // make sure this bucket exists
+const AVATAR_SIZE = 72;
+
+/* ---------------- page ---------------- */
 export default function DriverDetail() {
-  const { id } = useParams();
-  const [row, setRow] = useState(null);
+  const { id: driverId } = useParams();
+  const isNewDriver = driverId === "new";
+  
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
+  const [driver, setDriver] = useState(null);
+  const [error, setError] = useState("");
 
-  // Photo
-  const [savingPhoto, setSavingPhoto] = useState(false);
-  const photoInputRef = useRef(null);
+  const [files, setFiles] = useState([]); // { name, id, path, created_at, updated_at, ... }
+  const [uploading, setUploading] = useState(false);
+  const [deletingPath, setDeletingPath] = useState("");
+  const fileInputRef = useRef(null);
 
-  // Docs
-  const [docs, setDocs] = useState([]);
-  const [docsBusy, setDocsBusy] = useState(false);
-  const [docsErr, setDocsErr] = useState("");
-  const docInputRef = useRef(null);
+  /* ---------- ADDED: local refresh key for post-thumb refetch ---------- */
+  const [refreshKey, setRefreshKey] = useState(0);
+  const refetchDriver = () => setRefreshKey((n) => n + 1);
 
-  // ---------- Fetch (use * so we don't reference missing columns) ----------
-  useEffect(() => {
-    let ignore = false;
-    async function run() {
-      setLoading(true);
-      setErr("");
-      const { data, error } = await supabase.from("drivers").select("*").eq("id", id).maybeSingle();
-      if (!ignore) {
-        if (error) {
-          setErr(error.message);
-          setRow(null);
-        } else {
-          setRow(data);
-        }
-        setLoading(false);
-      }
-    }
-    run();
-    // realtime updates
-    const ch = supabase
-      .channel(`driver:${id}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "drivers", filter: `id=eq.${id}` },
-        (payload) => setRow((prev) => ({ ...(prev || {}), ...(payload.new || {}) }))
-      )
-      .subscribe();
-    return () => {
-      ignore = true;
-      supabase.removeChannel(ch);
-    };
-  }, [id]);
-
-  async function refreshRow() {
-    const { data, error } = await supabase.from("drivers").select("*").eq("id", id).maybeSingle();
-    if (error) {
-      setErr(error.message);
+  /* --------------- fetch driver --------------- */
+  const fetchDriver = useCallback(async () => {
+    // ✅ Don't try to fetch if creating new driver
+    if (!driverId || isNewDriver) {
+      setLoading(false);
       return;
     }
-    setRow(data);
-  }
-
-  // ---------- Avatar URL resolver ----------
-  const avatarUrl = useMemo(() => {
-    if (!row) return "";
-    if (row.avatar_url) return row.avatar_url;
-    if (row.photo_path) {
-      const { data } = supabase.storage.from("driver-photos").getPublicUrl(row.photo_path);
-      return data?.publicUrl || "";
-    }
-    return "";
-  }, [row]);
-
-  async function handleUploadPhoto(file) {
-    if (!file || !id) return;
-    setSavingPhoto(true);
-    setErr("");
+    
+    setError("");
     try {
-      const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
-      const path = `${id}/avatar.${ext}`;
-      const { error: upErr } = await supabase
-        .storage
-        .from("driver-photos")
-        .upload(path, file, { upsert: true, cacheControl: "3600" });
-      if (upErr) throw upErr;
-
-      const { data: pub } = supabase.storage.from("driver-photos").getPublicUrl(path);
-      const publicUrl = pub?.publicUrl;
-
-      const { error: updErr } = await supabase
+      // ✅ Use "*" so missing columns (like equipment_type) don't throw
+      const { data, error: err } = await supabase
         .from("drivers")
-        .update({ avatar_url: publicUrl, photo_path: path, updated_at: new Date().toISOString() })
-        .eq("id", id);
-      if (updErr) throw updErr;
-
-      await refreshRow();
-    } catch (e) {
-      console.error("[DriverDetail] handleUploadPhoto error:", e);
-      setErr(e?.message || "Failed to upload photo");
-    } finally {
-      setSavingPhoto(false);
+        .select("*")
+        .eq("id", driverId)
+        .single();
+      if (err) throw err;
+      setDriver(data);
+    } catch (err) {
+      console.error("fetchDriver error:", err);
+      setError(err?.message || "Failed to load driver.");
     }
-  }
+  }, [driverId, isNewDriver]);
 
-  // ---------- Documents (bucket: driver-docs) ----------
-  async function listDocs() {
-    if (!id) return;
-    setDocsBusy(true);
-    setDocsErr("");
+  /* --------------- fetch storage documents --------------- */
+  const listDocs = useCallback(async () => {
+    // ✅ Don't try to list docs for new driver
+    if (!driverId || isNewDriver) return;
+    
     try {
-      const { data, error } = await supabase.storage
-        .from("driver-docs")
-        .list(`${id}`, { limit: 100, offset: 0, sortBy: { column: "name", order: "asc" } });
-      if (error) throw error;
-
-      const files = (data || []).map((f) => {
-        const path = `${id}/${f.name}`;
-        const { data: pub } = supabase.storage.from("driver-docs").getPublicUrl(path);
-        return { ...f, path, publicUrl: pub?.publicUrl || "" };
-      });
-      setDocs(files);
-    } catch (e) {
-      console.error("[DriverDetail] listDocs error:", e);
-      setDocsErr(e?.message || "Could not load documents");
-    } finally {
-      setDocsBusy(false);
+      const prefix = `${driverId}/`;
+      const { data, error: err } = await supabase.storage
+        .from(DOC_BUCKET)
+        .list(prefix, { limit: 100, offset: 0, sortBy: { column: "created_at", order: "desc" } });
+      if (err) throw err;
+      const decorated =
+        (data || []).map((f) => ({
+          ...f,
+          path: `${prefix}${f.name}`,
+        })) || [];
+      setFiles(decorated);
+    } catch (err) {
+      console.error("listDocs error:", err);
+      // non-fatal
     }
-  }
-  async function handleUploadDoc(file) {
-    if (!file || !id) return;
-    setDocsBusy(true);
-    setDocsErr("");
+  }, [driverId, isNewDriver]);
+
+  /* --------------- upload document --------------- */
+  const handlePickFile = () => {
+    fileInputRef.current?.click();
+  };
+  const handleUploadDoc = async (evt) => {
+    const file = evt?.target?.files?.[0];
+    if (!file || !driverId || isNewDriver) return;
+    setUploading(true);
     try {
-      const safe = file.name.replace(/\s+/g, "_");
-      const path = `${id}/${Date.now()}_${safe}`;
-      const { error } = await supabase.storage.from("driver-docs").upload(path, file, {
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const safeName = file.name.replace(/[^\w\-.]+/g, "_");
+      const path = `${driverId}/${stamp}-${safeName}`;
+
+      const { error: upErr } = await supabase.storage.from(DOC_BUCKET).upload(path, file, {
         cacheControl: "3600",
         upsert: false,
       });
-      if (error) throw error;
+      if (upErr) throw upErr;
+
       await listDocs();
-    } catch (e) {
-      console.error("[DriverDetail] handleUploadDoc error:", e);
-      setDocsErr(e?.message || "Upload failed");
+    } catch (err) {
+      console.error("upload error:", err);
+      alert(err?.message || "Failed to upload file.");
     } finally {
-      setDocsBusy(false);
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
-  }
-  async function handleDeleteDoc(path) {
+  };
+
+  /* --------------- delete document --------------- */
+  const handleDeleteDoc = async (path) => {
     if (!path) return;
-    setDocsBusy(true);
-    setDocsErr("");
+    const confirm = window.confirm("Delete this document?");
+    if (!confirm) return;
+    setDeletingPath(path);
     try {
-      const { error } = await supabase.storage.from("driver-docs").remove([path]);
-      if (error) throw error;
-      await listDocs();
-    } catch (e) {
-      console.error("[DriverDetail] handleDeleteDoc error:", e);
-      setDocsErr(e?.message || "Delete failed");
+      const { error: delErr } = await supabase.storage.from(DOC_BUCKET).remove([path]);
+      if (delErr) throw delErr;
+      setFiles((prev) => prev.filter((f) => f.path !== path));
+    } catch (err) {
+      console.error("delete error:", err);
+      alert(err?.message || "Failed to delete file.");
     } finally {
-      setDocsBusy(false);
+      setDeletingPath("");
     }
-  }
+  };
+
+  /* --------------- initial loads --------------- */
   useEffect(() => {
-    listDocs();
-  }, [id]);
+    let mounted = true;
+    (async () => {
+      setLoading(true);
+      await Promise.all([fetchDriver(), listDocs()]);
+      if (mounted) setLoading(false);
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [fetchDriver, listDocs, refreshKey]); // ← ADDED refreshKey
 
-  // ---------- Derived field names ----------
-  const cdlNumber = getCdlNumber(row || {});
-  const cdlClass = getField(row || {}, "cdl_class");
-  const cdlExp = getField(row || {}, "cdl_exp");
-  const medExp = getField(row || {}, "med_exp");
+  /* --------------- realtime refetch --------------- */
+  useRealtimeRefetch({
+    table: "drivers",
+    schema: "public",
+    events: ["UPDATE"],
+    filter: { column: "id", op: "eq", value: driverId },
+    onAny: () => {
+      // ✅ Don't refetch for new driver
+      if (!isNewDriver) {
+        fetchDriver();
+      }
+    },
+  });
 
-  // ---------- Render ----------
-  if (loading) {
+  const fullName = useMemo(() => {
+    if (isNewDriver) return "New Driver";
+    const first = getField(driver, "first_name", "");
+    const last = getField(driver, "last_name", "");
+    const joined = [first, last].filter(Boolean).join(" ");
+    return joined || "Unnamed Driver";
+  }, [driver, isNewDriver]);
+
+  const statusTone = useMemo(() => {
+    const s = (getField(driver, "status", "") || "").toUpperCase();
+    if (s === "ACTIVE") return "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
+    if (s === "ASSIGNED") return "bg-sky-500/15 text-sky-300 border-sky-500/30";
+    if (s === "INACTIVE") return "bg-rose-500/15 text-rose-300 border-rose-500/30";
+    return "bg-zinc-700/40 text-zinc-200 border-zinc-600/60";
+  }, [driver]);
+
+  /* ---------------- UI ---------------- */
+  if (loading && !isNewDriver) {
     return (
-      <div className="p-4 md:p-6">
-        <Link
-          to="/drivers"
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-zinc-200 dark:border-neutral-800 hover:bg-zinc-50 dark:hover:bg-neutral-900"
-        >
+      <div className="p-6 flex items-center gap-2 text-zinc-300">
+        <Loader2 className="w-4 h-4 animate-spin" />
+        Loading driver…
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 space-y-4">
+        <Link to="/drivers" className="inline-flex items-center gap-2 text-zinc-300 hover:text-white">
           <ArrowLeft className="w-4 h-4" />
-          <span className="text-sm">Back</span>
+          Back to Drivers
         </Link>
-        <div className="mt-4 flex items-center gap-2 text-zinc-500">
-          <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+        <div className="p-4 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-200">
+          {error}
         </div>
       </div>
     );
   }
 
-  if (err || !row) {
+  // ✅ Show create form for new driver
+  if (isNewDriver) {
     return (
-      <div className="p-4 md:p-6">
-        <Link
-          to="/drivers"
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-zinc-200 dark:border-neutral-800 hover:bg-zinc-50 dark:hover:bg-neutral-900"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span className="text-sm">Back</span>
-        </Link>
-        <div className="mt-4 rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/30 p-4 text-red-700 dark:text-red-200">
-          {err || "Driver not found"}
+      <div className="p-4 md:p-6 space-y-6">
+        <div className="flex items-center justify-between">
+          <Link to="/drivers" className="inline-flex items-center gap-2 text-zinc-300 hover:text-white">
+            <ArrowLeft className="w-4 h-4" />
+            Back to Drivers
+          </Link>
+        </div>
+
+        <div className="rounded-2xl border border-zinc-700/60 bg-zinc-900/40 p-6">
+          <h1 className="text-2xl font-semibold text-white mb-4">Create New Driver</h1>
+          <DriverCreateForm onCancel={() => window.history.back()} />
         </div>
       </div>
     );
   }
+
+  // Try multiple keys for equipment to survive schema differences
+  const equipmentValue = getFirstAvailable(driver, [
+    "equipment_type",
+    "equipment",
+    "equipmentType",
+    "truck_type",
+    "power_unit_type",
+    "trailer_type",
+  ]);
 
   return (
-    <div className="p-4 md:p-6">
+    <div className="p-4 md:p-6 space-y-6">
+      {/* ------ top nav ------ */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Link
-            to="/drivers"
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-zinc-200 dark:border-neutral-800 hover:bg-zinc-50 dark:hover:bg-neutral-900"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span className="text-sm">Back</span>
-          </Link>
-          <h1 className="text-2xl font-semibold">Driver</h1>
+        <Link to="/drivers" className="inline-flex items-center gap-2 text-zinc-300 hover:text-white">
+          <ArrowLeft className="w-4 h-4" />
+          Back to Drivers
+        </Link>
+        <div className="flex items-center gap-2 text-xs text-zinc-400">
+          <RefreshCw className="w-3.5 h-3.5" />
+          <span>Auto-realtime</span>
         </div>
-        <div className="text-xs text-zinc-500">ID: {row.id}</div>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* LEFT: Main profile */}
-        <section className="lg:col-span-2 rounded-2xl border border-zinc-200 dark:border-neutral-800 p-4">
-          <div className="flex items-start justify-between gap-4">
-            {/* Avatar */}
-            <div className="w-24 h-24 rounded-2xl overflow-hidden bg-zinc-100 dark:bg-neutral-900 flex items-center justify-center border border-zinc-200 dark:border-neutral-800">
-              {avatarUrl ? (
-                <img src={avatarUrl} alt="Driver photo" className="w-full h-full object-cover" />
-              ) : (
-                <ImageIcon className="w-8 h-8 opacity-50" />
-              )}
+      {/* ------ header card ------ */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 rounded-2xl border border-zinc-700/60 bg-zinc-900/40 p-4 md:p-5">
+          <div className="flex items-start gap-4">
+            <div
+              className="rounded-full bg-zinc-800/60 border border-zinc-700 overflow-hidden"
+              style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }}
+            >
+              {/* Avatar fallback */}
+              <div className="w-full h-full flex items-center justify-center text-zinc-400">
+                <IdCard className="w-8 h-8" />
+              </div>
             </div>
 
-            {/* Name + status + photo action */}
-            <div className="flex-1">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-xl font-medium">
-                    {[row.first_name, row.last_name].filter(Boolean).join(" ") || "—"}
-                  </div>
-                  <div className="text-xs text-zinc-500">Email: {row.email || "—"}</div>
-                </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-xl md:text-2xl font-semibold text-white truncate">{fullName}</h1>
                 <span
                   className={cx(
-                    "text-xs px-2 py-1 rounded-lg",
-                    row.status === "ACTIVE"
-                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200"
-                      : row.status === "ASSIGNED"
-                      ? "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-200"
-                      : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
+                    "text-[11px] px-2.5 py-1 rounded-full border",
+                    statusTone
                   )}
                 >
-                  {row.status || "UNKNOWN"}
+                  {getField(driver, "status")}
                 </span>
+                <DriverFitBadge driverId={driverId} />
+                <DriverFitChip driverId={driverId} />
               </div>
 
-              <div className="mt-3">
-                <button
-                  type="button"
-                  onClick={() => photoInputRef.current?.click()}
-                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-zinc-200 dark:border-neutral-800 hover:bg-zinc-50 dark:hover:bg-neutral-900 text-sm"
-                  disabled={savingPhoto}
-                >
-                  {savingPhoto ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                  {savingPhoto ? "Saving…" : avatarUrl ? "Replace Photo" : "Upload Photo"}
-                </button>
-                <input
-                  ref={photoInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) handleUploadPhoto(f);
-                    e.currentTarget.value = "";
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Info grid */}
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Info label="Phone">{row.phone || "—"}</Info>
-            <Info label="CDL # " icon={<IdCard className="w-4 h-4" />}>
-              {cdlNumber || "—"}
-            </Info>
-            <Info label="CDL Class">{cdlClass || "—"}</Info>
-            <Info label="CDL Expiration">
-              {row.cdl_exp
-                ? new Date(row.cdl_exp).toLocaleDateString()
-                : cdlExp
-                ? new Date(cdlExp).toLocaleDateString()
-                : "—"}
-            </Info>
-            <Info label="Medical Expiration">
-              {row.med_exp
-                ? new Date(row.med_exp).toLocaleDateString()
-                : medExp
-                ? new Date(medExp).toLocaleDateString()
-                : "—"}
-            </Info>
-          </div>
-
-          {/* AI Recommendations Panel */}
-          <div className="mt-6">
-            <AIRecPanel context_type="DRIVER" context_id={id} />
-          </div>
-
-          {/* Preferences + Thumbs (both scoped by driverId) */}
-          <div className="mt-6 space-y-4">
-            <DriverPreferences driverId={id} />
-            {/* ✅ FIX: use DriverThumbsBar instead of DispatchThumbsBar */}
-            <DriverThumbsBar driverId={id} compact debugMode />
-          </div>
-
-          {/* Timestamps */}
-          <div className="mt-6">
-            <div className="text-sm font-medium mb-2">Timestamps</div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-              <div className="text-zinc-500">
-                Created: <span className="text-zinc-900 dark:text-zinc-100">{fmtDate(row.created_at)}</span>
-              </div>
-              <div className="text-zinc-500">
-                Updated: <span className="text-zinc-900 dark:text-zinc-100">{fmtDate(row.updated_at)}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Optional notes */}
-          {row?.notes ? (
-            <div className="mt-6">
-              <div className="text-sm font-medium mb-2">Notes</div>
-              <div className="rounded-xl border border-zinc-200 dark:border-neutral-800 p-3 text-sm whitespace-pre-wrap">
-                {row.notes}
-              </div>
-            </div>
-          ) : null}
-        </section>
-
-        {/* RIGHT: Truck + Documents */}
-        <section className="rounded-2xl border border-zinc-200 dark:border-neutral-800 p-4 space-y-4">
-          <div>
-            <div className="text-sm font-medium mb-3">Current Truck</div>
-            {row.truck_id ? (
-              <Link
-                to={`/trucks`}
-                className="inline-flex items-center gap-2 text-blue-600 dark:text-blue-400 hover:underline"
-                title="Open Trucks"
-              >
-                <Truck className="w-4 h-4" />
-                {row.truck_number || row.truck_id}
-              </Link>
-            ) : (
-              <div className="text-sm text-zinc-500">—</div>
-            )}
-          </div>
-
-          {/* Documents */}
-          <div className="pt-4 border-t border-zinc-200 dark:border-neutral-800">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-medium flex items-center gap-2">
-                <FileText className="w-4 h-4" /> Driver Documents
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => listDocs()}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-neutral-800 hover:bg-zinc-50 dark:hover:bg-neutral-900 text-xs"
-                  disabled={docsBusy}
-                  title="Refresh"
-                >
-                  {docsBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                  {docsBusy ? "Refreshing…" : "Refresh"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => docInputRef.current?.click()}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-neutral-800 hover:bg-zinc-50 dark:hover:bg-neutral-900 text-xs"
-                  disabled={docsBusy}
-                >
-                  <Upload className="w-4 h-4" /> Upload
-                </button>
-                <input
-                  ref={docInputRef}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={async (e) => {
-                    const files = Array.from(e.target.files || []);
-                    for (const f of files) {
-                      await handleUploadDoc(f);
-                    }
-                    e.currentTarget.value = "";
-                  }}
-                />
-              </div>
-            </div>
-
-            {docsErr && <div className="mt-3 text-sm text-red-600 dark:text-red-300">{docsErr}</div>}
-
-            <div className="mt-3 space-y-2">
-              {docsBusy && docs.length === 0 ? (
-                <div className="flex items-center gap-2 text-sm text-zinc-500">
-                  <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+              <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                <div className="flex items-center gap-2 text-zinc-300">
+                  <Phone className="w-4 h-4 text-zinc-400" />
+                  <span>{getField(driver, "phone")}</span>
                 </div>
-              ) : docs.length === 0 ? (
-                <div className="text-sm text-zinc-500">No documents uploaded yet.</div>
-              ) : (
-                docs.map((f) => (
+                <div className="flex items-center gap-2 text-zinc-300">
+                  <Mail className="w-4 h-4 text-zinc-400" />
+                  <span className="truncate">{getField(driver, "email")}</span>
+                </div>
+                <div className="flex items-center gap-2 text-zinc-300">
+                  <Truck className="w-4 h-4 text-zinc-400" />
+                  <span>{equipmentValue}</span>
+                </div>
+                <div className="flex items-center gap-2 text-zinc-300">
+                  <BadgeCheck className="w-4 h-4 text-zinc-400" />
+                  <span>CDL {getField(driver, "cdl_class")}</span>
+                </div>
+              </div>
+
+              <div className="mt-3 text-xs text-zinc-500">
+                <div>Created: {fmtDate(getField(driver, "created_at", ""))}</div>
+                <div>Updated: {fmtDate(getField(driver, "updated_at", ""))}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* thumbs/learning bar */}
+          <div className="mt-4">
+            <DriverThumbsBar
+              driverId={driverId}              // string from useParams OR driver object; both OK
+              onChange={() => refetchDriver()} // optional; triggers a local refetch if you want
+            />
+          </div>
+        </div>
+
+        {/* right rail actions */}
+        <div className="rounded-2xl border border-zinc-700/60 bg-zinc-900/40 p-4 md:p-5 space-y-4">
+          <div className="text-sm font-medium text-zinc-200">Quick Actions</div>
+          <button
+            className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-700/60 bg-zinc-800/50 hover:bg-zinc-800 text-zinc-200 py-2.5"
+            onClick={handlePickFile}
+            disabled={uploading}
+          >
+            {uploading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Upload className="w-4 h-4" />
+            )}
+            <span>Upload Document</span>
+          </button>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            onChange={handleUploadDoc}
+            accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.txt"
+          />
+        </div>
+      </div>
+
+      {/* ------ grid: prefs / documents / AI ------ */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        {/* Preferences */}
+        <div className="xl:col-span-2 rounded-2xl border border-zinc-700/60 bg-zinc-900/40">
+          <div className="p-4 md:p-5 border-b border-zinc-700/60">
+            <div className="text-sm font-medium text-zinc-200">Driver Preferences</div>
+            <div className="text-xs text-zinc-500">What they like, what they avoid, recent feedback.</div>
+          </div>
+          <div className="p-4 md:p-5">
+            <DriverPreferences driverId={driverId} />
+          </div>
+        </div>
+
+        {/* Documents */}
+        <div className="rounded-2xl border border-zinc-700/60 bg-zinc-900/40">
+          <div className="p-4 md:p-5 border-b border-zinc-700/60">
+            <div className="text-sm font-medium text-zinc-200">Documents</div>
+            <div className="text-xs text-zinc-500">
+              Upload licenses, med cards, orientation docs, etc.
+            </div>
+          </div>
+
+          <div className="p-4 md:p-5">
+            {files.length === 0 ? (
+              <div className="text-sm text-zinc-400 italic">No documents yet.</div>
+            ) : (
+              <div className="mt-1 space-y-2">
+                {files.map((f) => (
                   <div
                     key={f.path}
-                    className="rounded-xl border border-zinc-200 dark:border-neutral-800 p-3 flex items-center justify-between gap-3"
+                    className="flex items-center justify-between gap-3 border border-zinc-700/60 rounded-xl p-2.5"
                   >
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium truncate">{f.name}</div>
-                      <div className="text-[11px] text-zinc-500">{fmtDate(f.updated_at || row.updated_at)}</div>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FileText className="w-4 h-4 text-zinc-400 shrink-0" />
+                      <div className="min-w-0">
+                        <div className="text-sm text-zinc-200 truncate">{f.name}</div>
+                        <div className="text-[11px] text-zinc-500">
+                          {fmtDate(f.created_at)}
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <a
-                        href={f.publicUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-neutral-800 hover:bg-zinc-50 dark:hover:bg-neutral-900 text-xs"
-                      >
-                        View
-                      </a>
+                    <div className="flex items-center gap-1.5">
+                      {/* Open (signed URL) */}
                       <button
-                        type="button"
-                        onClick={() => handleDeleteDoc(f.path)}
-                        className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-neutral-800 hover:bg-zinc-50 dark:hover:bg-neutral-900 text-xs text-red-600 dark:text-red-300"
-                        disabled={docsBusy}
-                        title="Delete document"
+                        onClick={async () => {
+                          try {
+                            const { data, error: urlErr } = await supabase.storage
+                              .from(DOC_BUCKET)
+                              .createSignedUrl(f.path, 60);
+                            if (urlErr) throw urlErr;
+                            const url = data?.signedUrl;
+                            if (url) window.open(url, "_blank", "noopener,noreferrer");
+                          } catch (err) {
+                            console.error("open url error:", err);
+                            alert("Failed to open file.");
+                          }
+                        }}
+                        className="px-2 py-1 rounded-lg border border-zinc-700/60 hover:bg-zinc-800 text-zinc-300 text-xs"
+                        title="Open"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        Open
+                      </button>
+
+                      <button
+                        onClick={() => handleDeleteDoc(f.path)}
+                        className={cx(
+                          "p-1.5 rounded-lg text-rose-300 hover:text-rose-200 hover:bg-rose-500/10 border border-transparent"
+                        )}
+                        title="Delete document"
+                        disabled={deletingPath === f.path}
+                      >
+                        {deletingPath === f.path ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-3.5 h-3.5" />
+                        )}
                       </button>
                     </div>
                   </div>
-                ))
-              )}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
-        </section>
+        </div>
       </div>
-    </div>
-  );
-}
 
-function Info({ label, children, icon = null }) {
-  return (
-    <div className="rounded-xl border border-zinc-200 dark:border-neutral-800 p-3">
-      <div className="text-xs text-zinc-500 flex items-center gap-2">
-        {icon}
-        {label}
+      {/* ------ AI panel (recommendations/insights) ------ */}
+      <div className="rounded-2xl border border-zinc-700/60 bg-zinc-900/40">
+        <div className="p-4 md:p-5 border-b border-zinc-700/60">
+          <div className="text-sm font-medium text-zinc-200">AI Recommendations</div>
+          <div className="text-xs text-zinc-500">
+            Suggestions and reasoning to improve dispatch fit and reduce friction.
+          </div>
+        </div>
+        <div className="p-4 md:p-5">
+          <AIRecPanel driverId={driverId} />
+        </div>
       </div>
-      <div className="mt-1 text-sm">{children}</div>
     </div>
   );
 }

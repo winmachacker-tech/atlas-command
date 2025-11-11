@@ -1,4 +1,4 @@
-// src/components/AIQuickLauncher.jsx
+﻿// src/components/AIQuickLauncher.jsx
 // Floating button that opens Dispatch AI in a modal overlay.
 // No changes to main.jsx or App.jsx required.
 // Drop <AIQuickLauncher /> anywhere (e.g., in MainLayout) and you're done.
@@ -95,3 +95,4 @@ export default function AIQuickLauncher({
     </>
   );
 }
+

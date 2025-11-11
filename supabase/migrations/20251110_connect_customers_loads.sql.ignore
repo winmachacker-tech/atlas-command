@@ -1,0 +1,300 @@
+-- ========== SAFETY & EXTENSIONS ==========
+create extension if not exists "uuid-ossp";
+create extension if not exists "pgcrypto";
+
+-- ========== CUSTOMERS ==========
+create table if not exists public.customers (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  created_at timestamptz not null default now()
+);
+
+comment on table public.customers is 'Master list of customers (deduped).';
+comment on column public.customers.name is 'Display/customer legal name; must be unique.';
+
+-- ========== LOADS PATCH (link to customers) ==========
+do $$
+begin
+  if not exists (
+    select 1
+    from information_schema.columns
+    where table_schema='public' and table_name='loads' and column_name='customer_id'
+  ) then
+    alter table public.loads
+      add column customer_id uuid null references public.customers(id) on delete set null;
+  end if;
+
+  if not exists (
+    select 1
+    from information_schema.columns
+    where table_schema='public' and table_name='loads' and column_name='customer_ref'
+  ) then
+    alter table public.loads
+      add column customer_ref text null; -- raw name or external id from the CSV import
+  end if;
+
+  if not exists (
+    select 1
+    from pg_indexes where schemaname='public' and indexname='idx_loads_customer_id'
+  ) then
+    create index idx_loads_customer_id on public.loads(customer_id);
+  end if;
+end$$;
+
+comment on column public.loads.customer_id is 'FK to customers (filled during import or backfill).';
+comment on column public.loads.customer_ref is 'Original text/ID from import to help match or dedupe.';
+
+-- ========== DRIVER ASSIGNMENTS (history) ==========
+create table if not exists public.driver_assignments (
+  id uuid primary key default gen_random_uuid(),
+  load_id uuid not null references public.loads(id) on delete cascade,
+  driver_id uuid not null references public.drivers(id) on delete cascade,
+  assigned_at timestamptz not null default now(),
+  assigned_by uuid null, -- auth.users.id (optional)
+  note text null
+);
+
+create index if not exists idx_driver_assignments_load_id on public.driver_assignments(load_id);
+create index if not exists idx_driver_assignments_driver_id on public.driver_assignments(driver_id);
+create index if not exists idx_driver_assignments_assigned_at on public.driver_assignments(assigned_at);
+
+comment on table public.driver_assignments is 'Immutable assignment history. The latest row per load is the current driver.';
+
+-- Helpful view: current assignment per load (latest by assigned_at)
+create or replace view public.v_current_assignment as
+select distinct on (da.load_id)
+  da.load_id,
+  da.driver_id,
+  da.assigned_at,
+  da.assigned_by,
+  da.note
+from public.driver_assignments da
+order by da.load_id, da.assigned_at desc;
+
+-- ========== FEEDBACK & FIT SCORES (keeps your loop) ==========
+-- If your project already has driver_feedback, we just ensure the structure we use exists.
+create table if not exists public.driver_feedback (
+  id uuid primary key default gen_random_uuid(),
+  driver_id uuid not null references public.drivers(id) on delete cascade,
+  load_id uuid null references public.loads(id) on delete set null,
+  rating text not null check (rating in ('up','down')),
+  note text null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_driver_feedback_driver on public.driver_feedback(driver_id);
+create index if not exists idx_driver_feedback_load on public.driver_feedback(load_id);
+create index if not exists idx_driver_feedback_created on public.driver_feedback(created_at);
+
+-- Aggregate store for quick scoring
+create table if not exists public.driver_fit_scores (
+  driver_id uuid primary key references public.drivers(id) on delete cascade,
+  up_events int not null default 0,
+  down_events int not null default 0,
+  fit_score numeric not null default 0,     -- simple: up - down (you can evolve later)
+  last_feedback_at timestamptz null,
+  updated_at timestamptz not null default now()
+);
+
+-- Upsert on feedback insert
+create or replace function public.fn_update_driver_fit_on_feedback()
+returns trigger
+language plpgsql
+as $$
+begin
+  -- simple increment
+  if (new.rating = 'up') then
+    insert into public.driver_fit_scores(driver_id, up_events, down_events, fit_score, last_feedback_at, updated_at)
+    values (new.driver_id, 1, 0, 1, new.created_at, now())
+    on conflict (driver_id)
+    do update
+      set up_events = driver_fit_scores.up_events + 1,
+          fit_score = driver_fit_scores.fit_score + 1,
+          last_feedback_at = greatest(coalesce(driver_fit_scores.last_feedback_at, new.created_at), new.created_at),
+          updated_at = now();
+  else
+    insert into public.driver_fit_scores(driver_id, up_events, down_events, fit_score, last_feedback_at, updated_at)
+    values (new.driver_id, 0, 1, -1, new.created_at, now())
+    on conflict (driver_id)
+    do update
+      set down_events = driver_fit_scores.down_events + 1,
+          fit_score = driver_fit_scores.fit_score - 1,
+          last_feedback_at = greatest(coalesce(driver_fit_scores.last_feedback_at, new.created_at), new.created_at),
+          updated_at = now();
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_feedback_fit_bump on public.driver_feedback;
+create trigger trg_feedback_fit_bump
+after insert on public.driver_feedback
+for each row execute function public.fn_update_driver_fit_on_feedback();
+
+-- ========== CUSTOMER AFFINITY ==========
+-- Link feedback → load → customer to learn which drivers perform better per customer
+create or replace view public.v_driver_customer_affinity as
+select
+  f.driver_id,
+  l.customer_id,
+  sum(case when f.rating='up' then 1 else 0 end) as ups,
+  sum(case when f.rating='down' then 1 else 0 end) as downs,
+  (sum(case when f.rating='up' then 1 else 0 end) - sum(case when f.rating='down' then 1 else 0 end)) as net
+from public.driver_feedback f
+left join public.loads l on l.id = f.load_id
+where l.customer_id is not null
+group by f.driver_id, l.customer_id;
+
+create index if not exists idx_v_dca_driver on public.driver_feedback(driver_id);
+-- (view auto-uses loads index on customer_id we created earlier)
+
+-- ========== TRAINING VIEW (signals the model can learn from) ==========
+-- Combines assignment events (implicit positives) + thumbs (explicit)
+create or replace view public.v_ai_training_events as
+select
+  'assignment'::text as source,
+  da.assigned_at as event_at,
+  da.driver_id,
+  da.load_id,
+  l.customer_id,
+  1::int as label -- implicit positive
+from public.driver_assignments da
+join public.loads l on l.id = da.load_id
+
+union all
+
+select
+  'feedback'::text as source,
+  f.created_at as event_at,
+  f.driver_id,
+  f.load_id,
+  l.customer_id,
+  case when f.rating='up' then 1 else 0 end as label
+from public.driver_feedback f
+left join public.loads l on l.id = f.load_id;
+
+-- ========== SIMPLE SQL RECOMMENDER ==========
+-- Heuristic score: 70% global fit + 30% customer affinity
+-- Safe fallbacks if a load has no customer_id or a driver has no prior data.
+create or replace function public.rpc_recommend_drivers_for_load(p_load_id uuid, p_limit int default 10)
+returns table (
+  driver_id uuid,
+  score numeric,
+  fit_component numeric,
+  customer_component numeric,
+  reason text
+)
+language sql
+stable
+as $$
+with target as (
+  select l.id as load_id, l.customer_id
+  from public.loads l
+  where l.id = p_load_id
+),
+fit as (
+  select
+    d.id as driver_id,
+    coalesce(dfs.fit_score, 0) as fit_score
+  from public.drivers d
+  left join public.driver_fit_scores dfs on dfs.driver_id = d.id
+),
+fit_norm as (
+  select
+    f.driver_id,
+    case when max(abs(f.fit_score)) over() > 0
+         then f.fit_score / nullif(max(abs(f.fit_score)) over(), 0)
+         else 0 end as fit_component
+  from fit f
+),
+cust as (
+  select
+    v.driver_id,
+    v.customer_id,
+    v.net::numeric as net_affinity
+  from public.v_driver_customer_affinity v
+),
+cust_for_load as (
+  select
+    f.driver_id,
+    case
+      when t.customer_id is null then 0
+      else coalesce(c.net_affinity, 0)
+    end as raw_cust
+  from fit f
+  cross join target t
+  left join cust c on c.driver_id = f.driver_id and c.customer_id = t.customer_id
+),
+cust_norm as (
+  select
+    c.driver_id,
+    case when max(abs(c.raw_cust)) over() > 0
+         then c.raw_cust / nullif(max(abs(c.raw_cust)) over(), 0)
+         else 0 end as customer_component
+  from cust_for_load c
+),
+scored as (
+  select
+    f.driver_id,
+    f.fit_component,
+    coalesce(c.customer_component, 0) as customer_component,
+    (0.7 * f.fit_component + 0.3 * coalesce(c.customer_component, 0)) as score
+  from fit_norm f
+  left join cust_norm c on c.driver_id = f.driver_id
+)
+select
+  s.driver_id,
+  s.score,
+  s.fit_component,
+  s.customer_component,
+  case
+    when (select customer_id from target) is null
+      then 'No customer on load; ranked by global fit.'
+    when s.customer_component = 0
+      then 'No prior affinity for this customer; ranked mostly by global fit.'
+    else 'Blended: global fit + customer affinity.'
+  end as reason
+from scored s
+order by s.score desc nulls last
+limit greatest(p_limit, 1);
+$$;
+
+comment on function public.rpc_recommend_drivers_for_load(uuid,int) is
+'Returns top drivers for a given load_id using global fit + customer affinity.';
+
+-- ========== OPTIONAL: DEDUPE/CONNECT IMPORTED 5K ==========
+
+-- A) Make sure customers.name is unique so ON CONFLICT works
+
+-- A1) Collapse exact duplicate names if any (keeps the first row per name)
+with dups as (
+  select name, min(ctid) as keep_ctid
+  from public.customers
+  group by name
+  having count(*) > 1
+)
+delete from public.customers c
+using dups d
+where c.name = d.name
+  and c.ctid <> d.keep_ctid;
+
+-- A2) Create a unique index on (name) so ON CONFLICT (name) is valid
+create unique index if not exists customers_name_unique on public.customers(name);
+
+-- B) Seed/Upsert customers from imported raw names inside loads.customer_ref.
+--    Safe to run repeatedly.
+insert into public.customers(name)
+select distinct trim(customer_ref)
+from public.loads
+where customer_ref is not null and trim(customer_ref) <> ''
+on conflict (name) do nothing;
+
+-- C) Link loads to customers by name (best-effort).
+update public.loads l
+set customer_id = c.id
+from public.customers c
+where l.customer_id is null
+  and l.customer_ref is not null
+  and trim(l.customer_ref) = c.name;
+

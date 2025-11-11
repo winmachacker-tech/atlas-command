@@ -1,4 +1,4 @@
-// src/lib/useActiveOrg.js
+﻿// src/lib/useActiveOrg.js
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
 
@@ -61,3 +61,4 @@ export function useActiveOrg() {
 
   return { orgId, orgName, role, loading, error, refresh: load };
 }
+

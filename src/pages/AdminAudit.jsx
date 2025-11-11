@@ -1,4 +1,4 @@
-// src/pages/AdminAudit.jsx
+﻿// src/pages/AdminAudit.jsx
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 /**
- * AdminAudit — with search, filters, pagination, and a JSON detail modal.
+ * AdminAudit â€” with search, filters, pagination, and a JSON detail modal.
  * Client-side filtering for simplicity (50 x 2 rows fetched).
  */
 export default function AdminAudit() {
@@ -120,7 +120,7 @@ export default function AdminAudit() {
               setQ(e.target.value);
               setPage(1);
             }}
-            placeholder="Search details, user, action…"
+            placeholder="Search details, user, actionâ€¦"
             className="bg-transparent outline-none"
           />
         </div>
@@ -192,7 +192,7 @@ export default function AdminAudit() {
                       {r.type}
                     </td>
                     <td className="px-3 py-2">{r.action}</td>
-                    <td className="px-3 py-2">{r.changed_by || "—"}</td>
+                    <td className="px-3 py-2">{r.changed_by || "â€”"}</td>
                     <td className="px-3 py-2">
                       {new Date(r.changed_at).toLocaleString()}
                     </td>
@@ -250,7 +250,7 @@ export default function AdminAudit() {
           <div className="relative z-10 w-full max-w-3xl rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 p-4">
             <div className="flex items-center justify-between mb-3">
               <div className="font-semibold">
-                {detail.type} • {detail.action} •{" "}
+                {detail.type} â€¢ {detail.action} â€¢{" "}
                 {new Date(detail.changed_at).toLocaleString()}
               </div>
               <button
@@ -281,3 +281,4 @@ export default function AdminAudit() {
     </div>
   );
 }
+

@@ -1,4 +1,4 @@
-// src/lib/useIsAdmin.js
+﻿// src/lib/useIsAdmin.js
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
 
@@ -43,3 +43,4 @@ export function useIsAdmin() {
 
   return status;
 }
+

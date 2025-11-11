@@ -1,4 +1,4 @@
-// src/pages/TeamManagement.jsx
+﻿// src/pages/TeamManagement.jsx
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
@@ -12,6 +12,11 @@ import {
   Trash2,
   Check,
 } from "lucide-react";
+
+/* âœ… Add: derive the Functions URL safely (works local + prod) */
+const FUNCTIONS_URL =
+  import.meta.env.VITE_SUPABASE_FUNCTIONS_URL ||
+  (supabase?.supabaseUrl ? new URL(supabase.supabaseUrl).origin + "/functions/v1" : "");
 
 export default function TeamManagement() {
   const [state, setState] = useState({
@@ -154,9 +159,14 @@ export default function TeamManagement() {
         throw new Error("Not authenticated");
       }
 
+      /* âœ… Use the Edge Function URL (supports local & prod) */
+      if (!FUNCTIONS_URL) {
+        throw new Error("Functions URL not configured");
+      }
+
       // Call your edge function
       const response = await fetch(
-        `${supabase.supabaseUrl}/functions/v1/admin-invite-user`,
+        `${FUNCTIONS_URL}/admin-invite-user`,
         {
           method: "POST",
           headers: {
@@ -166,7 +176,8 @@ export default function TeamManagement() {
           body: JSON.stringify({ 
             email: inviteEmail.trim(),
             role: "user",
-            full_name: "", // You can add a name field to the form if needed
+            full_name: "", // optional; can be extended later
+            redirect: "/", // âœ… ensure post-auth redirect is set
           }),
         }
       );
@@ -178,11 +189,12 @@ export default function TeamManagement() {
       }
 
       setInviteSuccess(true);
+      const targetEmail = inviteEmail; // capture before clearing
       setInviteEmail("");
       
       const message = result.mode === "recovery_sent" 
-        ? `User already exists. Recovery email sent to ${inviteEmail}`
-        : `Invitation sent to ${inviteEmail}!`;
+        ? `User already exists. Recovery email sent to ${targetEmail}`
+        : `Invitation sent to ${targetEmail}!`;
       
       alert(message);
       
@@ -211,7 +223,7 @@ export default function TeamManagement() {
       <div className="p-6">
         <div className="flex items-center gap-3 text-sm opacity-80">
           <Loader2 className="h-4 w-4 animate-spin" />
-          <span>Checking access…</span>
+          <span>Checking accessâ€¦</span>
         </div>
       </div>
     );
@@ -412,3 +424,4 @@ export default function TeamManagement() {
     </div>
   );
 }
+

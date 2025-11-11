@@ -1,0 +1,199 @@
+-- 20251109_fit_scores_all_drivers.sql
+-- Make driver fit LIVE for every driver (existing + new)
+-- - Backfills zeroed fit rows for all current drivers
+-- - Auto-creates/refreshes fit rows when new drivers are added
+-- - Adds a convenient view to join drivers with fit in one query
+
+-- 0) Safety: required tables/functions (no-ops if already present)
+create table if not exists public.driver_feedback (
+  id uuid primary key default gen_random_uuid(),
+  driver_id uuid not null,
+  rating text check (rating in ('up','down')),
+  vote text,               -- legacy; may be null
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.driver_fit_scores (
+  driver_id uuid primary key,
+  thumbs_up integer not null default 0,
+  thumbs_down integer not null default 0,
+  total_events integer not null default 0,
+  fit_score numeric not null default 0,
+  fit_label text not null default 'unknown',
+  updated_at timestamptz not null default now()
+);
+
+create or replace function public._fit_label_for_score(score numeric)
+returns text language sql as $$
+  select case
+    when score >= 0.70 then 'great'
+    when score >= 0.40 then 'good'
+    when score >= 0.10 then 'okay'
+    when score >= -0.25 then 'fair'
+    else 'poor'
+  end
+$$;
+
+-- Recompute logic that uses rating OR legacy vote
+create or replace function public.recompute_driver_fit_score(p_driver_id uuid)
+returns void language plpgsql as $$
+declare
+  up_ct   integer;
+  down_ct integer;
+  total   integer;
+  score   numeric;
+  label   text;
+begin
+  select
+    sum(case when coalesce(rating, vote) = 'up' then 1 else 0 end)::int,
+    sum(case when coalesce(rating, vote) = 'down' then 1 else 0 end)::int,
+    sum(case when coalesce(rating, vote) in ('up','down') then 1 else 0 end)::int
+  into up_ct, down_ct, total
+  from public.driver_feedback
+  where driver_id = p_driver_id;
+
+  up_ct   := coalesce(up_ct, 0);
+  down_ct := coalesce(down_ct, 0);
+  total   := coalesce(total, 0);
+
+  if total = 0 then
+    score := 0;
+  else
+    score := (up_ct - down_ct)::numeric / nullif(total,0);
+  end if;
+
+  label := public._fit_label_for_score(score);
+
+  insert into public.driver_fit_scores as dfs (
+    driver_id, thumbs_up, thumbs_down, total_events, fit_score, fit_label, updated_at
+  )
+  values (p_driver_id, up_ct, down_ct, total, score, label, now())
+  on conflict (driver_id) do update
+    set thumbs_up    = excluded.thumbs_up,
+        thumbs_down  = excluded.thumbs_down,
+        total_events = excluded.total_events,
+        fit_score    = excluded.fit_score,
+        fit_label    = excluded.fit_label,
+        updated_at   = now();
+end;
+$$;
+
+create or replace function public.recompute_all_driver_fit_scores()
+returns void language plpgsql as $$
+declare r record;
+begin
+  for r in select id as driver_id from public.drivers loop
+    perform public.recompute_driver_fit_score(r.driver_id);
+  end loop;
+end;
+$$;
+
+-- 1) Trigger: keep scores in sync when feedback changes
+create or replace function public._tg_sync_fit_scores()
+returns trigger language plpgsql as $$
+begin
+  if (tg_op = 'INSERT') or (tg_op = 'UPDATE') then
+    perform public.recompute_driver_fit_score(new.driver_id);
+  end if;
+
+  if (tg_op = 'UPDATE') and (new.driver_id is distinct from old.driver_id) then
+    perform public.recompute_driver_fit_score(old.driver_id);
+  end if;
+
+  if (tg_op = 'DELETE') then
+    perform public.recompute_driver_fit_score(old.driver_id);
+  end if;
+
+  return null;
+end;
+$$;
+
+drop trigger if exists trg_driver_feedback_sync_fit on public.driver_feedback;
+create trigger trg_driver_feedback_sync_fit
+after insert or update or delete on public.driver_feedback
+for each row execute function public._tg_sync_fit_scores();
+
+-- 2) NEW: ensure EVERY driver has a fit row, even with zero events
+-- 2a) Backfill for all existing drivers (creates zero rows where missing)
+insert into public.driver_fit_scores (driver_id)
+select d.id
+from public.drivers d
+left join public.driver_fit_scores s on s.driver_id = d.id
+where s.driver_id is null
+on conflict do nothing;
+
+-- 2b) Trigger: when a new driver is inserted, create an empty fit row immediately
+create or replace function public._tg_driver_bootstrap_fit()
+returns trigger language plpgsql as $$
+begin
+  insert into public.driver_fit_scores (driver_id)
+  values (new.id)
+  on conflict (driver_id) do nothing;
+
+  -- Optional: precompute (keeps label/timestamps fresh)
+  perform public.recompute_driver_fit_score(new.id);
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_drivers_bootstrap_fit on public.drivers;
+create trigger trg_drivers_bootstrap_fit
+after insert on public.drivers
+for each row execute function public._tg_driver_bootstrap_fit();
+
+-- 3) View: drivers joined with their live fit (useful for lists/tables)
+
+-- Important: must drop first because CREATE OR REPLACE can't change column names/order
+drop view if exists public.v_drivers_with_fit;
+
+create view public.v_drivers_with_fit as
+select
+  d.*,
+  coalesce(s.up_events, 0)    as fit_thumbs_up,
+  coalesce(s.down_events, 0)  as fit_thumbs_down,
+  coalesce(s.up_events + s.down_events, 0) as fit_total_events,
+  coalesce(s.fit_score, 0)    as fit_score,
+  case
+    when coalesce(s.fit_score,0) >= 3 then 'great'
+    when coalesce(s.fit_score,0) > 0  then 'good'
+    when coalesce(s.fit_score,0) = 0  then 'neutral'
+    else 'poor'
+  end as fit_label,
+  s.updated_at                as fit_updated_at
+from public.drivers d
+left join public.driver_fit_scores s on s.driver_id = d.id;
+
+
+-- 4) Realtime: ensure feedback table is in the publication (safe if already added)
+do $$
+begin
+  begin
+    execute 'alter publication supabase_realtime add table public.driver_feedback';
+  exception when duplicate_object then
+    -- already a member
+    null;
+  end;
+end;
+$$;
+
+-- 5) RLS (read access for authenticated users; tighten later per tenant/org)
+alter table public.driver_fit_scores enable row level security;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname='public' and tablename='driver_fit_scores' and policyname='driver_fit_scores_read'
+  ) then
+    create policy driver_fit_scores_read
+      on public.driver_fit_scores
+      for select
+      to authenticated
+      using (true);
+  end if;
+end;
+$$;
+
+-- 6) Initial recompute to populate labels/timestamps for all drivers
+select public.recompute_all_driver_fit_scores();

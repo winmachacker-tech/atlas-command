@@ -1,4 +1,4 @@
-// src/components/DiagnosticsOverlay.jsx
+﻿// src/components/DiagnosticsOverlay.jsx
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { supabase } from "../lib/supabase";
@@ -37,40 +37,40 @@ export default function DiagnosticsOverlay() {
   const [open, setOpen] = useState(false);
 
   // --- Safe ENV access (Vite) ---
-  const SUPABASE_URL = useMemo(() => import.meta.env.VITE_SUPABASE_URL ?? "—", []);
+  const SUPABASE_URL = useMemo(() => import.meta.env.VITE_SUPABASE_URL ?? "â€”", []);
   const ANON_KEY_STR = useMemo(() => import.meta.env.VITE_SUPABASE_ANON_KEY ?? "", []);
   const ANON_KEY_LOADED = useMemo(() => Boolean(ANON_KEY_STR && ANON_KEY_STR.length > 20), [ANON_KEY_STR]);
 
   // Derive Functions URL
   const FUNCTIONS_URL = useMemo(() => {
     try {
-      if (!SUPABASE_URL || SUPABASE_URL === "—") return "—";
+      if (!SUPABASE_URL || SUPABASE_URL === "â€”") return "â€”";
       const u = new URL(SUPABASE_URL);
       return `${u.origin}/functions/v1`;
     } catch {
-      return "—";
+      return "â€”";
     }
   }, [SUPABASE_URL]);
 
   // --- Auth / session state ---
   const [authState, setAuthState] = useState("unknown");
-  const [userId, setUserId] = useState("—");
-  const [email, setEmail] = useState("—");
-  const [isAdmin, setIsAdmin] = useState("—");
+  const [userId, setUserId] = useState("â€”");
+  const [email, setEmail] = useState("â€”");
+  const [isAdmin, setIsAdmin] = useState("â€”");
 
   // --- Client probes ---
   const [clientReady, setClientReady] = useState(false);
-  const [originUrl, setOriginUrl] = useState("—");
+  const [originUrl, setOriginUrl] = useState("â€”");
 
   // --- Functions reachability probe ---
   const [fnProbeDone, setFnProbeDone] = useState(false);
   const [fnProbeOk, setFnProbeOk] = useState(null); // null | true | false
-  const [fnProbeStatus, setFnProbeStatus] = useState("—");
+  const [fnProbeStatus, setFnProbeStatus] = useState("â€”");
 
   // Setup on mount
   useEffect(() => {
     setClientReady(!!supabase);
-    setOriginUrl(typeof window !== "undefined" ? window.location.origin : "—");
+    setOriginUrl(typeof window !== "undefined" ? window.location.origin : "â€”");
 
     // initial session fetch
     (async () => {
@@ -78,8 +78,8 @@ export default function DiagnosticsOverlay() {
         const { data } = await supabase.auth.getSession();
         if (data?.session) {
           setAuthState("SIGNED_IN");
-          setUserId(data.session.user?.id ?? "—");
-          setEmail(data.session.user?.email ?? "—");
+          setUserId(data.session.user?.id ?? "â€”");
+          setEmail(data.session.user?.email ?? "â€”");
         } else {
           setAuthState("SIGNED_OUT");
         }
@@ -92,13 +92,13 @@ export default function DiagnosticsOverlay() {
     const { data: sub } = supabase.auth.onAuthStateChange((evt, session) => {
       if (evt === "SIGNED_IN" || evt === "TOKEN_REFRESHED" || evt === "INITIAL_SESSION") {
         setAuthState("SIGNED_IN");
-        setUserId(session?.user?.id ?? "—");
-        setEmail(session?.user?.email ?? "—");
+        setUserId(session?.user?.id ?? "â€”");
+        setEmail(session?.user?.email ?? "â€”");
       } else if (evt === "SIGNED_OUT" || evt === "USER_DELETED") {
         setAuthState("SIGNED_OUT");
-        setUserId("—");
-        setEmail("—");
-        setIsAdmin("—");
+        setUserId("â€”");
+        setEmail("â€”");
+        setIsAdmin("â€”");
       } else {
         setAuthState(evt || "unknown");
       }
@@ -111,7 +111,7 @@ export default function DiagnosticsOverlay() {
   useEffect(() => {
     (async () => {
       if (!clientReady) return;
-      if (!userId || userId === "—") return;
+      if (!userId || userId === "â€”") return;
       try {
         const { data, error } = await supabase
           .from("users")
@@ -134,8 +134,8 @@ export default function DiagnosticsOverlay() {
   useEffect(() => {
     (async () => {
       try {
-        if (FUNCTIONS_URL === "—") {
-          setFnProbeStatus("—");
+        if (FUNCTIONS_URL === "â€”") {
+          setFnProbeStatus("â€”");
           setFnProbeOk(false);
           setFnProbeDone(true);
           return;
@@ -150,7 +150,7 @@ export default function DiagnosticsOverlay() {
         setFnProbeStatus(String(resp.status));
 
         // Consider these statuses as "reachable" even if unauthorized:
-        // 200–399 OK-ish, and 401/403/404/405 mean the gateway is up.
+        // 200â€“399 OK-ish, and 401/403/404/405 mean the gateway is up.
         const okish =
           (resp.status >= 200 && resp.status < 400) ||
           [401, 403, 404, 405].includes(resp.status);
@@ -200,7 +200,7 @@ export default function DiagnosticsOverlay() {
           </Section>
 
           <Section title="Env / Config">
-            <Row label="SUPABASE_URL" value={SUPABASE_URL || "—"} dim />
+            <Row label="SUPABASE_URL" value={SUPABASE_URL || "â€”"} dim />
             <Row label="FUNCTIONS_URL" value={FUNCTIONS_URL} dim />
             <Row
               label="window.__sb present"
@@ -210,17 +210,17 @@ export default function DiagnosticsOverlay() {
 
           <Section
             title="Quick Probes"
-            right={!fnProbeDone ? "running…" : fnProbeOk ? "ok" : "failed"}
+            right={!fnProbeDone ? "runningâ€¦" : fnProbeOk ? "ok" : "failed"}
           >
-            <Row label="functions reachability" value={fnProbeOk === null ? "—" : String(fnProbeOk)} />
+            <Row label="functions reachability" value={fnProbeOk === null ? "â€”" : String(fnProbeOk)} />
             <Row label="status" value={fnProbeStatus} dim />
           </Section>
 
           <Section title="Hints">
             <div className="text-sm text-zinc-600 dark:text-zinc-300">
-              • A 401/403 on the functions root is normal—call a specific function URL.<br />
-              • If not signed in, RLS-protected reads will return empty results.<br />
-              • Ensure <span className="font-mono">VITE_SUPABASE_URL</span> and{" "}
+              â€¢ A 401/403 on the functions root is normalâ€”call a specific function URL.<br />
+              â€¢ If not signed in, RLS-protected reads will return empty results.<br />
+              â€¢ Ensure <span className="font-mono">VITE_SUPABASE_URL</span> and{" "}
               <span className="font-mono">VITE_SUPABASE_ANON_KEY</span> are configured.
             </div>
           </Section>
@@ -239,3 +239,4 @@ export default function DiagnosticsOverlay() {
     </div>
   );
 }
+

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Loader2, ShieldCheck, Phone, KeyRound, CheckCircle2, XCircle } from "lucide-react";
@@ -16,7 +16,7 @@ function normalizePhone(input) {
   const raw = (input || "").replace(/[^\d+]/g, "");
   if (!raw) return "";
   if (raw.startsWith("+")) return raw; // assume caller included country code
-  // If 11 digits starting with 1, or 10 digits → US
+  // If 11 digits starting with 1, or 10 digits â†’ US
   const digits = raw.replace(/\D/g, "");
   if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
   if (digits.length === 10) return `+1${digits}`;
@@ -63,7 +63,7 @@ export default function PhoneSignup() {
   const [msg, setMsg] = useState({ type: "", text: "" }); // type: "good" | "bad" | ""
 
   useEffect(() => {
-    document.title = `${siteTitle} — Phone Signup`;
+    document.title = `${siteTitle} â€” Phone Signup`;
   }, []);
 
   async function requestOtp(e) {
@@ -98,7 +98,7 @@ export default function PhoneSignup() {
           setMsg({
             type: "bad",
             text:
-              "Unsupported phone provider. In Supabase: Auth → Providers → Phone → enable & configure SMS (Twilio/Vonage). Then retry.",
+              "Unsupported phone provider. In Supabase: Auth â†’ Providers â†’ Phone â†’ enable & configure SMS (Twilio/Vonage). Then retry.",
           });
           return;
         }
@@ -144,7 +144,7 @@ export default function PhoneSignup() {
       if (!ok.ok) {
         setMsg({ type: "bad", text: `Signed in, but profile init failed: ${ok.error}` });
       } else {
-        setMsg({ type: "good", text: "Phone verified. You’re in!" });
+        setMsg({ type: "good", text: "Phone verified. Youâ€™re in!" });
       }
 
       setPhase("done");
@@ -218,7 +218,7 @@ export default function PhoneSignup() {
                 />
               </div>
               <p className="mt-1 text-xs text-zinc-500">
-                We’ll text you a verification code. US numbers auto-format to +1.
+                Weâ€™ll text you a verification code. US numbers auto-format to +1.
               </p>
             </div>
 
@@ -282,9 +282,10 @@ export default function PhoneSignup() {
         )}
 
         {phase === "done" && (
-          <div className="mt-4 text-sm text-emerald-100">You’re signed in. Redirecting…</div>
+          <div className="mt-4 text-sm text-emerald-100">Youâ€™re signed in. Redirectingâ€¦</div>
         )}
       </div>
     </div>
   );
 }
+

@@ -1,4 +1,4 @@
-// src/components/InviteUserForm.jsx
+﻿// src/components/InviteUserForm.jsx
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
 
@@ -9,7 +9,7 @@ export default function InviteUserForm() {
 
   async function handleInvite(e) {
     e.preventDefault();
-    setMessage("Sending invite…");
+    setMessage("Sending inviteâ€¦");
 
     const { data } = await supabase.auth.getSession();
     const token = data?.session?.access_token;
@@ -30,7 +30,7 @@ export default function InviteUserForm() {
     const out = await res.json();
     if (!res.ok) setMessage(`Error: ${out.error || "Invite failed"}`);
     else {
-      setMessage(`✅ Invite sent to ${email}`);
+      setMessage(`âœ… Invite sent to ${email}`);
       setEmail("");
     }
   }
@@ -61,3 +61,4 @@ export default function InviteUserForm() {
     </form>
   );
 }
+

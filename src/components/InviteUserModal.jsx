@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { X, Loader2, Check, Copy, Mail, Link as LinkIcon, AlertCircle } from "lucide-react";
 
 /**
@@ -201,3 +201,4 @@ export default function InviteUserModal({ open, onClose }) {
     </div>
   );
 }
+

@@ -1,15 +1,14 @@
+﻿import React from "react";
 import { createBrowserRouter, redirect } from "react-router-dom";
 import MainLayout from "./layout/MainLayout.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 
-// Lazy-loaded pages
-const Dashboard = () => import("./pages/Dashboard.jsx").then(m => ({ default: m.default }));
-const Loads = () => import("./pages/Loads.jsx").then(m => ({ default: m.default }));
-const InTransit = () => import("./pages/InTransit.jsx").then(m => ({ default: m.default }));
-const Delivered = () => import("./pages/Delivered.jsx").then(m => ({ default: m.default }));
-const Activity = () => import("./pages/Activity.jsx").then(m => ({ default: m.default }));
-const Settings = () => import("./pages/Settings.jsx").then(m => ({ default: m.default }));
-const NotFound = () => import("./pages/NotFound.jsx").then(m => ({ default: m.default }));
+/**
+ * We use the route-level `lazy` API (React Router v6.4+).
+ * Each lazy() module must default-export a React component.
+ * Example in a page file:
+ *   export default function Dashboard() { ... }
+ */
 
 export const router = createBrowserRouter([
   {
@@ -17,14 +16,59 @@ export const router = createBrowserRouter([
     element: <MainLayout />,
     errorElement: <ErrorBoundary />,
     children: [
-      { index: true, loader: () => redirect("/dashboard") },
-      { path: "dashboard", element: <Dashboard /> },
-      { path: "loads", element: <Loads /> },
-      { path: "in-transit", element: <InTransit /> },
-      { path: "delivered", element: <Delivered /> },
-      { path: "activity", element: <Activity /> },
-      { path: "settings", element: <Settings /> },
-      { path: "*", element: <NotFound /> },
+      // "/" -> "/dashboard"
+      {
+        index: true,
+        loader: () => redirect("/dashboard"),
+      },
+
+      // Dashboard
+      {
+        path: "dashboard",
+        lazy: () => import("./pages/Dashboard.jsx"),
+      },
+
+      // Loads
+      {
+        path: "loads",
+        lazy: () => import("./pages/Loads.jsx"),
+      },
+
+      // In Transit
+      {
+        path: "in-transit",
+        lazy: () => import("./pages/InTransit.jsx"),
+      },
+
+      // Delivered
+      {
+        path: "delivered",
+        lazy: () => import("./pages/Delivered.jsx"),
+      },
+
+      // Activity
+      {
+        path: "activity",
+        lazy: () => import("./pages/Activity.jsx"),
+      },
+
+      // Settings
+      {
+        path: "settings",
+        lazy: () => import("./pages/Settings.jsx"),
+      },
+
+      // ✅ NEW: AI Lab Proof
+      {
+        path: "ai-lab-proof",
+        lazy: () => import("./pages/AILabProof.jsx"),
+      },
+
+      // 404 inside layout
+      {
+        path: "*",
+        lazy: () => import("./pages/NotFound.jsx"),
+      },
     ],
   },
 ]);

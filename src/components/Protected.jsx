@@ -1,4 +1,4 @@
-// src/components/Protected.jsx
+﻿// src/components/Protected.jsx
 import { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabase";
@@ -51,15 +51,16 @@ export default function Protected({ children }) {
           <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" opacity="0.25" />
           <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="4" fill="none" />
         </svg>
-        Checking session…
+        Checking sessionâ€¦
       </div>
     );
   }
 
-  // ✅ Declarative redirect (no blank screen)
+  // âœ… Declarative redirect (no blank screen)
   if (!authed) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
   return children;
 }
+

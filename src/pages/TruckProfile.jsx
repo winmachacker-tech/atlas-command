@@ -1,4 +1,4 @@
-// src/pages/TruckProfile.jsx
+﻿// src/pages/TruckProfile.jsx
 import { useEffect, useMemo, useState, useRef } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import {
@@ -31,7 +31,7 @@ import PMSchedulerModal from "../components/PMSchedulerModal.jsx";
 /* ---------- constants & helpers ---------- */
 const STATUS_CHOICES = ["ACTIVE", "INACTIVE", "MAINTENANCE"];
 const DOCS_BUCKET = "truck-docs";
-const PHOTO_BUCKET = "truck-photos"; // 👈 NEW
+const PHOTO_BUCKET = "truck-photos"; // ðŸ‘ˆ NEW
 
 function cx(...a) {
   return a.filter(Boolean).join(" ");
@@ -39,9 +39,9 @@ function cx(...a) {
 
 function fmtDate(d) {
   try {
-    return d ? new Date(d).toLocaleDateString() : "—";
+    return d ? new Date(d).toLocaleDateString() : "â€”";
   } catch {
-    return "—";
+    return "â€”";
   }
 }
 function daysUntil(d) {
@@ -54,7 +54,7 @@ function daysUntil(d) {
 }
 function duePill(d) {
   const n = daysUntil(d);
-  if (n === null) return { text: "—", className: "bg-transparent text-[var(--text-soft)]" };
+  if (n === null) return { text: "â€”", className: "bg-transparent text-[var(--text-soft)]" };
   if (n < 0) {
     return { text: `${fmtDate(d)} (${n}d)`, className: "bg-red-500/20 text-red-300 border border-red-500/30 shadow-sm" };
   }
@@ -121,7 +121,7 @@ function OdometerModal({ open, onClose, truck, onSaved }) {
 
   return (
     <ModalShell
-      title={`Update Odometer • ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      title={`Update Odometer â€¢ ${truck.truck_number ?? truck.vin ?? truck.id}`}
       onClose={onClose}
       footer={
         <>
@@ -129,7 +129,7 @@ function OdometerModal({ open, onClose, truck, onSaved }) {
             Cancel
           </button>
           <button onClick={save} disabled={busy} className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50">
-            {busy ? "Saving…" : "Save"}
+            {busy ? "Savingâ€¦" : "Save"}
           </button>
         </>
       }
@@ -209,7 +209,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
 
   return (
     <ModalShell
-      title={`Assign Driver • ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      title={`Assign Driver â€¢ ${truck.truck_number ?? truck.vin ?? truck.id}`}
       onClose={onClose}
       footer={
         <>
@@ -217,7 +217,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
             Cancel
           </button>
           <button onClick={save} disabled={busy} className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50">
-            {busy ? "Saving…" : "Save"}
+            {busy ? "Savingâ€¦" : "Save"}
           </button>
         </>
       }
@@ -229,7 +229,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Type a driver name or status…"
+          placeholder="Type a driver name or statusâ€¦"
           className="w-full pl-9 pr-3 py-2 rounded-xl border bg-transparent outline-none"
         />
       </div>
@@ -250,7 +250,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
                         <input type="radio" name="driver" checked={selected === d.id} onChange={() => setSelected(d.id)} />
                         <div>
                           <div className="font-medium">{name}</div>
-                          <div className="text-xs opacity-70">{d.status || "—"}</div>
+                          <div className="text-xs opacity-70">{d.status || "â€”"}</div>
                         </div>
                       </label>
                     </td>
@@ -280,7 +280,7 @@ export default function TruckProfile() {
   const [odoOpen, setOdoOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [docPresence, setDocPresence] = useState(false);
-  const [uploading, setUploading] = useState(false); // 👈 NEW
+  const [uploading, setUploading] = useState(false); // ðŸ‘ˆ NEW
 
   const [maint, setMaint] = useState([]);
   const [maintBusy, setMaintBusy] = useState(false);
@@ -293,7 +293,7 @@ export default function TruckProfile() {
       try {
         const { data, error: tErr } = await supabase
           .from("trucks")
-          .select("id, truck_number, vin, make, model, year, status, driver_id, odometer, reg_due, insp_due, ifta_due, ins_due, photo_url") // 👈 photo_url
+          .select("id, truck_number, vin, make, model, year, status, driver_id, odometer, reg_due, insp_due, ifta_due, ins_due, photo_url") // ðŸ‘ˆ photo_url
           .eq("id", id)
           .maybeSingle();
         if (tErr) throw tErr;
@@ -352,7 +352,7 @@ export default function TruckProfile() {
     try {
       const { data, error: tErr } = await supabase
         .from("trucks")
-        .select("id, truck_number, vin, make, model, year, status, driver_id, odometer, reg_due, insp_due, ifta_due, ins_due, photo_url") // 👈 photo_url
+        .select("id, truck_number, vin, make, model, year, status, driver_id, odometer, reg_due, insp_due, ifta_due, ins_due, photo_url") // ðŸ‘ˆ photo_url
         .eq("id", id)
         .maybeSingle();
       if (tErr) throw tErr;
@@ -410,7 +410,7 @@ export default function TruckProfile() {
     await refetch();
   }
 
-  // 👇 NEW: upload handler for truck photo
+  // ðŸ‘‡ NEW: upload handler for truck photo
   async function handleUploadPhoto(e) {
     try {
       const file = e.target.files?.[0];
@@ -508,7 +508,7 @@ export default function TruckProfile() {
               {truck.truck_number ? `Truck ${truck.truck_number}` : "Truck"}
             </div>
             <div className="text-sm opacity-70">
-              VIN {truck.vin || "—"} • {(truck.make || "—") + " / " + (truck.model || "—") + " / " + (truck.year || "—")}
+              VIN {truck.vin || "â€”"} â€¢ {(truck.make || "â€”") + " / " + (truck.model || "â€”") + " / " + (truck.year || "â€”")}
             </div>
           </div>
         </div>
@@ -521,7 +521,7 @@ export default function TruckProfile() {
             {refetching ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Refreshing…
+                Refreshingâ€¦
               </>
             ) : (
               <>
@@ -552,7 +552,7 @@ export default function TruckProfile() {
         </div>
       </div>
 
-      {/* 👇 NEW: Truck Photo uploader / preview */}
+      {/* ðŸ‘‡ NEW: Truck Photo uploader / preview */}
       <div className="mb-6 flex items-center gap-4">
         {truck.photo_url ? (
           <img
@@ -567,7 +567,7 @@ export default function TruckProfile() {
         )}
         <div>
           <label className="block mb-2 text-sm opacity-70">
-            {uploading ? "Uploading…" : "Change / Upload Photo"}
+            {uploading ? "Uploadingâ€¦" : "Change / Upload Photo"}
           </label>
           <input
             type="file"
@@ -577,7 +577,7 @@ export default function TruckProfile() {
             className="block text-sm"
           />
           <div className="text-xs opacity-60 mt-1">
-            Stored in bucket <span className="font-mono">{PHOTO_BUCKET}</span> at <span className="font-mono">{`/${id}/…`}</span>
+            Stored in bucket <span className="font-mono">{PHOTO_BUCKET}</span> at <span className="font-mono">{`/${id}/â€¦`}</span>
           </div>
         </div>
       </div>
@@ -587,7 +587,7 @@ export default function TruckProfile() {
         <div className="rounded-2xl border p-4">
           <div className="text-xs opacity-70 mb-1">Status</div>
           <div className="flex items-center gap-2">
-            <span className={cx("px-2 py-1 rounded-lg text-xs", statusBadge)}>{(truck.status || "—").toUpperCase()}</span>
+            <span className={cx("px-2 py-1 rounded-lg text-xs", statusBadge)}>{(truck.status || "â€”").toUpperCase()}</span>
             <button
               onClick={() => setAssignOpen(true)}
               className="px-2 py-1 rounded-lg border text-xs hover:bg-[var(--bg-hover)] inline-flex items-center gap-1"
@@ -598,7 +598,7 @@ export default function TruckProfile() {
           </div>
           <div className="mt-3 text-xs opacity-70">Odometer</div>
           <div className="flex items-center gap-2">
-            <div className="text-lg font-semibold">{truck.odometer ?? "—"}</div>
+            <div className="text-lg font-semibold">{truck.odometer ?? "â€”"}</div>
             <button
               onClick={() => setOdoOpen(true)}
               className="px-2 py-1 rounded-lg border text-xs hover:bg-[var(--bg-hover)] inline-flex items-center gap-1"
@@ -620,7 +620,7 @@ export default function TruckProfile() {
               >
                 {driverDisplayName(driver)}
               </Link>
-              <span className="text-xs opacity-70">• {driver.status || "—"}</span>
+              <span className="text-xs opacity-70">â€¢ {driver.status || "â€”"}</span>
               <button
                 onClick={unassignDriver}
                 className="px-2 py-1 rounded-lg border text-xs hover:bg-[var(--bg-hover)] inline-flex items-center gap-1"
@@ -642,7 +642,7 @@ export default function TruckProfile() {
             </div>
           )}
           <div className="mt-3 text-xs opacity-70">VIN</div>
-          <div className="font-medium">{truck.vin || "—"}</div>
+          <div className="font-medium">{truck.vin || "â€”"}</div>
         </div>
 
         <div className="rounded-2xl border p-4">
@@ -687,7 +687,7 @@ export default function TruckProfile() {
                 {maintBusy ? (
                   <tr>
                     <td colSpan={5} className="px-3 py-8 text-center">
-                      <Loader2 className="inline w-4 h-4 animate-spin" /> Loading…
+                      <Loader2 className="inline w-4 h-4 animate-spin" /> Loadingâ€¦
                     </td>
                   </tr>
                 ) : maint.length === 0 ? (
@@ -702,12 +702,12 @@ export default function TruckProfile() {
                     return (
                       <tr key={r.id} className={cx(zebra, "border-t")}>
                         <td className="px-3 py-3 whitespace-nowrap">{fmtDate(r.date)}</td>
-                        <td className="px-3 py-3">{r.type || "—"}</td>
-                        <td className="px-3 py-3 whitespace-nowrap">{r.odometer ?? "—"}</td>
+                        <td className="px-3 py-3">{r.type || "â€”"}</td>
+                        <td className="px-3 py-3 whitespace-nowrap">{r.odometer ?? "â€”"}</td>
                         <td className="px-3 py-3 whitespace-nowrap">
-                          {r.cost != null ? `$${Number(r.cost).toLocaleString()}` : "—"}
+                          {r.cost != null ? `$${Number(r.cost).toLocaleString()}` : "â€”"}
                         </td>
-                        <td className="px-3 py-3">{r.notes || "—"}</td>
+                        <td className="px-3 py-3">{r.notes || "â€”"}</td>
                       </tr>
                     );
                   })
@@ -719,7 +719,7 @@ export default function TruckProfile() {
             <Link
               to="/trucks"
               className="text-xs opacity-70 underline underline-offset-2 hover:opacity-100"
-              title="Manage maintenance in Trucks table (Actions › Maintenance)"
+              title="Manage maintenance in Trucks table (Actions â€º Maintenance)"
             >
               Manage maintenance from the Trucks page
             </Link>
@@ -744,7 +744,7 @@ export default function TruckProfile() {
             Store registration, insurance, IFTA, inspections, and shop invoices per truck.
           </div>
           <div className="mt-3 text-xs opacity-60">
-            Bucket: <span className="font-mono">{DOCS_BUCKET}</span> • Path: <span className="font-mono">{`/${id}/…`}</span>
+            Bucket: <span className="font-mono">{DOCS_BUCKET}</span> â€¢ Path: <span className="font-mono">{`/${id}/â€¦`}</span>
           </div>
         </div>
       </div>
@@ -757,3 +757,4 @@ export default function TruckProfile() {
     </div>
   );
 }
+

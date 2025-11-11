@@ -64,16 +64,18 @@ alter table public.users enable row level security;
 
 -- Drop existing policies if they exist (avoids duplicates / name collisions)
 do $$
+declare
+  r record;
 begin
-  if exists (select 1 from pg_policies where schemaname='public' and tablename='users') then
-    -- drop all policies on public.users
-    execute (
-      select string_agg(format('drop policy if exists %I on public.users;', polname), ' ')
-      from pg_policies
-      where schemaname='public' and tablename='users'
-    );
-  end if;
+  for r in
+    select schemaname, tablename, policyname
+    from pg_policies
+    where schemaname = 'public' and tablename = 'users'
+  loop
+    execute format('drop policy if exists %I on %I.%I;', r.policyname, r.schemaname, r.tablename);
+  end loop;
 end$$;
+
 
 -- 4) Self-access policies (fixes onboarding upsert 403)
 create policy "users_select_own"

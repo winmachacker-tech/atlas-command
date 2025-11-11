@@ -1,4 +1,4 @@
-// src/components/LoadCreateForm.jsx
+﻿// src/components/LoadCreateForm.jsx
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
@@ -138,7 +138,7 @@ export default function LoadCreateForm({
     e?.preventDefault?.();
     const payload = genPayload();
 
-    // Basic front-end checks (don’t be strict; avoid breaking)
+    // Basic front-end checks (donâ€™t be strict; avoid breaking)
     if (!payload.origin || !payload.destination) {
       alert("Please enter Origin and Destination.");
       return;
@@ -273,7 +273,7 @@ export default function LoadCreateForm({
           {loadingEq ? (
             <span className="inline-flex items-center gap-2 text-sm opacity-80">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Loading…
+              Loadingâ€¦
             </span>
           ) : eqErr ? (
             <span className="text-sm text-red-400">Error: {eqErr}</span>
@@ -291,7 +291,7 @@ export default function LoadCreateForm({
               onChange={(e) => setEquipmentTypeId(e.target.value)}
               className="rounded-xl border border-white/10 bg-transparent px-3 py-2 outline-none focus:ring-2 focus:ring-white/20"
             >
-              <option value="">Select equipment…</option>
+              <option value="">Select equipmentâ€¦</option>
               {eqTypes.map((e) => (
                 <option key={e.id} value={e.id}>
                   {e.label} ({e.code})
@@ -388,4 +388,5 @@ export default function LoadCreateForm({
     </form>
   );
 }
+
 

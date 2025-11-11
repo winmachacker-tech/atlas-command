@@ -1,4 +1,4 @@
-// src/pages/Integrations.jsx
+﻿// src/pages/Integrations.jsx
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
@@ -184,7 +184,7 @@ export default function Integrations() {
         <div className="mx-auto max-w-5xl">
           <div className="flex items-center gap-2 text-white/70">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span>Loading integrations…</span>
+            <span>Loading integrationsâ€¦</span>
           </div>
         </div>
       </div>
@@ -355,6 +355,15 @@ export default function Integrations() {
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
+            <IntegrationCard
+              icon={MessageSquare}
+              name="OpenAI"
+              description="AI-powered dispatch assistant and intelligent load matching"
+              status="connected"
+              badge="Connected"
+              onConfigure={() => setMsg({ kind: "info", text: "OpenAI integration is configured and active." })}
+              onDisconnect={() => setMsg({ kind: "info", text: "OpenAI integration cannot be disconnected as it's a core feature." })}
+            />
             <IntegrationCard
               icon={Mail}
               name="Gmail / Email"

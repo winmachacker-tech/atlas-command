@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Menu, LogOut } from "lucide-react";
 import { supabase } from "../lib/supabase";
@@ -54,7 +54,7 @@ export default function Topbar({ onOpenSidebar }) {
           </button>
 
           <Link to="/dashboard" className="font-medium">Command Center</Link>
-          <span className="text-xs text-zinc-500">v0.1 • Dev</span>
+          <span className="text-xs text-zinc-500">v0.1 â€¢ Dev</span>
         </div>
 
         <div className="flex items-center gap-3">
@@ -84,3 +84,4 @@ export default function Topbar({ onOpenSidebar }) {
     </div>
   );
 }
+

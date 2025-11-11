@@ -1,4 +1,4 @@
-export function Input({ value, onChange, placeholder = "", type = "text", className = "" }) {
+﻿export function Input({ value, onChange, placeholder = "", type = "text", className = "" }) {
   return (
     <input
       type={type}
@@ -9,3 +9,4 @@ export function Input({ value, onChange, placeholder = "", type = "text", classN
     />
   );
 }
+

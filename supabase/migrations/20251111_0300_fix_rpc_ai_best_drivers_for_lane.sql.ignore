@@ -1,0 +1,74 @@
+-- FILE: supabase/migrations/20251111_0300_fix_rpc_ai_best_drivers_for_lane.sql
+-- Purpose: Drop ANY existing overloads of rpc_ai_best_drivers_for_lane, then recreate with the correct return type.
+
+-- 0) Drop any existing overloads (whatever their args are)
+do $$
+declare
+  r record;
+begin
+  for r in
+    select p.oid, pg_get_function_identity_arguments(p.oid) as args
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and p.proname  = 'rpc_ai_best_drivers_for_lane'
+  loop
+    execute format('drop function if exists public.rpc_ai_best_drivers_for_lane(%s);', r.args);
+  end loop;
+end$$;
+
+-- 1) Safety extensions (no-op if present)
+create extension if not exists "uuid-ossp";
+create extension if not exists "pgcrypto";
+
+-- 2) Recreate the RPC with the intended signature and return shape
+create function public.rpc_ai_best_drivers_for_lane(
+  lane_key    text,
+  limit_count int default 10
+)
+returns table (
+  driver_id uuid,
+  driver_name text,
+  fit_score numeric,
+  up_events int,
+  down_events int,
+  last_feedback_at timestamptz
+)
+language sql
+stable
+as $$
+  /*
+    CURRENT (stub):
+      - Ignores lane_key and returns top drivers by overall fit_score so UI has data.
+    FUTURE:
+      - Make lane-aware by using driver_feedback.lane_key when your thumbs send it.
+  */
+  select
+    d.id as driver_id,
+    coalesce(d.full_name, '') as driver_name,
+    coalesce(s.fit_score, 0) as fit_score,
+    coalesce(s.up_events, 0) as up_events,
+    coalesce(s.down_events, 0) as down_events,
+    s.last_feedback_at
+  from public.drivers d
+  left join public.driver_fit_scores s
+    on s.driver_id = d.id
+  where coalesce(d.is_active, true) = true
+  order by coalesce(s.fit_score, 0) desc nulls last, d.id
+  limit greatest(limit_count, 0)
+$$;
+
+comment on function public.rpc_ai_best_drivers_for_lane(text, int)
+  is 'Return top drivers by overall fit_score. lane_key currently unused; limit_count controls row count.';
+
+-- 3) Permissions
+revoke all on function public.rpc_ai_best_drivers_for_lane(text, int) from public;
+grant execute on function public.rpc_ai_best_drivers_for_lane(text, int) to anon, authenticated, service_role;
+
+-- 4) Reload PostgREST schema
+do $$
+begin
+  perform pg_notify('pgrst', 'reload schema');
+exception when others then
+  null;
+end$$;

@@ -1,9 +1,9 @@
-// src/pages/SetPassword.jsx
+﻿// src/pages/SetPassword.jsx
 // For invited / recovered users to set their password after AuthCallback established a session.
-// - Reads ?next for post-success redirect (defaults to "/").
+// - Reads ?next for post-success redirect (fallbacks to localStorage key + /complete-account).
 // - Requires an active Supabase session (set by AuthCallback). If missing, prompts to reopen invite link.
 // - Validates password + confirm, calls supabase.auth.updateUser({ password }).
-// - On success, redirects to ?next and shows a quick success state.
+// - On success, clears stored redirect + redirects.
 // Drop-in ready.
 
 import { useEffect, useMemo, useState } from "react";
@@ -19,7 +19,11 @@ function useQuery() {
 export default function SetPassword() {
   const nav = useNavigate();
   const qs = useQuery();
-  const next = qs.get("next") || "/";
+  // âœ… UPDATED: honor stored redirect from earlier auth flow, then default to /complete-account
+  const next =
+    qs.get("next") ||
+    (typeof window !== "undefined" ? localStorage.getItem("atlas.redirectAfterAuth") : null) ||
+    "/complete-account";
 
   const [sessionChecked, setSessionChecked] = useState(false);
   const [hasSession, setHasSession] = useState(false);
@@ -70,6 +74,10 @@ export default function SetPassword() {
         setSubmitting(false);
         return;
       }
+      // âœ… UPDATED: clear any stored redirect now that we're done
+      try {
+        localStorage.removeItem("atlas.redirectAfterAuth");
+      } catch {}
       setOk(true);
       // brief success, then redirect
       setTimeout(() => nav(next, { replace: true }), 800);
@@ -85,7 +93,7 @@ export default function SetPassword() {
         <div className="w-full max-w-md rounded-2xl bg-zinc-900 text-zinc-100 shadow-2xl ring-1 ring-white/10 p-6">
           <div className="flex items-center gap-3">
             <Loader2 className="animate-spin" />
-            <div className="text-lg font-medium">Checking session…</div>
+            <div className="text-lg font-medium">Checking sessionâ€¦</div>
           </div>
         </div>
       </div>
@@ -102,7 +110,7 @@ export default function SetPassword() {
               <div className="text-lg font-semibold">Session not found</div>
               <p className="mt-2 text-sm text-zinc-300">
                 Please open your <b>invite link</b> again (or the latest email link) so we can
-                establish your session, then you’ll be redirected here to set a password.
+                establish your session, then youâ€™ll be redirected here to set a password.
               </p>
             </div>
           </div>
@@ -188,7 +196,7 @@ export default function SetPassword() {
             <div className="rounded-xl border border-emerald-900/30 bg-emerald-950/30 p-3 text-emerald-200 text-sm">
               <div className="flex items-start gap-2">
                 <Check className="mt-0.5" size={16} />
-                <div>Password updated. Redirecting…</div>
+                <div>Password updated. Redirectingâ€¦</div>
               </div>
             </div>
           )}
@@ -208,3 +216,4 @@ export default function SetPassword() {
     </div>
   );
 }
+

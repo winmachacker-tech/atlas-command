@@ -1,4 +1,4 @@
-// src/pages/Settings.jsx
+﻿// src/pages/Settings.jsx
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import {
@@ -59,8 +59,8 @@ const TIMEZONES = [
 const CURRENCIES = [
   { value: "USD", label: "$ USD (US Dollar)", symbol: "$" },
   { value: "CAD", label: "$ CAD (Canadian Dollar)", symbol: "$" },
-  { value: "EUR", label: "€ EUR (Euro)", symbol: "€" },
-  { value: "GBP", label: "£ GBP (British Pound)", symbol: "£" },
+  { value: "EUR", label: "â‚¬ EUR (Euro)", symbol: "â‚¬" },
+  { value: "GBP", label: "Â£ GBP (British Pound)", symbol: "Â£" },
   { value: "MXN", label: "$ MXN (Mexican Peso)", symbol: "$" },
 ];
 
@@ -201,7 +201,7 @@ export default function Settings() {
         <div className="mx-auto max-w-5xl">
           <div className="flex items-center gap-2 text-white/70">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span>Loading your settings…</span>
+            <span>Loading your settingsâ€¦</span>
           </div>
         </div>
       </div>
@@ -249,7 +249,7 @@ export default function Settings() {
               {saving ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Saving…
+                  Savingâ€¦
                 </>
               ) : (
                 <>

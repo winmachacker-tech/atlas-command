@@ -1,4 +1,4 @@
-// src/pages/Onboarding.jsx
+﻿// src/pages/Onboarding.jsx
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
@@ -30,7 +30,7 @@ export default function Onboarding() {
         if (error) throw error;
         const user = session?.user ?? null;
         if (!user) {
-          // not signed in → AuthGuard should catch, but be safe:
+          // not signed in â†’ AuthGuard should catch, but be safe:
           nav("/login");
           return;
         }
@@ -73,7 +73,7 @@ export default function Onboarding() {
   // ADD THIS DEBUG BLOCK HERE:
   const { data: sessionData } = await supabase.auth.getSession();
   const sessionUser = sessionData?.session?.user;
-  console.log("🔍 DEBUG SESSION:");
+  console.log("ðŸ” DEBUG SESSION:");
   console.log("Session user ID:", sessionUser?.id);
   console.log("State UID:", uid);
   console.log("Match:", sessionUser?.id === uid);
@@ -81,14 +81,14 @@ export default function Onboarding() {
   // END DEBUG BLOCK
 
   try {
-    console.log("🔍 Onboarding Update:");
+    console.log("ðŸ” Onboarding Update:");
     // ... rest of your code
     setErr("");
     setOk("");
     setSaving(true);
 
     try {
-      console.log("🔍 Onboarding Update:");
+      console.log("ðŸ” Onboarding Update:");
       console.log("UID:", uid);
       console.log("Email:", email);
       console.log("Full Name:", fullName);
@@ -105,19 +105,19 @@ export default function Onboarding() {
         .single();
 
       if (error) {
-        console.error("❌ Update error:", error);
+        console.error("âŒ Update error:", error);
         console.error("Error code:", error.code);
         console.error("Error message:", error.message);
         throw error;
       }
 
-      console.log("✅ Profile updated successfully:", data);
+      console.log("âœ… Profile updated successfully:", data);
       setOk("Profile saved.");
       
       // Redirect to dashboard after brief success message
       setTimeout(() => nav("/"), 800);
     } catch (e) {
-      console.error("💥 Caught error:", e);
+      console.error("ðŸ’¥ Caught error:", e);
       setErr(e.message || "Failed to save profile.");
     } finally {
       setSaving(false);
@@ -180,7 +180,7 @@ export default function Onboarding() {
             )}
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            <span>{saving ? "Saving…" : "Save & Continue"}</span>
+            <span>{saving ? "Savingâ€¦" : "Save & Continue"}</span>
           </button>
         </div>
       </form>
@@ -188,11 +188,12 @@ export default function Onboarding() {
       {/* Debug panel (dev only) */}
       {import.meta.env.DEV && (
         <div className="mt-6 rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 text-xs text-zinc-400">
-          <div>uid: {uid || "—"}</div>
-          <div>email: {email || "—"}</div>
-          <div>fullName: {fullName || "—"}</div>
+          <div>uid: {uid || "â€”"}</div>
+          <div>email: {email || "â€”"}</div>
+          <div>fullName: {fullName || "â€”"}</div>
         </div>
       )}
     </div>
   );
 }
+

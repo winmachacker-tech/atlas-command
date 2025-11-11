@@ -1,4 +1,4 @@
-// src/components/InvoiceTemplatePro.jsx
+﻿// src/components/InvoiceTemplatePro.jsx
 import React from "react";
 
 /**
@@ -50,9 +50,9 @@ function currency(n) {
 }
 
 function fmtDateTime(iso) {
-  if (!iso) return "—";
+  if (!iso) return "â€”";
   const d = new Date(iso);
-  if (isNaN(d.getTime())) return "—";
+  if (isNaN(d.getTime())) return "â€”";
   return d.toLocaleString(); // respects user locale
 }
 
@@ -99,7 +99,7 @@ function AtlasLogo({ name = "Atlas Command" }) {
   return (
     <div className="flex items-center gap-2">
       <div className="h-10 w-10 rounded-xl bg-indigo-600 grid place-items-center text-white font-bold">
-        🛰️
+        ðŸ›°ï¸
       </div>
       <div className="font-semibold text-xl">{name}</div>
     </div>
@@ -139,7 +139,7 @@ export default function InvoiceTemplatePro({ invoice }) {
                 {(company.email || company.phone) && (
                   <div className="mt-1">
                     {company.email && <span>{company.email}</span>}
-                    {company.email && company.phone && <span className="mx-2">•</span>}
+                    {company.email && company.phone && <span className="mx-2">â€¢</span>}
                     {company.phone && <span>{company.phone}</span>}
                   </div>
                 )}
@@ -153,13 +153,13 @@ export default function InvoiceTemplatePro({ invoice }) {
                     Invoice
                   </div>
                   <div className="font-semibold text-slate-900">
-                    {invoiceNumber || "—"}
+                    {invoiceNumber || "â€”"}
                   </div>
                 </div>
                 <div className="px-4 py-3 text-sm">
                   <div className="flex justify-between py-1">
                     <span className="text-slate-500">Status</span>
-                    <span className="font-medium">{status || "—"}</span>
+                    <span className="font-medium">{status || "â€”"}</span>
                   </div>
                   <div className="flex justify-between py-1">
                     <span className="text-slate-500">Created</span>
@@ -181,7 +181,7 @@ export default function InvoiceTemplatePro({ invoice }) {
                 Bill To
               </div>
               <div className="mt-1 font-medium">
-                {billTo.name || billTo.company || "—"}
+                {billTo.name || billTo.company || "â€”"}
               </div>
               {billTo.address1 && (
                 <div className="text-sm text-slate-600">{billTo.address1}</div>
@@ -214,7 +214,7 @@ export default function InvoiceTemplatePro({ invoice }) {
                   value={
                     load.originCity
                       ? `${load.originCity}${load.originState ? ", " + load.originState : ""}`
-                      : "—"
+                      : "â€”"
                   }
                 />
                 <Row
@@ -224,14 +224,14 @@ export default function InvoiceTemplatePro({ invoice }) {
                       ? `${load.destinationCity}${
                           load.destinationState ? ", " + load.destinationState : ""
                         }`
-                      : "—"
+                      : "â€”"
                   }
                 />
-                <Row label="Dispatcher" value={load.dispatcherName || "—"} />
-                <Row label="Driver" value={load.driverName || "—"} />
+                <Row label="Dispatcher" value={load.dispatcherName || "â€”"} />
+                <Row label="Driver" value={load.driverName || "â€”"} />
                 <Row
                   label="PO / PRO"
-                  value={`${load.poNumber || "—"}  •  ${load.proNumber || "—"}`}
+                  value={`${load.poNumber || "â€”"}  â€¢  ${load.proNumber || "â€”"}`}
                 />
               </div>
             </section>
@@ -340,7 +340,8 @@ function Row({ label, value }) {
   return (
     <div className="flex justify-between gap-4 py-2 border-b border-slate-100 last:border-b-0">
       <div className="text-slate-500">{label}</div>
-      <div className="font-medium text-right">{value || "—"}</div>
+      <div className="font-medium text-right">{value || "â€”"}</div>
     </div>
   );
 }
+

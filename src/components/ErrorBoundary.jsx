@@ -1,4 +1,4 @@
-// src/components/ErrorBoundary.jsx
+﻿// src/components/ErrorBoundary.jsx
 import React from "react";
 
 export default class ErrorBoundary extends React.Component {
@@ -64,3 +64,4 @@ export default class ErrorBoundary extends React.Component {
     return <div key={this.state.tick}>{this.props.children}</div>;
   }
 }
+

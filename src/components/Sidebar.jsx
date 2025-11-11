@@ -1,4 +1,4 @@
-// src/layout/Sidebar.jsx
+﻿// src/layout/Sidebar.jsx
 import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -172,7 +172,7 @@ export default function Sidebar() {
 
       {/* Spacer */}
       <div className="mt-auto border-t border-[var(--border)] pt-4 text-xs text-[var(--text-muted)]">
-        © {new Date().getFullYear()} Atlas Command
+        Â© {new Date().getFullYear()} Atlas Command
       </div>
     </aside>
   );

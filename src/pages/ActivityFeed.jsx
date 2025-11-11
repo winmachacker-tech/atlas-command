@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { Loader2, History, RefreshCw } from "lucide-react";
 
 /**
@@ -72,7 +72,7 @@ export default function ActivityPage() {
       {loading && (
         <div className="flex items-center gap-2 rounded-xl border border-zinc-200 p-4 text-sm dark:border-neutral-800">
           <Loader2 className="h-4 w-4 animate-spin" />
-          Loading…
+          Loadingâ€¦
         </div>
       )}
 
@@ -124,3 +124,4 @@ function timeAgo(iso) {
   const days = Math.floor(hrs / 24);
   return `${days}d ago`;
 }
+

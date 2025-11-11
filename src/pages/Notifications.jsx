@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bell, Mail, Smartphone, CheckCircle2, ArrowLeft } from "lucide-react";
 import { supabase } from "../lib/supabase";
@@ -27,7 +27,7 @@ export default function Notifications() {
 
   return (
     <div className="p-6 space-y-8 max-w-3xl mx-auto">
-      {/* 🔙 Back Button */}
+      {/* ðŸ”™ Back Button */}
       <button
         onClick={() => navigate(-1)}
         className="flex items-center gap-2 text-sm text-[var(--text-muted)] hover:text-[var(--text-base)] transition"
@@ -133,3 +133,4 @@ function Toggle({ label, icon: Icon, value, onChange }) {
     </label>
   );
 }
+

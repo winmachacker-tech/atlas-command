@@ -1,5 +1,5 @@
 // supabase/functions/admin-invite-user/index.ts
-// SIMPLIFIED VERSION with detailed logging
+// SIMPLIFIED VERSION with detailed logging + redirect + proper recovery link
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.47.10";
@@ -55,7 +55,7 @@ serve(async (req) => {
   if (!SUPABASE_URL || !SB_ANON_KEY || !SB_SERVICE_ROLE_KEY) {
     console.error("❌ Missing environment variables");
     return new Response(
-      JSON.stringify({ error: "Server configuration error" }), 
+      JSON.stringify({ error: "Server configuration error" }),
       { status: 500, headers }
     );
   }
@@ -73,9 +73,10 @@ serve(async (req) => {
     });
   }
 
-  const email = typeof body?.email === "string" ? body.email.trim() : "";
+  const email = typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
   const role = typeof body?.role === "string" ? body.role : "user";
   const full_name = typeof body?.full_name === "string" ? body.full_name.trim() : "";
+  const redirect = typeof body?.redirect === "string" ? body.redirect : "/";
 
   if (!email) {
     console.error("❌ Missing email");
@@ -88,6 +89,7 @@ serve(async (req) => {
   console.log("📧 Email:", email);
   console.log("👤 Name:", full_name);
   console.log("🎭 Role:", role);
+  console.log("↪️ Redirect:", redirect);
 
   // Create clients
   const authHeader = req.headers.get("Authorization") ?? "";
@@ -100,7 +102,7 @@ serve(async (req) => {
     // 1. Verify caller is authenticated
     console.log("🔐 Verifying authentication...");
     const { data: userResp, error: authErr } = await anon.auth.getUser();
-    
+
     if (authErr) {
       console.error("❌ Auth error:", authErr);
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -123,7 +125,7 @@ serve(async (req) => {
     // 2. Verify caller is admin
     console.log("👮 Checking admin status...");
     const { data: me, error: meErr } = await service
-      .from("profiles")  // ✅ CHANGED from "users" to "profiles"
+      .from("profiles")
       .select("is_admin")
       .eq("id", callerId)
       .maybeSingle();
@@ -146,48 +148,52 @@ serve(async (req) => {
 
     console.log("✅ Admin verified");
 
-    // 3. Check if user already exists
-    console.log("🔍 Checking if user exists...");
-    const { data: existingUsers } = await service.auth.admin.listUsers();
-    const existingUser = existingUsers?.users?.find(u => u.email === email);
+    // Build the auth callback with next redirect
+    const callbackWithNext = `${APP_URL}/auth/callback?next=${encodeURIComponent(redirect)}`;
 
-    if (existingUser) {
-      console.log("ℹ️  User already exists, sending recovery email");
-      
-      const recovery = await service.auth.resetPasswordForEmail(email, {
-        redirectTo: `${APP_URL}/auth/callback`,
-      });
-
-      if (recovery.error) {
-        console.error("❌ Recovery email error:", recovery.error);
-        return new Response(
-          JSON.stringify({ error: recovery.error.message }), 
-          { status: 400, headers }
-        );
-      }
-
-      console.log("✅ Recovery email sent");
-      return new Response(
-        JSON.stringify({ ok: true, mode: "recovery_sent" }),
-        { status: 200, headers }
-      );
-    }
-
-    // 4. Invite new user
-    console.log("📨 Sending invite email...");
+    // 3. Try to invite; if "already registered", send a recovery link instead
+    console.log("📨 Attempting invite…");
     const invite = await service.auth.admin.inviteUserByEmail(email, {
-      redirectTo: `${APP_URL}/auth/callback`,
-      data: { 
-        role, 
+      redirectTo: callbackWithNext,
+      data: {
+        role,
         full_name,
-        name: full_name, // Some versions use 'name' instead
+        name: full_name,
       },
     });
 
     if (invite.error) {
-      console.error("❌ Invite error:", invite.error);
+      const msg = String(invite.error.message || "").toLowerCase();
+      console.warn("ℹ️ Invite error:", invite.error);
+
+      if (msg.includes("already registered") || msg.includes("user already exists")) {
+        console.log("🔁 User exists — generating recovery link email…");
+        const { data: linkData, error: linkErr } = await service.auth.admin.generateLink({
+          type: "recovery",
+          email,
+          options: {
+            redirectTo: callbackWithNext,
+            data: { role, full_name },
+          },
+        });
+        if (linkErr) {
+          console.error("❌ Recovery link error:", linkErr);
+          return new Response(
+            JSON.stringify({ error: linkErr.message }),
+            { status: 400, headers }
+          );
+        }
+
+        console.log("✅ Recovery email link generated+sent");
+        return new Response(
+          JSON.stringify({ ok: true, mode: "recovery_sent" }),
+          { status: 200, headers }
+        );
+      }
+
+      // Other errors
       return new Response(
-        JSON.stringify({ error: invite.error.message }), 
+        JSON.stringify({ error: invite.error.message }),
         { status: 400, headers }
       );
     }
@@ -195,20 +201,47 @@ serve(async (req) => {
     console.log("✅ Invite sent successfully");
     console.log("📊 Invite data:", JSON.stringify(invite.data, null, 2));
 
+    // 4. Best-effort: if a user object is returned, initialize profiles row
+    try {
+      const invitedUserId = invite.data?.user?.id;
+      if (invitedUserId) {
+        const { error: upErr } = await service
+          .from("profiles")
+          .upsert({
+            id: invitedUserId,
+            full_name: full_name || null,
+            role: role?.toUpperCase() || "USER",
+            is_admin: role?.toUpperCase() === "ADMIN",
+            profile_complete: false,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: "id" });
+
+        if (upErr) {
+          console.warn("⚠️ profiles upsert warning (non-fatal):", upErr.message);
+        } else {
+          console.log("✅ profiles row ensured");
+        }
+      } else {
+        console.log("ℹ️ No user object on invite; profiles upsert skipped (will be created on first login).");
+      }
+    } catch (soft) {
+      console.warn("⚠️ profiles upsert skipped (non-fatal):", soft);
+    }
+
     return new Response(
-      JSON.stringify({ 
-        ok: true, 
+      JSON.stringify({
+        ok: true,
         mode: "invited",
-        user: invite.data?.user,
+        user: invite.data?.user ?? null,
       }),
       { status: 200, headers }
     );
 
   } catch (e) {
     console.error("💥 UNEXPECTED ERROR:", e);
-    console.error("Error details:", JSON.stringify(e, null, 2));
+    try { console.error("Error details:", JSON.stringify(e, null, 2)); } catch {}
     return new Response(
-      JSON.stringify({ error: "Internal server error" }), 
+      JSON.stringify({ error: "Internal server error" }),
       { status: 500, headers }
     );
   }

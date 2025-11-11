@@ -1,4 +1,4 @@
-// src/pages/AiConsole.jsx
+﻿// src/pages/AiConsole.jsx
 import { useState, useRef, useMemo } from "react";
 import {
   Loader2,
@@ -189,7 +189,7 @@ export default function AiConsole() {
             ref={inputRef}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder='Ask something… e.g., "Write a customer email: 45-min delay, ETA 10:15 AM."'
+            placeholder='Ask somethingâ€¦ e.g., "Write a customer email: 45-min delay, ETA 10:15 AM."'
             rows={6}
             className="w-full resize-y rounded-xl border border-zinc-700 bg-zinc-950/60 px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-600/50"
           />
@@ -218,7 +218,7 @@ export default function AiConsole() {
               {busy ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Sending…
+                  Sendingâ€¦
                 </>
               ) : (
                 <>
@@ -266,7 +266,7 @@ export default function AiConsole() {
           </div>
 
           {!response ? (
-            <div className="text-zinc-500">—</div>
+            <div className="text-zinc-500">â€”</div>
           ) : beautifyEmail ? (
             <div className="space-y-3">
               {/* Subject (if any) */}
@@ -395,7 +395,7 @@ export default function AiConsole() {
           {showRaw ? (
             <div className="border-t border-zinc-800 p-4">
               {!raw ? (
-                <div className="text-zinc-500 text-sm">—</div>
+                <div className="text-zinc-500 text-sm">â€”</div>
               ) : (
                 <pre className="whitespace-pre-wrap text-xs text-zinc-300">
                   {JSON.stringify(raw, null, 2)}
@@ -408,3 +408,4 @@ export default function AiConsole() {
     </div>
   );
 }
+

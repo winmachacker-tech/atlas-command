@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
@@ -27,7 +27,7 @@ export default function ProfileGate({ children }) {
 
       if (error) {
         console.error("profile check error:", error);
-        if (alive) { setOk(true); setChecking(false); } // don’t block app if read fails
+        if (alive) { setOk(true); setChecking(false); } // donâ€™t block app if read fails
         return;
       }
 
@@ -47,7 +47,8 @@ export default function ProfileGate({ children }) {
     return () => { alive = false; };
   }, [nav, location]);
 
-  if (checking) return <div className="p-6">Loading…</div>;
+  if (checking) return <div className="p-6">Loadingâ€¦</div>;
   if (!ok) return null;
   return children;
 }
+

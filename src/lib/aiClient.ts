@@ -1,4 +1,4 @@
-// src/lib/aiClient.ts
+﻿// src/lib/aiClient.ts
 import { supabase } from "./supabase";
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
@@ -28,7 +28,7 @@ function normalizeError(err: unknown): string {
 }
 
 /**
- * aiChat — Call the ai-chat Edge Function with sensible defaults and robust error handling.
+ * aiChat â€” Call the ai-chat Edge Function with sensible defaults and robust error handling.
  * Usage:
  *   const res = await aiChat({ prompt: "Say hello to Atlas Command." });
  *   if (res.ok) console.log(res.output)
@@ -96,3 +96,4 @@ export async function aiChat(params: AiChatParams): Promise<AiChatResult> {
     };
   }
 }
+

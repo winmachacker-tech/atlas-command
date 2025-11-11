@@ -13,3 +13,6 @@ dist/
 *.bak
 build/
 .vercel/output/
+
+google-vision-credentials.json
+.vercel

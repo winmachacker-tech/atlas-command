@@ -1,4 +1,4 @@
-// src/context/SettingsProvider.jsx
+﻿// src/context/SettingsProvider.jsx
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 
@@ -141,3 +141,4 @@ export function useSettings() {
   if (!ctx) throw new Error("useSettings must be used inside <SettingsProvider>");
   return ctx;
 }
+

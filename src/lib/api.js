@@ -1,4 +1,4 @@
-// src/lib/api.js
+﻿// src/lib/api.js
 import { supabase } from "./supabase";
 
 /** Normalize PostgREST/Supabase errors */
@@ -115,3 +115,4 @@ export async function countLoadsAll() {
     return count ?? 0;
   });
 }
+

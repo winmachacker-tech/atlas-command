@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
   UploadCloud,
@@ -10,23 +10,14 @@ import {
   CheckCircle2,
   Loader2,
   Filter,
+  Scan,
+  Eye,
 } from "lucide-react";
 
 /**
- * LoadDocuments
+ * LoadDocuments with OCR
  * --------------------------------------------------------------------------
- * Drop-in documents manager for a Load.
- * - Stores files in Supabase Storage bucket: "load_docs"
- * - Path scheme: ${loadId}/${docType}/${timestamp}__${safeFilename}
- * - Lists/filters by docType, downloads via signed URL, deletes with confirm
- *
- * REQUIREMENTS:
- * 1) Create a Supabase Storage bucket named "load_docs" (keep it private).
- * 2) RLS/Policies for Storage should allow authenticated users in your org to:
- *    - list objects under a prefix
- *    - upload objects under `${loadId}/**`
- *    - remove objects they own (or admins)
- * 3) Use: <LoadDocuments loadId={theLoadId} />
+ * Enhanced version with manual OCR text extraction
  */
 
 const DOC_TYPES = [
@@ -67,6 +58,7 @@ export default function LoadDocuments({ loadId, className = "" }) {
   const [selectedType, setSelectedType] = useState("Rate Con");
   const [filterType, setFilterType] = useState("All");
   const [message, setMessage] = useState("");
+  const [ocrResults, setOcrResults] = useState({}); // Store OCR results by file path
   const inputRef = useRef(null);
 
   const prefix = useMemo(() => {
@@ -78,7 +70,6 @@ export default function LoadDocuments({ loadId, className = "" }) {
     if (!prefix) return;
     setBusy(true);
     try {
-      // We need to list per top-level docType folders under this loadId.
       const { data: typeDirs, error: listErr } = await supabase.storage
         .from("load_docs")
         .list(prefix, { limit: 100, offset: 0 });
@@ -86,7 +77,6 @@ export default function LoadDocuments({ loadId, className = "" }) {
       if (listErr) throw listErr;
 
       let all = [];
-      // If no subdirs (first time), there may be files at root—also list root.
       const candidates = (typeDirs || []).length ? typeDirs : [{ name: "" , id: "" , created_at:"", updated_at:"", last_accessed_at:"", metadata:null }];
       for (const dir of candidates) {
         const sub = dir.name ? `${prefix}${dir.name}/` : prefix;
@@ -107,7 +97,6 @@ export default function LoadDocuments({ loadId, className = "" }) {
         all = all.concat(mapped);
       }
 
-      // Sort newest first (by updated_at or filename timestamp)
       all.sort((a, b) => {
         const au = a.updated_at || "";
         const bu = b.updated_at || "";
@@ -128,11 +117,8 @@ export default function LoadDocuments({ loadId, className = "" }) {
   }, [prefix]);
 
   function deriveDocTypeFromPath(path) {
-    // path = loadId/docType/filename
     const parts = path.split("/");
-    // [loadId, maybeDocType, ...]
     const maybeType = parts[1] || "Other";
-    // normalize to a known type if it matches, else "Other"
     const found = DOC_TYPES.find((t) => normalize(t) === normalize(maybeType));
     return found || "Other";
   }
@@ -151,14 +137,13 @@ export default function LoadDocuments({ loadId, className = "" }) {
     const fl = Array.from(e.target.files || []);
     if (!fl.length) return;
     await doUpload(fl);
-    e.target.value = ""; // reset input so same file can be re-selected
+    e.target.value = "";
   }
 
   async function doUpload(fileList) {
     if (!prefix) return;
     setUploading(true);
     try {
-      // Validate and upload each file
       const results = [];
       for (const file of fileList) {
         if (!ACCEPTED_MIME.includes(file.type)) {
@@ -212,6 +197,12 @@ export default function LoadDocuments({ loadId, className = "" }) {
       if (error) throw error;
       toast("Deleted.");
       setFiles((prev) => prev.filter((f) => f.path !== path));
+      // Clear OCR results for this file
+      setOcrResults((prev) => {
+        const newResults = { ...prev };
+        delete newResults[path];
+        return newResults;
+      });
     } catch (err) {
       console.error("[LoadDocuments] delete error:", err);
       toast(`Delete error: ${err.message || err}`, "error");
@@ -220,7 +211,6 @@ export default function LoadDocuments({ loadId, className = "" }) {
 
   async function onDownload(path) {
     try {
-      // Generate a signed URL valid for 60 min
       const { data, error } = await supabase.storage
         .from("load_docs")
         .createSignedUrl(path, 60 * 60);
@@ -229,12 +219,109 @@ export default function LoadDocuments({ loadId, className = "" }) {
       const url = data?.signedUrl;
       if (!url) throw new Error("No signed URL returned.");
 
-      // Open in new tab/window
       window.open(url, "_blank", "noopener,noreferrer");
     } catch (err) {
       console.error("[LoadDocuments] download error:", err);
       toast(`Download error: ${err.message || err}`, "error");
     }
+  }
+
+  async function onExtractText(file) {
+    try {
+      // Mark as processing
+      setOcrResults((prev) => ({
+        ...prev,
+        [file.path]: { processing: true },
+      }));
+
+      // Download the file from storage
+      const { data: blob, error: downloadErr } = await supabase.storage
+        .from("load_docs")
+        .download(file.path);
+
+      if (downloadErr) throw downloadErr;
+
+      // Convert blob to File object
+      const fileObj = new File([blob], file.name, { type: blob.type });
+
+      // Send to OCR API
+      const formData = new FormData();
+      formData.append("file", fileObj);
+      formData.append("documentType", mapDocTypeToOCR(file.docType));
+
+      // Auto-detect: use local server in dev, Vercel function in prod
+      const apiUrl = import.meta.env.DEV 
+        ? "http://localhost:3001/api/ocr" 
+        : "/api/ocr";
+      
+      const response = await fetch(apiUrl, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error("OCR processing failed");
+      }
+
+      const data = await response.json();
+
+      // Save to database
+      const { error: dbError } = await supabase
+        .from("document_ocr_results")
+        .insert({
+          load_id: loadId,
+          file_path: file.path,
+          file_name: file.name,
+          document_type: mapDocTypeToOCR(file.docType),
+          full_text: data.data.fullText,
+          confidence: data.data.confidence,
+          detected_language: data.data.detectedLanguage,
+          structured_data: data.data.structuredData,
+          file_size: file.size,
+          mime_type: blob.type,
+        });
+
+      if (dbError) {
+        console.error("[LoadDocuments] DB save error:", dbError);
+        toast("Text extracted but failed to save to database", "error");
+      }
+
+      // Store results in state
+      setOcrResults((prev) => ({
+        ...prev,
+        [file.path]: {
+          processing: false,
+          success: true,
+          data: data.data,
+          saved: !dbError,
+        },
+      }));
+
+      toast("Text extracted and saved!", "success");
+    } catch (err) {
+      console.error("[LoadDocuments] OCR error:", err);
+      setOcrResults((prev) => ({
+        ...prev,
+        [file.path]: {
+          processing: false,
+          success: false,
+          error: err.message,
+        },
+      }));
+      toast(`OCR failed: ${err.message}`, "error");
+    }
+  }
+
+  function mapDocTypeToOCR(docType) {
+    const mapping = {
+      "Rate Con": "RATE_CONFIRMATION",
+      "POD": "POD",
+      "BOL": "BOL",
+      "Invoice": "INVOICE",
+      "Photos": "UNKNOWN",
+      "Other": "UNKNOWN",
+    };
+    return mapping[docType] || "UNKNOWN";
   }
 
   const shown = useMemo(() => {
@@ -335,7 +422,16 @@ export default function LoadDocuments({ loadId, className = "" }) {
             No documents yet. Click <strong>Upload</strong> to add Rate Cons, PODs, BOLs, etc.
           </div>
         ) : (
-          shown.map((f) => <Row key={f.path} file={f} onDownload={onDownload} onDelete={onDelete} />)
+          shown.map((f) => (
+            <Row
+              key={f.path}
+              file={f}
+              onDownload={onDownload}
+              onDelete={onDelete}
+              onExtractText={onExtractText}
+              ocrResult={ocrResults[f.path]}
+            />
+          ))
         )}
       </div>
 
@@ -355,49 +451,130 @@ export default function LoadDocuments({ loadId, className = "" }) {
   );
 }
 
-function Row({ file, onDownload, onDelete }) {
+function Row({ file, onDownload, onDelete, onExtractText, ocrResult }) {
   const [signing, setSigning] = useState(false);
+  const [showOCR, setShowOCR] = useState(false);
 
   const niceName = useMemo(() => {
-    // Strip timestamp prefix if present
     const nm = file.name.replace(/^\d{4}-\d{2}-\d{2}T[^_]+__/, "");
     return nm;
   }, [file.name]);
 
+  const canOCR = useMemo(() => {
+    // Only allow OCR for images and PDFs
+    const ocrTypes = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+    return file.name.match(/\.(pdf|jpe?g|png|webp)$/i);
+  }, [file.name]);
+
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 p-3">
-      <div className="flex items-center gap-3 min-w-0">
-        <FileText className="w-5 h-5 shrink-0" />
-        <div className="min-w-0">
-          <div className="truncate font-medium">{niceName}</div>
-          <div className="text-xs text-[var(--text-muted)]">
-            Type: <span className="font-medium">{file.docType}</span> • Size: {file.size ? `${bytesToMB(file.size)} MB` : "—"}
+    <div className="p-3">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <FileText className="w-5 h-5 shrink-0" />
+          <div className="min-w-0">
+            <div className="truncate font-medium">{niceName}</div>
+            <div className="text-xs text-[var(--text-muted)]">
+              Type: <span className="font-medium">{file.docType}</span> â€¢ Size: {file.size ? `${bytesToMB(file.size)} MB` : "â€”"}
+            </div>
           </div>
+        </div>
+
+        <div className="sm:ml-auto flex items-center gap-2">
+          {canOCR && (
+            <button
+              onClick={() => onExtractText(file)}
+              disabled={ocrResult?.processing}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-[var(--bg-hover)] transition disabled:opacity-60"
+              title="Extract text with OCR"
+            >
+              {ocrResult?.processing ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Scan className="w-4 h-4" />
+              )}
+              <span className="text-sm">Extract Text</span>
+            </button>
+          )}
+
+          {ocrResult?.success && (
+            <button
+              onClick={() => setShowOCR(!showOCR)}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-[var(--bg-hover)] transition text-emerald-500"
+              title="View extracted text"
+            >
+              <Eye className="w-4 h-4" />
+              <span className="text-sm">View Text</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => {
+              if (signing) return;
+              setSigning(true);
+              Promise.resolve(onDownload(file.path)).finally(() => setSigning(false));
+            }}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-[var(--bg-hover)] transition disabled:opacity-60"
+            disabled={signing}
+          >
+            {signing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            <span className="text-sm">Open</span>
+          </button>
+
+          <button
+            onClick={() => onDelete(file.path)}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-[var(--bg-hover)] transition text-red-500 hover:text-red-600"
+          >
+            <Trash2 className="w-4 h-4" />
+            <span className="text-sm">Delete</span>
+          </button>
         </div>
       </div>
 
-      <div className="sm:ml-auto flex items-center gap-2">
-        <button
-          onClick={() => {
-            if (signing) return;
-            setSigning(true);
-            Promise.resolve(onDownload(file.path)).finally(() => setSigning(false));
-          }}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-[var(--bg-hover)] transition disabled:opacity-60"
-          disabled={signing}
-        >
-          {signing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-          <span className="text-sm">Open</span>
-        </button>
+      {/* OCR Results Panel */}
+      {showOCR && ocrResult?.success && (
+        <div className="mt-3 p-4 rounded-lg border bg-[var(--panel)]">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-semibold">Extracted Text</h4>
+            <span className="text-xs text-emerald-500">
+              {(ocrResult.data.confidence * 100).toFixed(1)}% confidence
+            </span>
+          </div>
 
-        <button
-          onClick={() => onDelete(file.path)}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-[var(--bg-hover)] transition text-red-500 hover:text-red-600"
-        >
-          <Trash2 className="w-4 h-4" />
-          <span className="text-sm">Delete</span>
-        </button>
-      </div>
+          {/* Structured Data */}
+          {ocrResult.data.structuredData && (
+            <div className="mb-3 p-3 rounded bg-white/5">
+              <div className="text-sm font-medium mb-2">Extracted Fields:</div>
+              <div className="space-y-1 text-sm">
+                {Object.entries(ocrResult.data.structuredData).map(([key, value]) => {
+                  if (key === 'rawText' || key === 'fullText' || !value) return null;
+                  return (
+                    <div key={key} className="flex">
+                      <span className="text-[var(--text-muted)] min-w-[120px]">
+                        {key.replace(/([A-Z])/g, ' $1').trim()}:
+                      </span>
+                      <span className="font-medium">
+                        {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Full Text */}
+          <div className="max-h-64 overflow-y-auto p-3 rounded bg-white/5 text-sm font-mono whitespace-pre-wrap">
+            {ocrResult.data.fullText}
+          </div>
+        </div>
+      )}
+
+      {/* Error */}
+      {ocrResult?.error && (
+        <div className="mt-3 p-3 rounded-lg border border-red-500/30 bg-red-500/10 text-sm text-red-300">
+          OCR Error: {ocrResult.error}
+        </div>
+      )}
     </div>
   );
 }

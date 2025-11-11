@@ -1,4 +1,4 @@
-// src/hooks/useAIStream.js
+﻿// src/hooks/useAIStream.js
 // UPDATED: uses the signed-in user's access token for Edge Functions auth.
 // Drop-in replacement for your existing file.
 
@@ -163,3 +163,4 @@ export default function useAIStream() {
     [send, stop, reset, isStreaming, output, error]
   );
 }
+

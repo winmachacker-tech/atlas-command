@@ -1,20 +1,35 @@
-// src/pages/AuthCallback.jsx
-import { useEffect, useRef, useState } from "react";
+﻿// src/pages/AuthCallback.jsx
+import { useEffect, useRef, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
 /**
  * Safe, single-run handler for all Supabase auth callback shapes.
- * Minimal, integrity-first changes:
- *  - Keep your logic, add support for ?redirect_to as alias of ?next
- *  - Handle ?error_description from Supabase gracefully
- *  - Do NOT remap "signup" -> "invite" (pass-through to verifyOtp)
- *  - Fixed to use "profiles" table instead of "users"
+ * ALWAYS checks profile_complete and sends to /complete-account if false.
  */
 export default function AuthCallback() {
   const navigate = useNavigate();
   const ranRef = useRef(false);
-  const [status, setStatus] = useState("Processing sign-in…");
+  const [status, setStatus] = useState("Processing sign-inâ€¦");
+
+  // Intended destination priority:
+  // 1) localStorage.atlas.redirectAfterAuth (set by Auth.jsx)
+  // 2) ?next or ?redirect_to from the URL
+  // 3) "/"
+  const redirectTo = useMemo(() => {
+    try {
+      const stored = localStorage.getItem("atlas.redirectAfterAuth");
+      if (stored) return stored;
+    } catch {}
+    try {
+      const url = new URL(window.location.href);
+      const next = url.searchParams.get("next");
+      const alt = url.searchParams.get("redirect_to");
+      return next || alt || "/";
+    } catch {
+      return "/";
+    }
+  }, []);
 
   useEffect(() => {
     if (ranRef.current) return; // guard StrictMode double invoke
@@ -31,18 +46,12 @@ export default function AuthCallback() {
         if (urlErr) {
           console.warn("[AuthCallback] URL error_description:", urlErr);
           setStatus(urlErr);
-          setTimeout(() => navigate("/login", { replace: true }), 2000);
+          setTimeout(() => navigate("/auth", { replace: true }), 2000);
           return;
         }
 
-        // Optional: allow caller to pass a post-login redirect.
-        // Supports both ?next=/x and ?redirect_to=/x (either one).
-        const next = search.get("next") || search.get("redirect_to") || "/";
-
         // Supabase callback shapes:
         const rawType = (search.get("type") || "").toLowerCase();
-        // Pass-through real types: signup | invite | recovery | magiclink | email_change
-        // Only normalize "email" (legacy) to "magiclink".
         const type = rawType === "email" ? "magiclink" : rawType || null;
 
         const token_hash = search.get("token_hash");
@@ -55,7 +64,7 @@ export default function AuthCallback() {
           has_token_hash: !!token_hash,
           has_code: !!code,
           has_hash_tokens: !!access_token && !!refresh_token,
-          next,
+          redirectTo,
         });
 
         let session = null;
@@ -63,7 +72,7 @@ export default function AuthCallback() {
 
         if (type && token_hash) {
           // invite / recovery / magiclink / email_change / signup
-          setStatus(`Verifying ${type} link…`);
+          setStatus(`Verifying ${type} linkâ€¦`);
           const { data, error } = await supabase.auth.verifyOtp({ type, token_hash });
           if (error) {
             console.error("[AuthCallback] verifyOtp error", error);
@@ -75,7 +84,7 @@ export default function AuthCallback() {
 
         } else if (code) {
           // OAuth/PKCE callback
-          setStatus("Exchanging authorization code…");
+          setStatus("Exchanging authorization codeâ€¦");
           const { data, error } = await supabase.auth.exchangeCodeForSession(code);
           if (error) {
             console.error("[AuthCallback] exchangeCodeForSession error", error);
@@ -87,7 +96,7 @@ export default function AuthCallback() {
 
         } else if (access_token && refresh_token) {
           // Hash tokens flow
-          setStatus("Restoring session…");
+          setStatus("Restoring sessionâ€¦");
           const { data, error } = await supabase.auth.setSession({
             access_token,
             refresh_token,
@@ -101,8 +110,8 @@ export default function AuthCallback() {
           console.log("[AuthCallback] setSession ok");
 
         } else {
-          console.warn("[AuthCallback] No recognizable params, redirecting to /login");
-          navigate("/login", { replace: true });
+          console.warn("[AuthCallback] No recognizable params, redirecting to /auth");
+          navigate("/auth", { replace: true });
           return;
         }
 
@@ -117,7 +126,7 @@ export default function AuthCallback() {
         }
 
         // Best-effort profile upsert. If your schema differs, we won't block signin.
-        setStatus("Finalizing account…");
+        setStatus("Finalizing accountâ€¦");
         try {
           const profile = {
             id: user.id,
@@ -129,7 +138,7 @@ export default function AuthCallback() {
           };
 
           const { error: upsertErr } = await supabase
-            .from("profiles") // ✅ Changed from "users" to "profiles"
+            .from("profiles")
             .upsert(profile, { onConflict: "id" });
 
           if (upsertErr) {
@@ -144,26 +153,44 @@ export default function AuthCallback() {
           window.history.replaceState({}, document.title, "/auth/callback");
         } catch {}
 
-        // Routing rules
-        if (type === "invite" || type === "recovery" || type === "signup") {
-          setStatus("Redirecting to set your password…");
-          navigate("/set-password", { replace: true });
-        } else {
-          setStatus("Signed in. Redirecting…");
-          navigate(next, { replace: true });
+        // ALWAYS check profile_complete - ignore link type
+        setStatus("Checking your profileâ€¦");
+        const { data: p, error: pErr } = await supabase
+          .from("profiles")
+          .select("profile_complete")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (pErr) {
+          console.warn("[AuthCallback] Profile check error, sending to onboarding", pErr);
+          setStatus("Preparing your accountâ€¦");
+          navigate("/complete-account", { replace: true });
+          return;
         }
+
+        // If profile is incomplete OR doesn't exist, send to onboarding
+        if (!p || p.profile_complete === false) {
+          setStatus("Finish setting up your accountâ€¦");
+          navigate("/complete-account", { replace: true });
+          return;
+        }
+
+        // Profile complete â†’ go to intended destination, clear the stored redirect
+        try { localStorage.removeItem("atlas.redirectAfterAuth"); } catch {}
+        setStatus("All set. Redirectingâ€¦");
+        navigate(redirectTo || "/", { replace: true });
       } catch (err) {
         console.error("[AuthCallback] Fatal error", err);
         setStatus(err?.message || "Something went wrong during sign-in.");
-        setTimeout(() => navigate("/login", { replace: true }), 2000);
+        setTimeout(() => navigate("/auth", { replace: true }), 2000);
       }
     })();
-  }, [navigate]);
+  }, [navigate, redirectTo]);
 
   return (
     <div className="min-h-screen w-full grid place-items-center">
       <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/60 p-8 max-w-md w-full">
-        <h1 className="text-xl font-semibold mb-2">Signing you in…</h1>
+        <h1 className="text-xl font-semibold mb-2">Signing you inâ€¦</h1>
         <p className="text-sm text-zinc-300">{status}</p>
       </div>
     </div>

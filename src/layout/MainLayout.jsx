@@ -21,6 +21,9 @@ import {
   CreditCard,
   RefreshCw,
   Bot,
+  Sparkles,
+  GraduationCap,
+  Users,
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { trackLogout } from "../lib/activityTracker";
@@ -113,7 +116,7 @@ function SideGroup({ id, title, icon: Icon, children, defaultOpen }) {
   );
 }
 
-/* ------------------------- Avatar dropdown (NEW) ------------------------ */
+/* ------------------------- Avatar dropdown ------------------------ */
 function AvatarMenu({ onSignOut }) {
   const nav = useNavigate();
   const [open, setOpen] = useState(false);
@@ -184,7 +187,7 @@ function AvatarMenu({ onSignOut }) {
         <div
           role="menu"
           className="absolute right-0 mt-2 w-56 rounded-xl border border-[var(--border)] bg-[var(--bg-panel)] shadow-2xl overflow-hidden z-50"
-          style={{ backgroundColor: 'var(--bg-panel)' }}
+          style={{ backgroundColor: "var(--bg-panel)" }}
         >
           <div className="px-3 py-2 text-xs text-[var(--text-muted)] bg-[var(--bg-surface)]">
             {email || "Signed in"}
@@ -224,7 +227,7 @@ function AvatarMenu({ onSignOut }) {
   );
 }
 
-/* --------------------- Notification Bell (SOLID dropdown) --------------------- */
+/* --------------------- Notification Bell --------------------- */
 function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
@@ -417,7 +420,7 @@ export default function MainLayout() {
   const activeGroupByPath = useMemo(() => {
     if (pathname.startsWith("/billing")) return "accounting";
     if (
-      ["/", "/loads", "/in-transit", "/delivered", "/drivers", "/trucks"].some(
+      ["/", "/loads", "/in-transit", "/delivered", "/drivers", "/trucks", "/customers"].some(
         (p) => (p === "/" ? pathname === "/" : pathname.startsWith(p))
       )
     )
@@ -431,9 +434,15 @@ export default function MainLayout() {
         "/settings/integrations",
         "/settings/security",
         "/teammanagement",
+        "/admin/driver-learning-test",
+        "/ai-proof",
+        "/ai-lab-proof",
+        "/customers",
       ].some((p) => pathname.startsWith(p))
     )
       return "admin";
+    if (pathname.startsWith("/ai") || pathname.startsWith("/ai-proof") || pathname.startsWith("/ai-lab-proof"))
+      return "ai";
     return null;
   }, [pathname]);
 
@@ -450,7 +459,7 @@ export default function MainLayout() {
 
   const signOut = useCallback(async () => {
     try {
-      trackLogout().catch(err => console.error("Failed to track logout:", err));
+      trackLogout().catch((err) => console.error("Failed to track logout:", err));
       await supabase.auth.signOut();
     } finally {
       navigate("/login", { replace: true });
@@ -495,6 +504,12 @@ export default function MainLayout() {
                 <SideLink to="/drivers" icon={UserRound}>
                   Drivers
                 </SideLink>
+                <SideLink to="/customers" icon={Users}>
+                  Customers
+                </SideLink>
+                <SideLink to="/learning" icon={GraduationCap}>
+                  Learning
+                </SideLink>
                 <SideLink to="/trucks" icon={Truck}>
                   Trucks
                 </SideLink>
@@ -522,7 +537,6 @@ export default function MainLayout() {
                 <SideLink to="/profile" icon={UserRound}>
                   Profile &amp; Account
                 </SideLink>
-
                 <SideLink to="/settings/appearance" icon={Palette}>
                   Appearance
                 </SideLink>
@@ -535,9 +549,11 @@ export default function MainLayout() {
                 <SideLink to="/settings/security" icon={Shield}>
                   Security
                 </SideLink>
-
                 <SideLink to="/teammanagement" icon={UserRound}>
                   Team Management
+                </SideLink>
+                <SideLink to="/admin/driver-learning-test" icon={GraduationCap}>
+                  Driver Learning Test
                 </SideLink>
               </SideGroup>
 
@@ -551,7 +567,19 @@ export default function MainLayout() {
                 <SideLink to="/dispatch-ai" icon={Bot}>
                   Dispatch AI (Lab)
                 </SideLink>
+                <SideLink to="/ai" icon={Sparkles}>
+                  AI Recommendations
+                </SideLink>
+                {/* New: alternate path that avoids the ai-proof route funk */}
+                <SideLink to="/ai-lab-proof" icon={Sparkles}>
+                  AI Lab Proof
+                </SideLink>
               </SideGroup>
+
+              {/* Standalone link (outside groups) */}
+              <SideLink to="/ai-insights" icon={Sparkles}>
+                AI Insights
+              </SideLink>
             </nav>
 
             {/* Footer actions */}

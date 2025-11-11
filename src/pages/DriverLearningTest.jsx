@@ -1,271 +1,198 @@
-// src/pages/DriverLearningTest.jsx
-import { useState } from "react";
-import { supabase } from "../lib/supabase";
+﻿// src/pages/DriverLearningTest.jsx
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+
+// âœ… UI component stays from components (if you use it in this page)
 import DriverPreferences from "../components/DriverPreferences.jsx";
-, import {
+
+// âœ… All helper functions come from the Linux-safe shim in /lib
+//    DO NOT import from ../lib/driverPreferences.jsx (breaks on Vercel/Linux).
+import {
   getDriverPreferences,
-  saveDriverPreferences
-  saveDriverPreferences
+  getDriverRecentFeedback,
+  recordThumb,
 } from "../lib/driverPreferences.js";
 
-
-function cx(...a) {
-  return a.filter(Boolean).join(" ");
-}
-
-/* --- local readers for the views --- */
-async function getDriverSnapshot(driverId) {
-  if (!driverId) return null;
-  const { data, error } = await supabase
-    .from("ai_driver_pref_snapshot")
-    .select("*")
-    .eq("driver_id", driverId)
-    .maybeSingle();
-  if (error) {
-    console.error("getDriverSnapshot error:", error);
-    return null;
-  }
-  return data || null;
-}
-
-async function getDriverStats(driverId) {
-  if (!driverId) return null;
-  const { data, error } = await supabase
-    .from("ai_driver_learning_stats")
-    .select("*")
-    .eq("driver_id", driverId)
-    .maybeSingle();
-  if (error) {
-    console.error("getDriverStats error:", error);
-    return null;
-  }
-  return data || null;
-}
+/**
+ * DriverLearningTest
+ * Minimal harness to verify driver preference helpers work end-to-end.
+ * - Uses /lib/driverPreferences.js (shim) so Linux builds succeed.
+ * - Keeps your page self-contained and easy to validate.
+ */
 
 export default function DriverLearningTest() {
-  const [driverId, setDriverId] = useState("");
-  const [loadId, setLoadId] = useState("");
-  const [log, setLog] = useState([]);
-  const [snapshot, setSnapshot] = useState(null);
-  const [stats, setStats] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialDriverId = searchParams.get("driverId") || "";
+  const [driverId, setDriverId] = useState(initialDriverId);
+
+  const [prefs, setPrefs] = useState(null);
   const [recent, setRecent] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState("");
 
-  function pushLog(msg, obj) {
-    setLog((l) => [{ ts: new Date().toLocaleTimeString(), msg, obj }, ...l].slice(0, 100));
+  function cx(...a) {
+    return a.filter(Boolean).join(" ");
   }
 
-  async function runRead() {
+  async function handleLoadPrefs() {
+    if (!driverId) return setToast("Enter a driverId first.");
+    if (typeof getDriverPreferences !== "function") {
+      return setToast("getDriverPreferences is not available.");
+    }
+    setBusy(true);
+    setToast("");
     try {
-      const s = await getDriverSnapshot(driverId);
-      const st = await getDriverStats(driverId);
-      const r = await getDriverRecentFeedback(driverId, 10);
-      setSnapshot(s);
-      setStats(st);
-      setRecent(r);
-      pushLog("Read OK", { snapshot: s, stats: st, recent: r });
+      const res = await getDriverPreferences(driverId);
+      setPrefs(res ?? {});
+      setToast("Loaded preferences.");
     } catch (e) {
-      pushLog("Read FAILED", { error: String(e) });
+      setToast(`Error loading preferences: ${e?.message || e}`);
+    } finally {
+      setBusy(false);
     }
   }
 
-  async function seedPrefs() {
+  async function handleLoadRecent() {
+    if (!driverId) return setToast("Enter a driverId first.");
+    if (typeof getDriverRecentFeedback !== "function") {
+      return setToast("getDriverRecentFeedback is not available.");
+    }
+    setBusy(true);
+    setToast("");
     try {
-      const current = await getDriverPreferences(driverId);
-      const res = await saveDriverPreferences(driverId, {
-        home_base: current?.home_base ?? "Houston, TX",
-        preferred_regions: current?.preferred_regions ?? ["West Coast", "South East"],
-        preferred_equipment: current?.preferred_equipment ?? ["Reefer"],
-        max_distance: current?.max_distance ?? 600,
-        avoid_states: current?.avoid_states ?? ["NY", "NJ"],
-        notes: current?.notes ?? null,
+      const res = await getDriverRecentFeedback(driverId, { limit: 10 });
+      setRecent(Array.isArray(res) ? res : []);
+      setToast("Loaded recent feedback.");
+    } catch (e) {
+      setToast(`Error loading feedback: ${e?.message || e}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleThumb(dir) {
+    if (!driverId) return setToast("Enter a driverId first.");
+    if (typeof recordThumb !== "function") {
+      return setToast("recordThumb is not available.");
+    }
+    setBusy(true);
+    setToast("");
+    try {
+      await recordThumb({
+        driver_id: driverId,
+        thumb: dir === "up" ? "up" : "down",
+        context: { source: "DriverLearningTest" },
       });
-      pushLog("Save/Upsert prefs OK", res);
-      await runRead();
+      setToast(`Recorded thumb ${dir}.`);
+      await handleLoadRecent();
     } catch (e) {
-      pushLog("Save/Upsert prefs FAILED", { error: String(e) });
+      setToast(`Error recording thumb: ${e?.message || e}`);
+      setBusy(false);
     }
   }
 
-  async function thumb(kind) {
-    try {
-      const rating = kind === "up" ? 1 : -1; // map to numeric expected by recordThumb
-      const res = await recordThumb({
-        driver_id: driverId || null,
-        load_id: loadId || null,
-        rating,
-        note: `test thumb: ${kind}`,
-        source: "driver-learning-test",
-      });
-      pushLog(`Thumb ${kind} OK`, res);
-      setTimeout(runRead, 300);
-    } catch (e) {
-      pushLog(`Thumb ${kind} FAILED`, { error: String(e) });
-    }
-  }
-
-  async function clearDriverFeedback() {
-    try {
-      const { error } = await supabase
-        .from("ai_feedback")
-        .delete()
-        .eq("driver_id", driverId);
-      if (error) throw error;
-      pushLog("Cleared feedback for driver", { driverId });
-      await runRead();
-    } catch (e) {
-      pushLog("Clear FAILED", { error: String(e) });
-    }
-  }
+  const disabled = busy === true;
 
   return (
-    <div className="p-6 space-y-6">
-      <header className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Driver Learning – Dev Test</h1>
-      </header>
+    <div className="p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Driver Learning Test</h1>
+        <Link to="/drivers" className="text-sm underline opacity-80 hover:opacity-100">
+          â† Back to Drivers
+        </Link>
+      </div>
 
-      {/* Controls */}
-      <section className="rounded-xl border p-4 space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div>
-            <label className="block text-sm mb-1">Driver ID (uuid)</label>
-            <input
-              className="w-full px-3 py-2 rounded-md border bg-background"
-              placeholder="e.g. 5d88a72f-e6d7-4f57-a17f-65c69c9a5c76"
-              value={driverId}
-              onChange={(e) => setDriverId(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="block text-sm mb-1">Load ID (uuid, optional)</label>
-            <input
-              className="w-full px-3 py-2 rounded-md border bg-background"
-              placeholder="optional"
-              value={loadId}
-              onChange={(e) => setLoadId(e.target.value)}
-            />
-          </div>
-          <div className="self-end">
-            <button onClick={seedPrefs} className="px-3 py-2 rounded-md border hover:bg-muted w-full">
-              Seed/Update Prefs
-            </button>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-2 pt-2">
-          <button onClick={() => thumb("up")} className="px-3 py-2 rounded-md border hover:bg-muted">
-            👍 Thumb Up
-          </button>
-          <button onClick={() => thumb("down")} className="px-3 py-2 rounded-md border hover:bg-muted">
-            👎 Thumb Down
-          </button>
-          <button onClick={runRead} className="px-3 py-2 rounded-md border hover:bg-muted">
-            Refresh Reads
+      {/* Driver input */}
+      <div className="grid gap-2 max-w-xl">
+        <label className="text-sm opacity-80">Driver ID</label>
+        <input
+          value={driverId}
+          onChange={(e) => {
+            const v = e.target.value;
+            setDriverId(v);
+            const t = v.trim();
+            if (t) setSearchParams({ driverId: t });
+            else setSearchParams({});
+          }}
+          placeholder="uuid or your driver primary key"
+          className="w-full rounded-lg border bg-transparent p-2 outline-none focus:ring focus:ring-emerald-600/30"
+        />
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={handleLoadPrefs}
+            disabled={disabled}
+            className={cx(
+              "rounded-lg px-3 py-2 text-sm",
+              disabled ? "opacity-50 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-500"
+            )}
+          >
+            Load Preferences
           </button>
           <button
-            onClick={clearDriverFeedback}
-            className="px-3 py-2 rounded-md border hover:bg-rose-50 text-rose-700 border-rose-300"
+            onClick={handleLoadRecent}
+            disabled={disabled}
+            className={cx(
+              "rounded-lg px-3 py-2 text-sm",
+              disabled ? "opacity-50 cursor-not-allowed" : "bg-sky-600 hover:bg-sky-500"
+            )}
           >
-            Clear Feedback (this driver)
+            Load Recent Feedback
           </button>
+          <button
+            onClick={() => handleThumb("up")}
+            disabled={disabled}
+            className={cx(
+              "rounded-lg px-3 py-2 text-sm",
+              disabled ? "opacity-50 cursor-not-allowed" : "bg-emerald-700 hover:bg-emerald-600"
+            )}
+          >
+            ðŸ‘ Thumb Up
+          </button>
+          <button
+            onClick={() => handleThumb("down")}
+            disabled={disabled}
+            className={cx(
+              "rounded-lg px-3 py-2 text-sm",
+              disabled ? "opacity-50 cursor-not-allowed" : "bg-rose-700 hover:bg-rose-600"
+            )}
+          >
+            ðŸ‘Ž Thumb Down
+          </button>
+        </div>
+      </div>
+
+      {/* Toast */}
+      {toast ? (
+        <div className="text-sm opacity-90">
+          <span className="px-2 py-1 rounded bg-black/30">{toast}</span>
+        </div>
+      ) : null}
+
+      {/* Optional UI component preview (kept intact; safe if unused) */}
+      <section className="grid gap-2">
+        <h2 className="text-lg font-semibold">Driver Preferences Component</h2>
+        <div className="rounded-lg border p-3">
+          {/* This component can be empty/no-op if you haven't wired it yet */}
+          <DriverPreferences driverId={driverId} />
         </div>
       </section>
 
-      {/* Snapshot / Stats */}
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Card title="Snapshot (ai_driver_pref_snapshot)">
-          <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(snapshot, null, 2)}</pre>
-        </Card>
-        <Card title="Stats (ai_driver_learning_stats)">
-          <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(stats, null, 2)}</pre>
-        </Card>
+      {/* Preferences preview */}
+      <section className="grid gap-2">
+        <h2 className="text-lg font-semibold">Preferences (raw)</h2>
+        <pre className="whitespace-pre-wrap rounded-lg border p-3 text-xs opacity-90">
+          {prefs ? JSON.stringify(prefs, null, 2) : "â€”"}
+        </pre>
       </section>
 
-      {/* Recent Feedback */}
-      <section className="rounded-xl border p-4">
-        <h3 className="text-sm font-medium mb-2">Recent Feedback (ai_driver_recent_feedback)</h3>
-        {recent?.length ? (
-          <ul className="space-y-2 text-sm">
-            {recent.map((r) => (
-              <li key={r.feedback_id || r.id} className="rounded-md border p-2">
-                <div className="flex justify-between">
-                  <span
-                    className={cx(
-                      "px-2 py-0.5 rounded border",
-                      r.rating === "up" || r.rating === 1
-                        ? "border-emerald-400"
-                        : r.rating === "down" || r.rating === -1
-                        ? "border-rose-400"
-                        : "border-slate-300"
-                    )}
-                  >
-                    {r.rating}
-                  </span>
-                  <span className="opacity-70">
-                    {r.created_at ? new Date(r.created_at).toLocaleString() : "—"}
-                  </span>
-                </div>
-                <div className="mt-1 text-xs opacity-80">
-                  Load: {r.load_number || r.load_id || "—"} {r.intent ? `| Intent: ${r.intent}` : ""}
-                </div>
-                {(r.comment || r.note) && (
-                  <div className="mt-1 text-xs">
-                    {r.comment ? (
-                      <div>
-                        <b>Comment:</b> {r.comment}
-                      </div>
-                    ) : null}
-                    {r.note ? (
-                      <div>
-                        <b>Note:</b> {r.note}
-                      </div>
-                    ) : null}
-                  </div>
-                )}
-                {(r.prompt_snippet || r.response_snippet) && (
-                  <details className="mt-1">
-                    <summary className="cursor-pointer text-xs underline">LLM details</summary>
-                    <div className="text-xs opacity-80 mt-1">
-                      <div>
-                        <b>Prompt:</b> {r.prompt_snippet || "—"}
-                      </div>
-                      <div>
-                        <b>Response:</b> {r.response_snippet || "—"}
-                      </div>
-                    </div>
-                  </details>
-                )}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <div className="text-sm opacity-70">No feedback yet.</div>
-        )}
-      </section>
-
-      {/* Log */}
-      <section className="rounded-xl border p-4">
-        <h3 className="text-sm font-medium mb-2">Action Log</h3>
-        <ul className="text-xs space-y-1">
-          {log.map((l, i) => (
-            <li key={i} className="border rounded p-2">
-              <div className="flex justify-between">
-                <span className="font-mono opacity-70">{l.ts}</span>
-                <span className="font-medium">{l.msg}</span>
-              </div>
-              {l.obj ? <pre className="mt-1 whitespace-pre-wrap">{JSON.stringify(l.obj, null, 2)}</pre> : null}
-            </li>
-          ))}
-        </ul>
+      {/* Recent feedback preview */}
+      <section className="grid gap-2">
+        <h2 className="text-lg font-semibold">Recent Feedback (raw)</h2>
+        <pre className="whitespace-pre-wrap rounded-lg border p-3 text-xs opacity-90">
+          {recent && recent.length ? JSON.stringify(recent, null, 2) : "â€”"}
+        </pre>
       </section>
     </div>
   );
 }
 
-function Card({ title, children }) {
-  return (
-    <div className="rounded-xl border p-4">
-      <h3 className="text-sm font-medium mb-2">{title}</h3>
-      <div className="text-sm">{children}</div>
-    </div>
-  );
-}

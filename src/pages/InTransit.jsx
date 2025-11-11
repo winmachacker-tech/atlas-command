@@ -1,4 +1,4 @@
-// src/pages/InTransit.jsx
+﻿// src/pages/InTransit.jsx
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -35,7 +35,7 @@ function fromLocalInputValue(s) {
   return dt.toISOString();
 }
 function normalizeStatus(s) {
-  if (!s) return "—";
+  if (!s) return "â€”";
   const up = String(s).toUpperCase();
   if (up === "IN_TRANSIT" || up === "IN TRANSIT") return "In Transit";
   return s;
@@ -65,13 +65,13 @@ function agingForRow(now, pickup, delivery) {
     if (pms < 0) return { kind: "pu_passed", label: `PU ${msToHuman(pms)} ago` };
     return { kind: "pu_due", label: `PU in ${msToHuman(pms)}` };
   }
-  return { kind: "unknown", label: "—" };
+  return { kind: "unknown", label: "â€”" };
 }
 
 /* ----------------------------- Sort Options ---------------------------- */
 const SORTS = [
-  { id: "PU_ASC", label: "Pickup — Soonest first" },
-  { id: "DEL_ASC", label: "Delivery — Soonest first" },
+  { id: "PU_ASC", label: "Pickup â€” Soonest first" },
+  { id: "DEL_ASC", label: "Delivery â€” Soonest first" },
   { id: "CREATED_DESC", label: "Recently created" },
 ];
 
@@ -211,9 +211,9 @@ export default function InTransit() {
       const age = agingForRow(now, pickup, delivery);
       return {
         id: r.id,
-        reference: r.reference ?? "—",
-        origin: r.origin ?? "—",
-        destination: r.destination ?? "—",
+        reference: r.reference ?? "â€”",
+        origin: r.origin ?? "â€”",
+        destination: r.destination ?? "â€”",
         status: normalizeStatus(r.status),
         pickup_at: pickup,
         delivery_at: delivery,
@@ -473,13 +473,13 @@ export default function InTransit() {
       {/* Table */}
       {!state.loading && pretty.length > 0 && (
         <div className="overflow-hidden rounded-2xl border border-[color:var(--border-weak,#233046)]">
-          <div className="hidden md:grid grid-cols-12 gap-4 px-4 py-3 text-xs uppercase tracking-wider text-[color:var(--text-muted,#94a3b8)] bg-[color:var(--bg-surface,#0b1220)] border-b border-[color:var(--border-weak,#233046)]">
-            <div className="col-span-3">Load</div>
-            <div className="col-span-3">Route</div>
-            <div className="col-span-2">Driver</div>
-            <div className="col-span-2">Pickup</div>
-            <div className="col-span-1">Delivery</div>
-            <div className="col-span-1">Aging</div>
+          <div className="hidden md:grid grid-cols-[2fr_2.5fr_1.5fr_2fr_1.5fr_auto] gap-4 px-4 py-3 text-xs uppercase tracking-wider text-[color:var(--text-muted,#94a3b8)] bg-[color:var(--bg-surface,#0b1220)] border-b border-[color:var(--border-weak,#233046)]">
+            <div className="flex items-center">Load</div>
+            <div className="flex items-center">Route</div>
+            <div className="flex items-center">Driver</div>
+            <div className="flex items-center">Pickup</div>
+            <div className="flex items-center">Delivery</div>
+            <div className="flex items-center justify-end pr-2">Aging</div>
           </div>
 
           <ul className="divide-y divide-[color:var(--border-weak,#233046)]">
@@ -489,8 +489,8 @@ export default function InTransit() {
                 className="px-4 py-3 hover:bg-[color:var(--bg-surface,#0b1220)]/60 transition-colors"
               >
                 {/* Desktop row */}
-                <div className="hidden md:grid grid-cols-12 gap-4 items-center">
-                  <div className="col-span-3">
+                <div className="hidden md:grid grid-cols-[2fr_2.5fr_1.5fr_2fr_1.5fr_auto] gap-4 items-center min-h-[60px]">
+                  <div className="flex flex-col justify-center">
                     <div className="font-medium">
                       <Link
                         to={`/loads/${encodeURIComponent(r.id)}`}
@@ -504,43 +504,43 @@ export default function InTransit() {
                     </div>
                   </div>
 
-                  <div className="col-span-3">
-                    <div className="flex items-center gap-2">
-                      <MapPin className="h-4 w-4" />
+                  <div className="flex items-center">
+                    <div className="flex items-center gap-2 w-full">
+                      <MapPin className="h-4 w-4 shrink-0" />
                       <span className="truncate">{r.origin}</span>
-                      <span className="opacity-60">→</span>
+                      <span className="opacity-60 shrink-0">â†’</span>
                       <span className="truncate">{r.destination}</span>
                     </div>
                   </div>
 
-                  <div className="col-span-2">
-                    <div className="flex items-center gap-2">
-                      <Truck className="h-4 w-4" />
+                  <div className="flex items-center">
+                    <div className="flex items-center gap-2 w-full">
+                      <Truck className="h-4 w-4 shrink-0" />
                       <span className="truncate">
                         {r.driver_name || "Unassigned"}
                       </span>
                     </div>
                   </div>
 
-                  <div className="col-span-2">
-                    <div className="flex items-center gap-2">
-                      <Clock className="h-4 w-4" />
+                  <div className="flex items-center">
+                    <div className="flex items-center gap-2 w-full">
+                      <Clock className="h-4 w-4 shrink-0" />
                       <span className="truncate">
-                        {r.pickup_at ? r.pickup_at.toLocaleString() : "—"}
+                        {r.pickup_at ? r.pickup_at.toLocaleString() : "â€”"}
                       </span>
                     </div>
                   </div>
 
-                  <div className="col-span-1">
-                    <div className="flex items-center gap-2">
-                      <Clock className="h-4 w-4" />
+                  <div className="flex items-center">
+                    <div className="flex items-center gap-2 w-full">
+                      <Clock className="h-4 w-4 shrink-0" />
                       <span className="truncate">
-                        {r.delivery_at ? r.delivery_at.toLocaleString() : "—"}
+                        {r.delivery_at ? r.delivery_at.toLocaleString() : "â€”"}
                       </span>
                     </div>
                   </div>
 
-                  <div className="col-span-1">
+                  <div className="flex items-center justify-end pr-2">
                     <AgingPill kind={r._aging.kind} label={r._aging.label} />
                   </div>
                 </div>
@@ -557,7 +557,7 @@ export default function InTransit() {
                     <div className="flex items-center gap-2">
                       <MapPin className="h-4 w-4 shrink-0" />
                       <span className="truncate">
-                        {r.origin} → {r.destination}
+                        {r.origin} â†’ {r.destination}
                       </span>
                     </div>
                     <div className="mt-1 flex items-center gap-2">
@@ -570,13 +570,13 @@ export default function InTransit() {
                       <div className="flex items-center gap-2">
                         <Clock className="h-4 w-4 shrink-0" />
                         <span className="truncate">
-                          {r.pickup_at ? r.pickup_at.toLocaleString() : "—"}
+                          {r.pickup_at ? r.pickup_at.toLocaleString() : "â€”"}
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
                         <Clock className="h-4 w-4 shrink-0" />
                         <span className="truncate">
-                          {r.delivery_at ? r.delivery_at.toLocaleString() : "—"}
+                          {r.delivery_at ? r.delivery_at.toLocaleString() : "â€”"}
                         </span>
                       </div>
                     </div>
@@ -597,7 +597,7 @@ export default function InTransit() {
 /* ------------------------------- Subviews ------------------------------- */
 function AgingPill({ kind, label }) {
   let cls =
-    "inline-block text-xs px-2 py-1 rounded-full border";
+    "inline-flex items-center justify-center text-[10px] font-medium px-2.5 py-1.5 rounded-full border whitespace-nowrap";
   if (kind === "del_overdue") {
     cls += " border-red-500/40 bg-red-500/10 text-red-200";
   } else if (kind === "del_due") {

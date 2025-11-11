@@ -1,4 +1,4 @@
-// src/lib/aiPrompts.js
+﻿// src/lib/aiPrompts.js
 // Prompt helpers + templates for Dispatch AI (context-aware)
 
 export const SYSTEM_DISPATCH_AI = `
@@ -30,12 +30,12 @@ export function composeDispatchContext({ load = null, driver = null } = {}) {
       content:
         [
           "Current Load Context:",
-          `- id: ${id ?? "—"}`,
-          `- load_number: ${load_number ?? "—"} ref: ${ref_number ?? "—"}`,
-          `- status: ${status ?? "—"} trailer: ${trailer_type ?? "—"}`,
-          `- lane: ${origin_city ?? "?"}, ${origin_state ?? "?"} → ${dest_city ?? "?"}, ${dest_state ?? "?"}`,
-          `- pickup_at: ${pickup_at ?? "—"} delivery_at: ${delivery_at ?? "—"}`,
-          `- miles: ${miles ?? "—"} rate: ${rate ?? "—"}`,
+          `- id: ${id ?? "â€”"}`,
+          `- load_number: ${load_number ?? "â€”"} ref: ${ref_number ?? "â€”"}`,
+          `- status: ${status ?? "â€”"} trailer: ${trailer_type ?? "â€”"}`,
+          `- lane: ${origin_city ?? "?"}, ${origin_state ?? "?"} â†’ ${dest_city ?? "?"}, ${dest_state ?? "?"}`,
+          `- pickup_at: ${pickup_at ?? "â€”"} delivery_at: ${delivery_at ?? "â€”"}`,
+          `- miles: ${miles ?? "â€”"} rate: ${rate ?? "â€”"}`,
           `- notes: ${sanitize(notes)}`,
         ].join("\n"),
     });
@@ -52,9 +52,9 @@ export function composeDispatchContext({ load = null, driver = null } = {}) {
       content:
         [
           "Current Driver Context:",
-          `- id: ${id ?? "—"} name: ${full_name ?? "—"} status: ${status ?? "—"}`,
-          `- phone: ${phone ?? "—"} cdl: ${cdl_class ?? "—"} home: ${home_city ?? "?"}, ${home_state ?? "?"}`,
-          `- equipment: ${equipment ?? "—"}`,
+          `- id: ${id ?? "â€”"} name: ${full_name ?? "â€”"} status: ${status ?? "â€”"}`,
+          `- phone: ${phone ?? "â€”"} cdl: ${cdl_class ?? "â€”"} home: ${home_city ?? "?"}, ${home_state ?? "?"}`,
+          `- equipment: ${equipment ?? "â€”"}`,
           `- notes: ${sanitize(notes)}`,
         ].join("\n"),
     });
@@ -65,7 +65,7 @@ export function composeDispatchContext({ load = null, driver = null } = {}) {
 
 /** Built-in prompt templates for common tasks */
 export const Prompts = {
-  checkCall: `Write a brief check-call script. Ask for live location, trailer status (sealed/temp), ETA, issues. Close with “Text if anything changes.”`,
+  checkCall: `Write a brief check-call script. Ask for live location, trailer status (sealed/temp), ETA, issues. Close with â€œText if anything changes.â€`,
   delayNotice: (minutes = 30) =>
     `Draft a concise customer update: driver delay of ${minutes} minutes. Provide updated ETA and offer a phone call if needed.`,
   rateMath: ({ miles, rate }) =>
@@ -75,8 +75,9 @@ export const Prompts = {
     `Draft an internal note for assigning ${driverName} to Load ${loadNum} (PU ${pickup}, DEL ${delivery}). Include a 3-bullet checklist.`,
 };
 
-// ——— helpers ———
+// â€”â€”â€” helpers â€”â€”â€”
 function sanitize(v) {
-  if (!v) return "—";
+  if (!v) return "â€”";
   return String(v).replace(/\s+/g, " ").slice(0, 500);
 }
+

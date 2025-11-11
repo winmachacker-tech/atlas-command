@@ -1,11 +1,11 @@
-// src/hooks/useRequirePasswordSetup.js
+﻿// src/hooks/useRequirePasswordSetup.js
 import { useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
 /**
  * Gate unfinished invitees:
- * - If user has a session but users.must_set_password = true → force /set-password
+ * - If user has a session but users.must_set_password = true â†’ force /set-password
  * - Returns { loading, profile } for UI states
  */
 export default function useRequirePasswordSetup() {
@@ -65,3 +65,4 @@ export default function useRequirePasswordSetup() {
 
   return { loading, profile };
 }
+

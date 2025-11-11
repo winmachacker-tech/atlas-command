@@ -1,4 +1,4 @@
-// src/components/AddUserModal.jsx
+﻿// src/components/AddUserModal.jsx
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
@@ -117,7 +117,7 @@ export default function AddUserModal({ open, onClose, onCreated }) {
               disabled={sending}
               className="rounded-xl bg-black text-white px-4 py-2 hover:bg-black/90 disabled:opacity-60 dark:bg-white dark:text-black dark:hover:bg-white/90"
             >
-              {sending ? "Inviting…" : "Invite"}
+              {sending ? "Invitingâ€¦" : "Invite"}
             </button>
           </div>
         </form>
@@ -125,3 +125,4 @@ export default function AddUserModal({ open, onClose, onCreated }) {
     </div>
   );
 }
+

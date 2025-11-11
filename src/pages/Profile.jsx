@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   UserRound,
@@ -427,7 +427,7 @@ export default function Profile() {
             {lastSignIn ? (
               <span>Last sign-in: {new Date(lastSignIn).toLocaleString()}</span>
             ) : (
-              <span>Last sign-in: —</span>
+              <span>Last sign-in: â€”</span>
             )}
           </div>
 
@@ -448,3 +448,4 @@ export default function Profile() {
     </div>
   );
 }
+

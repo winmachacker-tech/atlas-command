@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import {
   X,
   Upload,
@@ -38,7 +38,7 @@ export default function TruckDocumentsModal({ open, onClose, truck }) {
     const name =
       [truck.truck_number, truck.vin, `${truck.make || ""} ${truck.model || ""}`.trim(), truck.id]
         .filter(Boolean)[0] || "Truck";
-    return `Documents • ${name}`;
+    return `Documents â€¢ ${name}`;
   }, [truck]);
 
   useEffect(() => {
@@ -54,7 +54,7 @@ export default function TruckDocumentsModal({ open, onClose, truck }) {
     try {
       const prefix = `${truck.id}/`;
 
-      // Try flat recursive-like read; if SDK doesn’t support recursive, fall back to known folders.
+      // Try flat recursive-like read; if SDK doesnâ€™t support recursive, fall back to known folders.
       const { data, error: listErr } = await supabase.storage
         .from(bucket)
         .list(prefix, {
@@ -82,7 +82,7 @@ export default function TruckDocumentsModal({ open, onClose, truck }) {
           files = files.concat((sub || []).map((s) => ({ ...s, name: `${f}/${s.name}` })));
         }
       } else {
-        // If we actually got files, they’ll have metadata.mimetype.
+        // If we actually got files, theyâ€™ll have metadata.mimetype.
         files = (data || []).filter((it) => it?.metadata?.mimetype).map((f) => ({ ...f, name: f.name.replace(prefix, "") }));
       }
 
@@ -242,7 +242,7 @@ export default function TruckDocumentsModal({ open, onClose, truck }) {
               {uploading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Uploading…
+                  Uploadingâ€¦
                 </>
               ) : (
                 <>
@@ -267,7 +267,7 @@ export default function TruckDocumentsModal({ open, onClose, truck }) {
               {refreshing ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Refreshing…
+                  Refreshingâ€¦
                 </>
               ) : (
                 <>
@@ -301,11 +301,11 @@ export default function TruckDocumentsModal({ open, onClose, truck }) {
                     const zebra = idx % 2 ? "bg-black/5" : "";
                     // it.name like "Registration/2025-11-04T19-02-11-000Z__file.pdf"
                     const [type, rest] = (it.name || "").split("/", 2);
-                    const prettyType = type || "—";
-                    const prettyName = rest || it.name || "—";
+                    const prettyType = type || "â€”";
+                    const prettyName = rest || it.name || "â€”";
 
-                    // Try to display timestamp prefix in a friendly way (fallback to — if unparsable)
-                    let uploaded = "—";
+                    // Try to display timestamp prefix in a friendly way (fallback to â€” if unparsable)
+                    let uploaded = "â€”";
                     if (rest?.includes("__")) {
                       const tsRaw = rest.split("__")[0]; // e.g. 2025-11-04T19-02-11-000Z
                       // Best-effort human-readable display without strict parsing:
@@ -359,3 +359,4 @@ export default function TruckDocumentsModal({ open, onClose, truck }) {
     </div>
   );
 }
+

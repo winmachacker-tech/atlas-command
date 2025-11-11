@@ -1,4 +1,4 @@
-// src/pages/Signup.jsx
+﻿// src/pages/Signup.jsx
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Link } from "react-router-dom";
@@ -27,10 +27,10 @@ export default function Signup() {
 
   async function onSignup(e) {
     e.preventDefault();
-    console.log("🚀 Signup form submitted"); // DEBUG
+    console.log("ðŸš€ Signup form submitted"); // DEBUG
     
     if (busy) {
-      console.log("⏳ Already busy, ignoring");
+      console.log("â³ Already busy, ignoring");
       return;
     }
     
@@ -39,65 +39,66 @@ export default function Signup() {
 
     // Validation
     if (!email.trim()) {
-      console.log("❌ Email missing");
+      console.log("âŒ Email missing");
       return setErr("Email is required.");
     }
     if (!password) {
-      console.log("❌ Password missing");
+      console.log("âŒ Password missing");
       return setErr("Password is required.");
     }
     if (password.length < 8) {
-      console.log("❌ Password too short");
+      console.log("âŒ Password too short");
       return setErr("Use at least 8 characters.");
     }
     if (password !== confirm) {
-      console.log("❌ Passwords don't match");
+      console.log("âŒ Passwords don't match");
       return setErr("Passwords do not match.");
     }
     if (!agree) {
-      console.log("❌ Terms not accepted");
+      console.log("âŒ Terms not accepted");
       return setErr("Please accept the Terms to continue.");
     }
 
     try {
       setBusy(true);
-      console.log("📧 Calling supabase.auth.signUp with:", email);
+      console.log("ðŸ“§ Calling supabase.auth.signUp with:", email);
       
-      const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-        options: {
-          data: { full_name: fullName || null },
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
-        },
-      });
+      await supabase.auth.signUp({
+  email,
+  password,
+  options: {
+    data: { full_name },
+    emailRedirectTo: `${window.location.origin}/auth/callback`,
+  },
+});
 
-      console.log("📊 Signup response:", { data, error });
+
+      console.log("ðŸ“Š Signup response:", { data, error });
 
       if (error) {
-        console.error("❌ Signup error:", error);
+        console.error("âŒ Signup error:", error);
         throw error;
       }
 
       if (data?.user) {
-        console.log("✅ User created:", data.user.id);
+        console.log("âœ… User created:", data.user.id);
         
         if (!data.user.confirmed_at) {
-          console.log("📨 Email confirmation required");
+          console.log("ðŸ“¨ Email confirmation required");
           setOkMsg(
             "Account created! Check your email and click the verification link to finish signing up."
           );
         } else {
-          console.log("✅ Account confirmed immediately");
+          console.log("âœ… Account confirmed immediately");
           setOkMsg("Account created successfully!");
         }
       }
     } catch (e2) {
-      console.error("💥 Signup exception:", e2);
+      console.error("ðŸ’¥ Signup exception:", e2);
       setErr(e2?.message || "Sign up failed");
     } finally {
       setBusy(false);
-      console.log("🏁 Signup process complete");
+      console.log("ðŸ Signup process complete");
     }
   }
 
@@ -163,7 +164,7 @@ export default function Signup() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="new-password"
-                placeholder="••••••••"
+                placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                 required
               />
               <button
@@ -198,7 +199,7 @@ export default function Signup() {
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
                 autoComplete="new-password"
-                placeholder="••••••••"
+                placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                 required
               />
               <button
@@ -239,7 +240,7 @@ export default function Signup() {
             {busy && (
               <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/50 border-t-transparent" />
             )}
-            {busy ? "Creating…" : "Create account"}
+            {busy ? "Creatingâ€¦" : "Create account"}
           </button>
         </form>
 
@@ -251,7 +252,7 @@ export default function Signup() {
         </div>
 
         <div className="mt-6 text-center text-xs text-white/40">
-          © {new Date().getFullYear()} Atlas Command Systems
+          Â© {new Date().getFullYear()} Atlas Command Systems
         </div>
       </div>
     </div>

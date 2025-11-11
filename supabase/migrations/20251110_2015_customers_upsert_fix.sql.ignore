@@ -1,0 +1,82 @@
+-- FILE: supabase/migrations/20251110_2015_customers_upsert_fix.sql
+-- Purpose: Seed customers from loads without touching the loads table at all.
+-- Why: Your loads triggers/policies reject certain updates; this keeps us read-only on loads.
+
+-- 1) Sanity: ensure customers has company_name (NOT NULL). We also fill 'name' when present.
+do $$
+declare
+  customers_has_company_name boolean;
+  customers_has_name         boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='customers' and column_name='company_name'
+  ) into customers_has_company_name;
+
+  if not customers_has_company_name then
+    raise exception 'public.customers must have column company_name (NOT NULL)';
+  end if;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='customers' and column_name='name'
+  ) into customers_has_name;
+
+  -- nothing else to do here; we’ll insert into (company_name, name) if 'name' exists
+end$$;
+
+-- 2) Detect optional source columns on loads (read-only)
+do $$
+declare
+  loads_has_customer_name boolean;
+  loads_has_customer      boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='loads' and column_name='customer_name'
+  ) into loads_has_customer_name;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='loads' and column_name='customer'
+  ) into loads_has_customer;
+
+  if not loads_has_customer_name and not loads_has_customer then
+    raise notice 'No customer text column on public.loads (expected customer_name or customer). Seeding skipped.';
+    return;
+  end if;
+
+  -- 3) Seed INSERTS ONLY into customers. NO UPDATE/DELETE/ALTER on loads.
+  if loads_has_customer_name then
+    insert into public.customers (company_name, name)
+    select s.n, s.n
+    from (
+      select distinct btrim(customer_name) as n
+      from public.loads
+      where customer_name is not null and btrim(customer_name) <> ''
+    ) s
+    where not exists (
+      select 1 from public.customers c
+      where btrim(c.company_name) = s.n
+         or (c.name is not null and btrim(c.name) = s.n)
+    );
+  end if;
+
+  if loads_has_customer then
+    insert into public.customers (company_name, name)
+    select s.n, s.n
+    from (
+      select distinct btrim(customer) as n
+      from public.loads
+      where customer is not null and btrim(customer) <> ''
+    ) s
+    where not exists (
+      select 1 from public.customers c
+      where btrim(c.company_name) = s.n
+         or (c.name is not null and btrim(c.name) = s.n)
+    );
+  end if;
+end$$;
+
+-- 4) Minimal grants (adjust for your RLS model)
+grant select, insert, update on public.customers to anon, authenticated;

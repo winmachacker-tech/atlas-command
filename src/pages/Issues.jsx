@@ -1,4 +1,4 @@
-// src/pages/Issues.jsx
+﻿// src/pages/Issues.jsx
 import { useEffect, useMemo, useState } from "react";
 import {
   Bug,
@@ -34,7 +34,7 @@ function cx(...a) {
 }
 
 function fmtDate(d) {
-  if (!d) return "—";
+  if (!d) return "â€”";
   try {
     return new Date(d).toLocaleString();
   } catch {
@@ -82,7 +82,7 @@ export default function Issues() {
           if (status === 406 || status === 404) {
             // Table may not exist yet in your environment.
             setFetchError(
-              "No issues found. (If you haven’t created the issues table yet, I can give you the SQL next.)"
+              "No issues found. (If you havenâ€™t created the issues table yet, I can give you the SQL next.)"
             );
             if (isMounted) setIssues([]);
           } else {
@@ -135,7 +135,7 @@ export default function Issues() {
     } catch (e) {
       alert(
         e?.message ||
-          "Failed to create issue. If the table doesn’t exist yet, I can give you the SQL next."
+          "Failed to create issue. If the table doesnâ€™t exist yet, I can give you the SQL next."
       );
     }
   }
@@ -198,7 +198,7 @@ export default function Issues() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search title, description, load #…"
+            placeholder="Search title, description, load #â€¦"
             className="w-72 rounded-xl border border-white/10 bg-transparent px-9 py-2 text-sm outline-none placeholder:text-white/50"
           />
         </div>
@@ -228,7 +228,7 @@ export default function Issues() {
           <div className="grid place-items-center p-16">
             <div className="inline-flex items-center gap-2 text-white/70">
               <Loader2 className="h-5 w-5 animate-spin" />
-              <span>Loading issues…</span>
+              <span>Loading issuesâ€¦</span>
             </div>
           </div>
         ) : filtered.length === 0 ? (
@@ -256,7 +256,7 @@ export default function Issues() {
                   >
                     <Td>
                       <div className="flex flex-col">
-                        <span className="font-medium">{it.title || "—"}</span>
+                        <span className="font-medium">{it.title || "â€”"}</span>
                         <span className="text-xs text-white/60 line-clamp-2">
                           {it.description || "No description"}
                         </span>
@@ -270,7 +270,7 @@ export default function Issues() {
                     </Td>
                     <Td>
                       <span className="rounded-md border border-white/10 px-2 py-0.5 text-xs">
-                        {it.related_load || "—"}
+                        {it.related_load || "â€”"}
                       </span>
                     </Td>
                     <Td>{fmtDate(it.created_at)}</Td>
@@ -351,7 +351,7 @@ function StatusBadge({ value }) {
       ) : value === "OPEN" ? (
         <AlertTriangle className="h-3.5 w-3.5" />
       ) : null}
-      {value || "—"}
+      {value || "â€”"}
     </span>
   );
 }
@@ -370,7 +370,7 @@ function PriorityBadge({ value }) {
         map[value] || "bg-white/10 text-white/70 border-white/20"
       )}
     >
-      {value || "—"}
+      {value || "â€”"}
     </span>
   );
 }
@@ -482,7 +482,7 @@ function CreateIssueModal({ onClose, onCreate }) {
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Details, steps to reproduce, expectations…"
+              placeholder="Details, steps to reproduce, expectationsâ€¦"
               rows={5}
               className="w-full resize-y rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40"
             />
@@ -537,3 +537,4 @@ function CreateIssueModal({ onClose, onCreate }) {
     </div>
   );
 }
+

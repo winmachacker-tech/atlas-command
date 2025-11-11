@@ -1,4 +1,4 @@
-// src/pages/Activity.jsx
+﻿// src/pages/Activity.jsx
 import { useEffect, useState } from "react";
 import { Clock, AlertTriangle, CheckCircle2, Bug, Eye } from "lucide-react";
 import { supabase } from "../lib/supabase";
@@ -52,13 +52,13 @@ export default function Activity() {
       </header>
 
       {busy ? (
-        <div className="text-sm opacity-70">Loading recent activity…</div>
+        <div className="text-sm opacity-70">Loading recent activityâ€¦</div>
       ) : err ? (
         <div className="rounded-xl border border-red-300/40 bg-red-50/40 p-4 text-sm">
-          <div className="font-medium mb-1">Couldn’t load activity</div>
+          <div className="font-medium mb-1">Couldnâ€™t load activity</div>
           <div className="opacity-80">{err}</div>
           <div className="mt-2 opacity-70">
-            Tip: If you haven’t created a log table yet, add one:
+            Tip: If you havenâ€™t created a log table yet, add one:
             <pre className="mt-2 text-xs bg-white/60 rounded p-2 overflow-auto">
 {`create table if not exists public.activity_log (
   id uuid primary key default gen_random_uuid(),
@@ -98,7 +98,7 @@ export default function Activity() {
                     </span>
                   )}
                 </div>
-                <div className="text-sm mt-1">{it.message || "—"}</div>
+                <div className="text-sm mt-1">{it.message || "â€”"}</div>
                 <div className="text-xs mt-2 flex items-center gap-1 opacity-70">
                   <Clock className="w-3.5 h-3.5" />
                   <time dateTime={it.created_at}>
@@ -143,3 +143,4 @@ function SeverityIcon({ severity }) {
       );
   }
 }
+

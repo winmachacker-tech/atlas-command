@@ -1,4 +1,4 @@
-// src/lib/userSettings.js
+﻿// src/lib/userSettings.js
 import { supabase } from "./supabase";
 
 /**
@@ -154,7 +154,8 @@ export async function deleteAvatar() {
 
   if (!path) return { ok: true };
 
-  // Attempt to delete (may be blocked by RLS—safe to ignore)
+  // Attempt to delete (may be blocked by RLSâ€”safe to ignore)
   await supabase.storage.from(AVATAR_BUCKET).remove([path]).catch(() => null);
   return { ok: true };
 }
+

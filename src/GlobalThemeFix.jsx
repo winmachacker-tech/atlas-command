@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+﻿import { useEffect } from "react";
 
 /*
   GlobalThemeFix
@@ -96,3 +96,4 @@ export default function GlobalThemeFix() {
 
   return null;
 }
+

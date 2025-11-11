@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+﻿import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
 /**
@@ -39,7 +39,7 @@ export default function WhoAmTest() {
       if (!res.ok) {
         setErrMsg(
           `HTTP ${res.status} ${res.statusText}` +
-            (json?.error ? ` – ${json.error}` : "")
+            (json?.error ? ` â€“ ${json.error}` : "")
         );
         setResult(json || null);
       } else {
@@ -59,7 +59,7 @@ export default function WhoAmTest() {
   return (
     <div className="p-6 space-y-4">
       <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
-        Edge Function Diagnostics — <code>/whoami</code>
+        Edge Function Diagnostics â€” <code>/whoami</code>
       </h1>
 
       <div className="text-sm text-zinc-600 dark:text-zinc-400">
@@ -82,7 +82,7 @@ export default function WhoAmTest() {
             disabled={loading}
             className="px-3 py-1.5 rounded-xl border border-zinc-300 dark:border-zinc-700 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
           >
-            {loading ? "Running…" : "Run again"}
+            {loading ? "Runningâ€¦" : "Run again"}
           </button>
         </div>
 
@@ -99,10 +99,11 @@ export default function WhoAmTest() {
         <p className="text-xs text-zinc-500 mt-2">
           Expect <code>hasToken: true</code>, a populated <code>user</code>, and{" "}
           <code>adminRow.is_admin === true</code>. If <code>hasToken</code> is{" "}
-          false, the header isn’t reaching the function. If <code>user</code> is
+          false, the header isnâ€™t reaching the function. If <code>user</code> is
           null with a token, the token is invalid/expired.
         </p>
       </div>
     </div>
   );
 }
+

@@ -1,4 +1,4 @@
-// src/components/AuthGuard.jsx
+﻿// src/components/AuthGuard.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
@@ -20,7 +20,7 @@ import { supabase } from "../lib/supabase";
 export default function AuthGuard({
   children,
   requireAuth = true,
-  loginPath = "/login",
+  loginPath = "/auth",
   graceMs = 600,
 }) {
   const nav = useNavigate();
@@ -28,6 +28,9 @@ export default function AuthGuard({
 
   const [checking, setChecking] = useState(true);
   const [hasSession, setHasSession] = useState(false);
+
+  // NEW: track onboarding flag (null = unknown)
+  const [profileComplete, setProfileComplete] = useState(null);
 
   // prevent multiple redirects
   const redirectedRef = useRef(false);
@@ -69,6 +72,43 @@ export default function AuthGuard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // NEW: when we have a session, resolve profile_complete
+  useEffect(() => {
+    let canceled = false;
+
+    async function resolveProfileComplete() {
+      if (!hasSession) {
+        setProfileComplete(null);
+        return;
+      }
+      const { data: userRes } = await supabase.auth.getUser();
+      const user = userRes?.user;
+      if (!user) {
+        setProfileComplete(null);
+        return;
+      }
+      const { data: p, error: pErr } = await supabase
+        .from("profiles")
+        .select("profile_complete")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (canceled) return;
+
+      if (pErr) {
+        // be conservative: treat unknown as incomplete
+        setProfileComplete(false);
+      } else {
+        setProfileComplete(Boolean(p?.profile_complete));
+      }
+    }
+
+    resolveProfileComplete();
+    return () => {
+      canceled = true;
+    };
+  }, [hasSession]);
+
   useEffect(() => {
     if (!requireAuth) return;
 
@@ -86,8 +126,16 @@ export default function AuthGuard({
       params.set("redirect", intendedPath);
 
       nav(`${loginPath}?${params.toString()}`, { replace: true });
+      return;
     }
-  }, [checking, hasSession, requireAuth, nav, intendedPath, loginPath]);
+
+    // NEW: session exists but onboarding not finished -> send to /complete-account
+    if (profileComplete === false && location.pathname !== "/complete-account") {
+      redirectedRef.current = true;
+      nav("/complete-account", { replace: true });
+      return;
+    }
+  }, [checking, hasSession, requireAuth, nav, intendedPath, loginPath, profileComplete, location.pathname]);
 
   // While checking, render a neutral shell (no redirects)
   if (requireAuth && checking) {
