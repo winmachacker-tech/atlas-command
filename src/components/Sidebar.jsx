@@ -1,10 +1,8 @@
-﻿// src/layout/Sidebar.jsx
+﻿// src/components/Sidebar.jsx
 import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
   Truck,
-  FileText,
-  Settings,
   Users,
   Route as RouteIcon,
   CreditCard,
@@ -13,12 +11,14 @@ import {
   Bell,
   Plug,
   Shield,
+  BarChart3,
 } from "lucide-react";
 
 /**
  * Sidebar for Atlas Command
- * - Consistent enterprise styling
- * - Settings section with Appearance
+ * - Main Ops section
+ * - AI Lab (Lane Intelligence)
+ * - Settings section
  */
 
 export default function Sidebar() {
@@ -46,7 +46,7 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* Nav Links */}
+      {/* Main Nav Links */}
       <nav className="flex flex-col gap-1 text-sm">
         <NavLink
           to="/"
@@ -100,8 +100,28 @@ export default function Sidebar() {
         </NavLink>
       </nav>
 
-      {/* Divider */}
+      {/* Divider between Ops and AI */}
       <div className="my-6 border-t border-[var(--border)]" />
+
+      {/* AI Lab Section */}
+      <div className="mb-6 flex flex-col gap-1">
+        <div className="px-2 text-xs font-semibold uppercase text-[var(--text-muted)]">
+          AI Lab
+        </div>
+
+        <NavLink
+          to="/ai/lanes"
+          className={({ isActive }) =>
+            `${linkBase} ${isActive ? linkActive : linkInactive}`
+          }
+        >
+          <BarChart3 className="h-4 w-4" />
+          Lane Intelligence
+        </NavLink>
+      </div>
+
+      {/* Divider between AI and Settings */}
+      <div className="mb-4 border-t border-[var(--border)]" />
 
       {/* Settings Section */}
       <div className="flex flex-col gap-1">
@@ -116,7 +136,7 @@ export default function Sidebar() {
           }
         >
           <UserRound className="h-4 w-4" />
-          Profile & Account
+          Profile &amp; Account
         </NavLink>
 
         <NavLink
@@ -170,9 +190,9 @@ export default function Sidebar() {
         </NavLink>
       </div>
 
-      {/* Spacer */}
+      {/* Spacer / Footer */}
       <div className="mt-auto border-t border-[var(--border)] pt-4 text-xs text-[var(--text-muted)]">
-        Â© {new Date().getFullYear()} Atlas Command
+        © {new Date().getFullYear()} Atlas Command
       </div>
     </aside>
   );

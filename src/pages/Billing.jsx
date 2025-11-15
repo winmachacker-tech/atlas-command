@@ -29,11 +29,11 @@ function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
 function fmtDate(d) {
-  if (!d) return "â€”";
+  if (!d) return "—";
   try { return new Date(d).toLocaleDateString(); } catch { return String(d); }
 }
 function fmtDateTime(d) {
-  if (!d) return "â€”";
+  if (!d) return "—";
   try { return new Date(d).toLocaleString(); } catch { return String(d); }
 }
 const money = (n) => Number(Number(n || 0).toFixed(2));
@@ -118,7 +118,7 @@ export default function BillingPage() {
       if (showInvoiced) {
         query = query.or("invoice_number.not.is.null,invoiced_at.not.is.null");
       } else {
-        // ðŸ‘‡ PostgREST likes explicit eq.true for bool filters
+        // 👇 PostgREST likes explicit eq.true for bool filters
         query = query.or([`status.eq.${READY_STATUS}`, `billing_ready.eq.true`].join(","));
       }
 
@@ -215,119 +215,362 @@ export default function BillingPage() {
           .select("company_name")
           .eq("id", authData?.user?.id || "")
           .maybeSingle();
-        companyName = meRow?.company_name || "";
+        companyName = meRow?.company_name || "Atlas Command";
       } catch {
-        /* ignore */
+        companyName = "Atlas Command";
       }
 
-      console.log("[PDF] Building PDF document...");
-      // 3) Build PDF (simple clean layout)
+      console.log("[PDF] Building professional PDF document...");
+      
+      // 3) Build Professional PDF with modern styling
       const { jsPDF } = await import("jspdf");
       const doc = new jsPDF({ unit: "pt", format: "letter" });
+      
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
       const margin = 40;
       let y = margin;
 
+      // Header gradient background (solid blue - professional look)
+      doc.setFillColor(30, 64, 175); // Professional blue
+      doc.rect(0, 0, pageWidth, 140, 'F');
+
+      // Company name in header
+      doc.setTextColor(255, 255, 255);
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(18);
-      doc.text(companyName || "Atlas Command", margin, y);
-      y += 22;
-
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      doc.text(meEmail, margin, y);
-      y += 18;
-
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(16);
-      doc.text("INVOICE", margin, y);
-      y += 20;
-
+      doc.setFontSize(32);
+      doc.text(companyName, margin, y + 30);
+      
+      // Email in header
       doc.setFontSize(11);
       doc.setFont("helvetica", "normal");
-      doc.text(`Invoice #: ${inv.number}`, margin, y); y += 16;
-      doc.text(`Status: ${inv.status}`, margin, y); y += 16;
-      doc.text(`Created: ${new Date(inv.created_at).toLocaleString()}`, margin, y); y += 24;
-
+      doc.text(meEmail, margin, y + 52);
+      
+      // "INVOICE" title
+      doc.setFontSize(28);
       doc.setFont("helvetica", "bold");
+      doc.text("INVOICE", margin, y + 90);
+      
+      // Reset text color for body
+      doc.setTextColor(0, 0, 0);
+      y = 160;
+
+      // Invoice meta box (light gray background)
+      doc.setFillColor(249, 250, 251);
+      doc.setDrawColor(229, 231, 235);
+      doc.roundedRect(margin, y, pageWidth - 2 * margin, 90, 4, 4, 'FD');
+      
+      // Invoice metadata - three columns
+      const col1X = margin + 20;
+      const col2X = margin + 220;
+      const col3X = margin + 400;
+      
+      y += 25;
+      
+      // Column 1: Invoice Number
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(107, 114, 128);
+      doc.text("INVOICE NUMBER", col1X, y);
+      
+      y += 18;
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(17, 24, 39);
+      doc.text(inv.number, col1X, y);
+      
+      // Column 2: Status
+      y -= 18;
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(107, 114, 128);
+      doc.text("STATUS", col2X, y);
+      
+      y += 18;
+      // Status badge
+      const statusText = inv.status;
+      const statusWidth = doc.getTextWidth(statusText) + 16;
+      doc.setFillColor(16, 185, 129);
+      doc.roundedRect(col2X, y - 12, statusWidth, 20, 3, 3, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "bold");
+      doc.text(statusText, col2X + 8, y + 2);
+      
+      // Column 3: Invoice Date
+      y -= 18;
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(107, 114, 128);
+      doc.text("INVOICE DATE", col3X, y);
+      
+      y += 18;
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(17, 24, 39);
+      const formattedDate = new Date(inv.created_at).toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric', 
+        year: 'numeric' 
+      });
+      doc.text(formattedDate, col3X, y);
+      
+      y += 35;
+
+      // Bill To section
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(30, 58, 138);
       doc.text("Bill To", margin, y);
-      y += 16;
+      y += 5;
+      
+      // Underline
+      doc.setDrawColor(229, 231, 235);
+      doc.setLineWidth(2);
+      doc.line(margin, y, pageWidth - margin, y);
+      y += 20;
+      
+      doc.setFillColor(249, 250, 251);
+      doc.roundedRect(margin, y, pageWidth - 2 * margin, 30, 4, 4, 'F');
+      doc.setFontSize(13);
       doc.setFont("helvetica", "normal");
-      doc.text(`${loadRow.shipper || "Customer"}`, margin, y);
-      y += 24;
+      doc.setTextColor(17, 24, 39);
+      doc.text(loadRow.shipper || "Customer", margin + 15, y + 20);
+      
+      y += 50;
 
+      // Load Details section
+      doc.setFontSize(14);
       doc.setFont("helvetica", "bold");
+      doc.setTextColor(30, 58, 138);
       doc.text("Load Details", margin, y);
-      y += 16;
-      doc.setFont("helvetica", "normal");
-      const lines = [
-        `Reference: ${loadRow.reference || "â€”"}`,
-        `Delivered: ${fmtDate(loadRow.delivery_date)}`,
-        `Origin: ${loadRow.origin || "â€”"}`,
-        `Destination: ${loadRow.destination || "â€”"}`,
-        `Dispatcher: ${loadRow.dispatcher_name || "â€”"}`,
-        `Driver: ${loadRow.driver_name || "â€”"}`,
-        `PO: ${loadRow.po_number || "â€”"}  â€¢  PRO: ${loadRow.pro_number || "â€”"}`,
+      y += 5;
+      doc.setDrawColor(229, 231, 235);
+      doc.line(margin, y, pageWidth - margin, y);
+      y += 20;
+      
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(107, 114, 128);
+      
+      const detailLabels = [
+        "Reference Number:",
+        "Origin:",
+        "Destination:",
+        "Delivery Status:",
       ];
-      lines.forEach((t) => { doc.text(t, margin, y); y += 14; });
-      y += 8;
-
-      doc.setFont("helvetica", "bold");
-      doc.text("Charges", margin, y);
-      y += 16;
-      doc.setFont("helvetica", "normal");
-      const rate = Number(loadRow.rate || 0);
-      doc.text(`Linehaul: ${fmtUSD(rate)}`, margin, y); y += 14;
-
-      y += 8;
-      doc.setFont("helvetica", "bold");
-      doc.text(`Amount Due: ${fmtUSD(inv.amount || inv.total || rate)}`, margin, y);
-      y += 28;
-
-      if (loadRow.pod_url) {
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(0, 0, 200);
-        doc.textWithLink("Attached POD", margin, y, { url: loadRow.pod_url });
-        doc.setTextColor(0, 0, 0);
-        y += 18;
-      }
-
-      if (inv.notes) {
-        y += 8;
+      
+      const detailValues = [
+        loadRow.reference || "—",
+        loadRow.origin || "—",
+        loadRow.destination || "—",
+        "Delivered",
+      ];
+      
+      const leftCol = margin;
+      const rightCol = margin + 280;
+      
+      for (let i = 0; i < 4; i++) {
+        const col = i < 2 ? leftCol : rightCol;
+        const idx = i < 2 ? i : i - 2;
+        const yPos = y + (i < 2 ? idx * 20 : idx * 20);
+        
         doc.setFont("helvetica", "bold");
-        doc.text("Notes", margin, y); y += 16;
+        doc.setTextColor(107, 114, 128);
+        doc.text(detailLabels[i], col, yPos);
+        
         doc.setFont("helvetica", "normal");
-        const noteLines = doc.splitTextToSize(inv.notes, 540);
-        doc.text(noteLines, margin, y);
+        doc.setTextColor(17, 24, 39);
+        doc.setFontSize(11);
+        doc.text(detailValues[i], col + 105, yPos);
+        doc.setFontSize(10);
+      }
+      
+      y += 50;
+      
+      // Additional details
+      const moreDetails = [
+        ["Dispatcher:", loadRow.dispatcher_name || "Not Assigned"],
+        ["Driver:", loadRow.driver_name || "Not Assigned"],
+        ["PO Number:", loadRow.po_number || "Not Provided"],
+        ["PRO Number:", loadRow.pro_number || "Not Provided"],
+      ];
+      
+      for (let i = 0; i < moreDetails.length; i++) {
+        const col = i < 2 ? leftCol : rightCol;
+        const idx = i < 2 ? i : i - 2;
+        const yPos = y + idx * 20;
+        
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(107, 114, 128);
+        doc.setFontSize(10);
+        doc.text(moreDetails[i][0], col, yPos);
+        
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(17, 24, 39);
+        doc.setFontSize(11);
+        doc.text(moreDetails[i][1], col + 105, yPos);
+      }
+      
+      y += 60;
+
+      // Charges section
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(30, 58, 138);
+      doc.text("Charges", margin, y);
+      y += 5;
+      doc.setDrawColor(229, 231, 235);
+      doc.line(margin, y, pageWidth - margin, y);
+      y += 20;
+      
+      // Charges box
+      doc.setFillColor(249, 250, 251);
+      doc.roundedRect(margin, y, pageWidth - 2 * margin, 35, 4, 4, 'F');
+      
+      const rate = Number(loadRow.rate || 0);
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(55, 65, 81);
+      doc.text("Linehaul", margin + 15, y + 22);
+      
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(17, 24, 39);
+      doc.setFontSize(13);
+      doc.text(fmtUSD(rate), pageWidth - margin - 15, y + 22, { align: "right" });
+      
+      y += 50;
+
+      // Total section (professional blue box)
+      doc.setFillColor(30, 64, 175); // Professional blue
+      doc.roundedRect(margin, y, pageWidth - 2 * margin, 40, 4, 4, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(16);
+      doc.setFont("helvetica", "bold");
+      doc.text("Amount Due", margin + 15, y + 25);
+      
+      doc.setFontSize(24);
+      doc.text(fmtUSD(inv.amount || inv.total || rate), pageWidth - margin - 15, y + 27, { align: "right" });
+      
+      y += 60;
+
+      // POD link
+      if (loadRow.pod_url) {
+        doc.setFontSize(11);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(59, 130, 246);
+        doc.textWithLink("📎 View Attached POD", margin, y, { url: loadRow.pod_url });
+        y += 20;
       }
 
-      // 4) Download PDF directly to desktop
-      console.log("[PDF] Preparing PDF for download...");
-      const pdfBlob = doc.output("blob");
-      const url = URL.createObjectURL(pdfBlob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `invoice_${inv.number}_${loadRow.reference || loadRow.id}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      console.log("[PDF] âœ… PDF downloaded!");
+      // Notes section
+      if (inv.notes) {
+        y += 10;
+        doc.setFillColor(255, 251, 235);
+        doc.setDrawColor(245, 158, 11);
+        const notesHeight = Math.max(40, Math.ceil(inv.notes.length / 80) * 15 + 20);
+        doc.roundedRect(margin, y, pageWidth - 2 * margin, notesHeight, 4, 4, 'FD');
+        
+        y += 15;
+        doc.setFontSize(11);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(146, 64, 14);
+        doc.text("Notes", margin + 15, y);
+        
+        y += 15;
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(120, 53, 15);
+        doc.setFontSize(10);
+        const noteLines = doc.splitTextToSize(inv.notes, pageWidth - 2 * margin - 30);
+        doc.text(noteLines, margin + 15, y);
+        y += noteLines.length * 12 + 10;
+      }
 
-      // 5) Update invoice status (without pdf_url since it's local)
+      // Footer
+      const footerY = pageHeight - 50;
+      doc.setFillColor(249, 250, 251);
+      doc.rect(0, footerY - 10, pageWidth, 60, 'F');
+      
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(107, 114, 128);
+      doc.text("Thank you for your business!", pageWidth / 2, footerY + 5, { align: "center" });
+      doc.setFontSize(9);
+      doc.text(`For questions about this invoice, please contact ${meEmail}`, pageWidth / 2, footerY + 20, { align: "center" });
+
+      console.log("[PDF] PDF document built successfully");
+
+      // 4) Upload to Supabase Storage
+      const pdfBlob = doc.output("blob");
+      const fileName = `invoice_${inv.number}_${loadRow.reference || loadRow.id}_${Date.now()}.pdf`;
+      const filePath = `invoices/${fileName}`;
+      
+      console.log("[PDF] Uploading to Supabase Storage:", filePath);
+      
+      const { data: uploadData, error: uploadError } = await supabase
+        .storage
+        .from("documents") // Make sure this bucket exists!
+        .upload(filePath, pdfBlob, {
+          contentType: "application/pdf",
+          upsert: false
+        });
+
+      if (uploadError) {
+        console.error("[PDF] Upload error:", uploadError);
+        // Still download locally if upload fails
+        const url = URL.createObjectURL(pdfBlob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        setErr(`PDF downloaded locally, but failed to upload to storage: ${uploadError.message}`);
+        setLoading(false);
+        return;
+      }
+
+      console.log("[PDF] Upload successful:", uploadData);
+
+      // 5) Get public URL
+      const { data: urlData } = supabase
+        .storage
+        .from("documents")
+        .getPublicUrl(filePath);
+
+      const pdfUrl = urlData.publicUrl;
+      console.log("[PDF] Public URL:", pdfUrl);
+
+      // 6) Update invoice with PDF URL and status
       const { error: updErr } = await supabase
         .from("invoices")
-        .update({ status: "FINAL" })
+        .update({ 
+          status: "FINAL",
+          pdf_url: pdfUrl
+        })
         .eq("id", inv.id);
       
       console.log("[PDF] Database update result:", { error: updErr });
       
       if (updErr) {
         console.warn("[PDF] DB update failed:", updErr.message);
-        // Don't fail the whole operation since PDF was downloaded successfully
       }
 
-      console.log("[PDF] âœ… PDF generation complete!");
-      setBanner("Invoice PDF downloaded to your computer.");
+      // 7) Also download locally for immediate access
+      const url = URL.createObjectURL(pdfBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      console.log("[PDF] ✅ PDF generation complete!");
+      setBanner(`Invoice PDF generated, uploaded to storage, and downloaded to your computer.`);
       await fetchPage(page);
     } catch (e) {
       console.error("[Billing] generatePDF error:", e);
@@ -466,7 +709,7 @@ export default function BillingPage() {
       <div className="grid grid-cols-1 gap-3 rounded-xl border border-white/10 bg-white/5 p-3 sm:grid-cols-2 lg:grid-cols-7">
         <div className="relative sm:col-span-2">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 opacity-60" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search reference or shipperâ€¦" className="w-full rounded-lg border border-white/10 bg-transparent px-9 py-2 outline-none placeholder:opacity-60" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search reference or shipper…" className="w-full rounded-lg border border-white/10 bg-transparent px-9 py-2 outline-none placeholder:opacity-60" />
         </div>
 
         <div className="relative">
@@ -518,7 +761,7 @@ export default function BillingPage() {
               {loading && (
                 <tr>
                   <td colSpan={12} className="p-6 text-center opacity-70">
-                    <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Loadingâ€¦</span>
+                    <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</span>
                   </td>
                 </tr>
               )}
@@ -534,8 +777,8 @@ export default function BillingPage() {
                 return (
                   <tr key={r.id} className="border-t border-white/10 hover:bg-white/5">
                     <Td><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleRow(r.id)} /></Td>
-                    <Td className="font-medium">{r.reference ?? "â€”"}</Td>
-                    <Td>{r.shipper ?? "â€”"}</Td>
+                    <Td className="font-medium">{r.reference ?? "—"}</Td>
+                    <Td>{r.shipper ?? "—"}</Td>
                     <Td>{fmtDate(r.delivery_date)}</Td>
                     <Td>
                       {r.pod_url ? (
@@ -544,17 +787,17 @@ export default function BillingPage() {
                         </a>
                       ) : (<span className="text-xs opacity-60">No POD</span>)}
                     </Td>
-                    <Td>{typeof r.billed_amount === "number" ? fmtUSD(r.billed_amount) : "â€”"}</Td>
-                    <Td><span className="rounded-md border border-white/10 px-2 py-1 text-xs">{r.status ?? "â€”"}</span></Td>
-                    <Td>{r.assigned_biller ?? "â€”"}</Td>
-                    <Td>{r.invoice_number ?? "â€”"}</Td>
+                    <Td>{typeof r.billed_amount === "number" ? fmtUSD(r.billed_amount) : "—"}</Td>
+                    <Td><span className="rounded-md border border-white/10 px-2 py-1 text-xs">{r.status ?? "—"}</span></Td>
+                    <Td>{r.assigned_biller ?? "—"}</Td>
+                    <Td>{r.invoice_number ?? "—"}</Td>
                     <Td>
                       {r.invoice_pdf_url ? (
                         <a href={r.invoice_pdf_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-xs hover:bg-white/5">
                           Open PDF <ExternalLink className="h-3 w-3 opacity-70" />
                         </a>
                       ) : (
-                        <span className="text-xs opacity-60">â€”</span>
+                        <span className="text-xs opacity-60">—</span>
                       )}
                     </Td>
                     <Td>{fmtDateTime(r.invoiced_at)}</Td>
@@ -608,7 +851,7 @@ export default function BillingPage() {
 
         {/* Footer / Pagination */}
         <div className="flex flex-col items-center justify-between gap-3 border-t border-white/10 p-3 sm:flex-row">
-          <div className="text-xs opacity-70">Showing {count === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}â€“{Math.min(count, page * PAGE_SIZE)} of {count}</div>
+          <div className="text-xs opacity-70">Showing {count === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}–{Math.min(count, page * PAGE_SIZE)} of {count}</div>
           <div className="flex items-center gap-2">
             <button className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-3 py-2 text-sm hover:bg-white/5 disabled:opacity-40" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1 || loading}>
               <ChevronLeft className="h-4 w-4" /> Prev
@@ -643,4 +886,3 @@ function Th({ children }) {
 function Td({ children, className }) {
   return <td className={cx("px-4 py-3 align-top", className)}>{children}</td>;
 }
-

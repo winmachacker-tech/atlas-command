@@ -1,259 +1,314 @@
-﻿// src/pages/Signup.jsx
-import { useState } from "react";
-import { supabase } from "../lib/supabase";
-import { Link } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+﻿// FILE: src/pages/Signup.jsx
+// Purpose: Invite-only signup for Atlas Command (Option 2)
+// - Requires an invite code (validated via rpc_use_invite_token)
+// - Collects: Full name, company name, email, password, confirm password
+// - Creates Supabase auth user with metadata (full_name, company_name)
 
-export default function Signup() {
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { supabase } from "../lib/supabase";
+import {
+  Loader2,
+  Lock,
+  Mail,
+  User,
+  Building2,
+  KeyRound,
+} from "lucide-react";
+
+export default function SignupPage() {
+  const navigate = useNavigate();
+
   const [fullName, setFullName] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [agree, setAgree] = useState(false);
+  const [passwordConfirm, setPasswordConfirm] = useState("");
 
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [okMsg, setOkMsg] = useState("");
-
-  const [showPw, setShowPw] = useState(false);
-  const [showPw2, setShowPw2] = useState(false);
-
-  const strength =
-    (/[A-Z]/.test(password) ? 1 : 0) +
-    (/[a-z]/.test(password) ? 1 : 0) +
-    (/[0-9]/.test(password) ? 1 : 0) +
-    (/[^A-Za-z0-9]/.test(password) ? 1 : 0) +
-    (password.length >= 12 ? 1 : 0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [formMessage, setFormMessage] = useState("");
 
   async function onSignup(e) {
     e.preventDefault();
-    console.log("ðŸš€ Signup form submitted"); // DEBUG
-    
-    if (busy) {
-      console.log("â³ Already busy, ignoring");
+    console.log("🚀 Signup form submitted");
+
+    setFormError("");
+    setFormMessage("");
+
+    // Basic validation
+    if (!fullName.trim()) {
+      setFormError("Please enter your full name.");
       return;
     }
-    
-    setErr("");
-    setOkMsg("");
-
-    // Validation
+    if (!inviteCode.trim()) {
+      setFormError("Invite code is required to sign up.");
+      return;
+    }
     if (!email.trim()) {
-      console.log("âŒ Email missing");
-      return setErr("Email is required.");
+      setFormError("Please enter your email.");
+      return;
     }
     if (!password) {
-      console.log("âŒ Password missing");
-      return setErr("Password is required.");
+      setFormError("Please enter a password.");
+      return;
     }
     if (password.length < 8) {
-      console.log("âŒ Password too short");
-      return setErr("Use at least 8 characters.");
+      setFormError("Password must be at least 8 characters.");
+      return;
     }
-    if (password !== confirm) {
-      console.log("âŒ Passwords don't match");
-      return setErr("Passwords do not match.");
-    }
-    if (!agree) {
-      console.log("âŒ Terms not accepted");
-      return setErr("Please accept the Terms to continue.");
+    if (password !== passwordConfirm) {
+      setFormError("Passwords do not match.");
+      return;
     }
 
     try {
-      setBusy(true);
-      console.log("ðŸ“§ Calling supabase.auth.signUp with:", email);
-      
-      await supabase.auth.signUp({
-  email,
-  password,
-  options: {
-    data: { full_name },
-    emailRedirectTo: `${window.location.origin}/auth/callback`,
-  },
-});
+      setIsSubmitting(true);
+      console.log("🎟️ Validating invite code:", inviteCode);
 
+      // 1) Validate + consume invite code via RPC
+      const { data: invite, error: inviteError } = await supabase.rpc(
+        "rpc_use_invite_token",
+        {
+          p_token: inviteCode,
+          p_email: email,
+        }
+      );
 
-      console.log("ðŸ“Š Signup response:", { data, error });
+      if (inviteError) {
+        console.error("💥 Invite validation error:", inviteError);
+        setFormError(inviteError.message || "Invalid invite code.");
+        return;
+      }
+
+      console.log("✅ Invite valid:", invite);
+
+      // 2) Proceed with signup
+      console.log("📧 Calling supabase.auth.signUp with:", email);
+
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: fullName,
+            company_name: companyName || invite?.org_name || null,
+            invite_token_used: inviteCode, // handy to see later in auth metadata
+          },
+          // If you use email confirmation, Supabase will send an email automatically
+          // emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
 
       if (error) {
-        console.error("âŒ Signup error:", error);
-        throw error;
+        console.error("💥 Supabase signup error:", error);
+        setFormError(error.message || "Signup failed. Please try again.");
+        return;
       }
 
-      if (data?.user) {
-        console.log("âœ… User created:", data.user.id);
-        
-        if (!data.user.confirmed_at) {
-          console.log("ðŸ“¨ Email confirmation required");
-          setOkMsg(
-            "Account created! Check your email and click the verification link to finish signing up."
-          );
-        } else {
-          console.log("âœ… Account confirmed immediately");
-          setOkMsg("Account created successfully!");
-        }
-      }
-    } catch (e2) {
-      console.error("ðŸ’¥ Signup exception:", e2);
-      setErr(e2?.message || "Sign up failed");
+      console.log("✅ Supabase signup success:", data);
+
+      setFormMessage(
+        "Signup successful! If email confirmation is enabled, please check your inbox. Redirecting to login..."
+      );
+
+      setTimeout(() => {
+        navigate("/login");
+      }, 2000);
+    } catch (err) {
+      console.error("💥 Signup exception:", err);
+      setFormError(err.message || "Unexpected error during signup.");
     } finally {
-      setBusy(false);
-      console.log("ðŸ Signup process complete");
+      setIsSubmitting(false);
+      console.log("🏁 Signup process complete");
     }
   }
 
   return (
-    <div className="min-h-screen grid place-items-center p-6">
-      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-black/40 backdrop-blur-md p-6 shadow-xl text-[var(--text-base,#E5E7EB)]">
-        {/* Back button */}
-        <Link
-          to="/login"
-          className="inline-flex items-center gap-2 text-sm text-white/60 hover:text-white mb-4 transition"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to login
-        </Link>
-
-        <div className="mb-6 text-center">
-          <h1 className="text-3xl font-semibold">Create your account</h1>
-          <p className="mt-1 text-sm text-white/60">Join Atlas Command</p>
+    <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100 px-4">
+      <div className="w-full max-w-md space-y-6">
+        {/* Header */}
+        <div className="text-center space-y-2">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Join Atlas Command (Invite Only)
+          </h1>
+          <p className="text-sm text-slate-400">
+            You&apos;ll need an invite code from Mark to create an account.
+          </p>
         </div>
 
-        {err && (
-          <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-            {err}
-          </div>
-        )}
-        {okMsg && (
-          <div className="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
-            {okMsg}
-          </div>
-        )}
-
-        <form onSubmit={onSignup} className="space-y-4">
-          <div>
-            <label className="mb-1 block text-sm">Full name (optional)</label>
-            <input
-              className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 outline-none focus:border-blue-500/60"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              autoComplete="name"
-              placeholder="Jane Doe"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm">Email</label>
-            <input
-              className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 outline-none focus:border-blue-500/60"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              autoComplete="email"
-              placeholder="you@company.com"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm">Password</label>
-            <div className="relative">
-              <input
-                className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 pr-20 outline-none focus:border-blue-500/60"
-                type={showPw ? "text" : "password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="new-password"
-                placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowPw((v) => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-xs text-white/70 hover:text-white"
-              >
-                {showPw ? "Hide" : "Show"}
-              </button>
+        {/* Card */}
+        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl shadow-lg p-6 space-y-4">
+          {formError && (
+            <div className="text-sm text-red-400 bg-red-950/40 border border-red-900/60 rounded-lg px-3 py-2">
+              {formError}
             </div>
+          )}
+          {formMessage && (
+            <div className="text-sm text-emerald-400 bg-emerald-950/40 border border-emerald-900/60 rounded-lg px-3 py-2">
+              {formMessage}
+            </div>
+          )}
 
-            {/* strength meter */}
-            <div className="mt-1 grid grid-cols-5 gap-1">
-              {[0, 1, 2, 3, 4].map((i) => (
-                <div
-                  key={i}
-                  className={`h-1 rounded ${i < strength ? "bg-blue-500" : "bg-white/10"}`}
+          <form onSubmit={onSignup} className="space-y-4">
+            {/* Invite code */}
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-200">
+                Invite code
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-2.5 text-slate-500">
+                  <KeyRound className="w-4 h-4" />
+                </span>
+                <input
+                  type="text"
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 rounded-lg bg-slate-950/70 border border-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 uppercase tracking-wide"
+                  placeholder="ATLAS-BETA-2025"
+                  autoComplete="off"
+                  required
                 />
-              ))}
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Don&apos;t have one? Contact Mark to request access.
+              </p>
             </div>
-            <p className="text-xs text-white/50">
-              Tip: 12+ chars with upper/lower, number, and symbol is strongest.
-            </p>
-          </div>
 
-          <div>
-            <label className="mb-1 block text-sm">Confirm password</label>
-            <div className="relative">
-              <input
-                className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 pr-20 outline-none focus:border-blue-500/60"
-                type={showPw2 ? "text" : "password"}
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                autoComplete="new-password"
-                placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowPw2((v) => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-xs text-white/70 hover:text-white"
-              >
-                {showPw2 ? "Hide" : "Show"}
-              </button>
+            {/* Full name */}
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-200">
+                Full name
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-2.5 text-slate-500">
+                  <User className="w-4 h-4" />
+                </span>
+                <input
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 rounded-lg bg-slate-950/70 border border-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                  placeholder="Jane Doe"
+                  autoComplete="name"
+                  required
+                />
+              </div>
             </div>
-          </div>
 
-          <label className="flex items-start gap-2 text-sm text-white/80">
-            <input
-              type="checkbox"
-              checked={agree}
-              onChange={(e) => setAgree(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-white/20 bg-white/5"
-            />
-            <span>
-              I agree to the{" "}
-              <a href="/terms" className="text-blue-400 underline underline-offset-2">
-                Terms
-              </a>{" "}
-              and{" "}
-              <a href="/privacy" className="text-blue-400 underline underline-offset-2">
-                Privacy Policy
-              </a>
-              .
-            </span>
-          </label>
+            {/* Company / Fleet name (optional) */}
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-200">
+                Company / Fleet name{" "}
+                <span className="text-slate-500">(optional)</span>
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-2.5 text-slate-500">
+                  <Building2 className="w-4 h-4" />
+                </span>
+                <input
+                  type="text"
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 rounded-lg bg-slate-950/70 border border-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                  placeholder="Ridge41 Holdings"
+                  autoComplete="organization"
+                />
+              </div>
+            </div>
 
-          <button
-            type="submit"
-            disabled={busy}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition"
-          >
-            {busy && (
-              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/50 border-t-transparent" />
-            )}
-            {busy ? "Creatingâ€¦" : "Create account"}
-          </button>
-        </form>
+            {/* Email */}
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-200">
+                Work email
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-2.5 text-slate-500">
+                  <Mail className="w-4 h-4" />
+                </span>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 rounded-lg bg-slate-950/70 border border-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                  placeholder="you@company.com"
+                  autoComplete="email"
+                  required
+                />
+              </div>
+            </div>
 
-        <div className="mt-4 text-center text-sm text-white/80">
+            {/* Password */}
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-200">
+                Password
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-2.5 text-slate-500">
+                  <Lock className="w-4 h-4" />
+                </span>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 rounded-lg bg-slate-950/70 border border-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                  placeholder="At least 8 characters"
+                  autoComplete="new-password"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Confirm password */}
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-slate-200">
+                Confirm password
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-2.5 text-slate-500">
+                  <Lock className="w-4 h-4" />
+                </span>
+                <input
+                  type="password"
+                  value={passwordConfirm}
+                  onChange={(e) => setPasswordConfirm(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 rounded-lg bg-slate-950/70 border border-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                  placeholder="Re-type your password"
+                  autoComplete="new-password"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed text-slate-950 text-sm font-medium px-3 py-2.5 mt-2 transition"
+            >
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Creating your account...
+                </>
+              ) : (
+                <>Create account</>
+              )}
+            </button>
+          </form>
+        </div>
+
+        {/* Footer */}
+        <p className="text-center text-xs text-slate-500">
           Already have an account?{" "}
-          <Link to="/login" className="text-blue-400 underline underline-offset-2">
-            Sign in
+          <Link
+            to="/login"
+            className="text-emerald-400 hover:text-emerald-300 underline-offset-2 hover:underline"
+          >
+            Log in
           </Link>
-        </div>
-
-        <div className="mt-6 text-center text-xs text-white/40">
-          Â© {new Date().getFullYear()} Atlas Command Systems
-        </div>
+        </p>
       </div>
     </div>
   );

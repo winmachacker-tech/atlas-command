@@ -3,6 +3,8 @@ import { Suspense, lazy } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import MainLayout from "./layout/MainLayout.jsx";
 import AuthGuard from "./components/AuthGuard.jsx";
+import MfaAuthGate from "./components/MfaAuthGate.jsx";
+import LoadDrafts from './pages/LoadDrafts';
 
 console.log("App routes version: ai-proof nested");
 
@@ -70,6 +72,15 @@ const AIInsights      = lazy(() =>
   }))
 );
 
+/* NEW: Lane Intelligence page */
+const AiLaneIntelligence = lazy(() =>
+  import("./pages/AiLaneIntelligence.jsx").catch(() => ({
+    default: () => (
+      <div className="p-6">Lane Intelligence (failed to load component)</div>
+    ),
+  }))
+);
+
 export default function App() {
   return (
     <Suspense fallback={<div className="p-6 text-sm">Loading…</div>}>
@@ -81,17 +92,19 @@ export default function App() {
         <Route path="/complete-account" element={<CompleteAccount />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/set-password" element={<SetPassword />} />
-        <Route path="/dev/driver-learning-test" element={<DriverLearningTest />} />
+        <Route
+          path="/dev/driver-learning-test"
+          element={<DriverLearningTest />}
+        />
 
         {/* ---------- DIAGNOSTIC: top-level ai-proof (no layout) ---------- */}
-        {/* This proves the route is matched BEFORE MainLayout. If you hit this and still see Dashboard,
-            something else is redirecting. Keep this temporarily while we verify. */}
         <Route
           path="/ai-proof"
           element={
             <AuthGuard loginPath="/auth">
-              {/* Render AIProof directly without MainLayout */}
-              <AIProof />
+              <MfaAuthGate>
+                <AIProof />
+              </MfaAuthGate>
             </AuthGuard>
           }
         />
@@ -101,7 +114,9 @@ export default function App() {
           path="/"
           element={
             <AuthGuard loginPath="/auth">
-              <MainLayout />
+              <MfaAuthGate>
+                <MainLayout />
+              </MfaAuthGate>
             </AuthGuard>
           }
         >
@@ -109,6 +124,7 @@ export default function App() {
 
           {/* Ops */}
           <Route path="loads" element={<Loads />} />
+          <Route path="load-drafts" element={<LoadDrafts />} />
           <Route path="in-transit" element={<InTransit />} />
           <Route path="delivered" element={<Delivered />} />
           <Route path="drivers" element={<Drivers />} />
@@ -118,19 +134,29 @@ export default function App() {
           {/* Learning */}
           <Route path="learning" element={<DriverLearning />} />
 
-          {/* AI settings */}
+          {/* AI / Lab / Settings */}
           <Route path="dispatch-ai" element={<DispatchAI />} />
-          <Route path="ai" element={<Navigate to="/ai-recommendations" replace />} />
+          <Route
+            path="ai"
+            element={<Navigate to="/ai-recommendations" replace />}
+          />
           <Route path="settings" element={<Settings />} />
           <Route path="teammanagement" element={<TeamManagement />} />
           <Route path="ai-insights" element={<AIInsights />} />
 
+          {/* NEW: Lane Intelligence under AI Lab */}
+          {/* URL: /ai/lanes (matches sidebar NavLink) */}
+          <Route path="ai/lanes" element={<AiLaneIntelligence />} />
+
           {/* Admin segment */}
           <Route path="admin">
-            <Route path="driver-learning-test" element={<DriverLearningTest />} />
+            <Route
+              path="driver-learning-test"
+              element={<DriverLearningTest />}
+            />
           </Route>
 
-          {/* Keep nested ai-proof as well (once verified, you can remove one of them) */}
+          {/* Keep nested ai-proof as well */}
           <Route path="ai-lab-proof" element={<AIProof />} />
         </Route>
 
@@ -139,7 +165,9 @@ export default function App() {
           path="/ai-recommendations"
           element={
             <AuthGuard loginPath="/auth">
-              <AIRecommendations />
+              <MfaAuthGate>
+                <AIRecommendations />
+              </MfaAuthGate>
             </AuthGuard>
           }
         />

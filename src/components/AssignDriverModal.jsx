@@ -1,13 +1,25 @@
 ﻿// src/components/AssignDriverModal.jsx
 import { useEffect, useMemo, useState } from "react";
-import { X, Loader2, UserCheck, AlertTriangle, Search, CheckCircle2, MapPin, Route, Box, Ban, GaugeCircle } from "lucide-react";
+import {
+  X,
+  Loader2,
+  UserCheck,
+  AlertTriangle,
+  Search,
+  CheckCircle2,
+  MapPin,
+  Route,
+  Box,
+  Ban,
+  GaugeCircle,
+} from "lucide-react";
 import { supabase } from "../lib/supabase";
 
 function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
 
-export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
+export default function AssignDriverModal({ load, onClose, onAssigned }) {
   const [drivers, setDrivers] = useState([]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -15,17 +27,19 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(null);
 
-  // ðŸ†• Added: lightweight load details for fit scoring (non-blocking if cols missing)
+  // Lightweight load details for fit scoring (non-blocking if cols missing)
   const [loadInfo, setLoadInfo] = useState(null);
 
-  // ðŸ†• Added: preferences cache keyed by driver_id
+  // Preferences cache keyed by driver_id
   const [prefsByDriver, setPrefsByDriver] = useState({});
 
-  // Fetch ACTIVE drivers (RLS-safe). If your schema has org scoping, add .eq("org_id", <orgId>)
+  const loadId = load?.id ?? null;
+
+  // ------------------------ Fetch drivers ------------------------
   async function fetchDrivers() {
     setLoading(true);
     setErr("");
-    // NOTE: adjust the column list to your schema. We do not assume full_name exists.
+
     const { data, error } = await supabase
       .from("drivers")
       .select("id, first_name, last_name, status, avatar_url")
@@ -37,7 +51,10 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
       setErr(error.message || "Failed to load drivers.");
       setDrivers([]);
     } else {
-      console.log(`[AssignDriverModal] Eligible ACTIVE drivers: ${data?.length ?? 0}`, data);
+      console.log(
+        `[AssignDriverModal] Eligible ACTIVE drivers: ${data?.length ?? 0}`,
+        data
+      );
       setDrivers(data || []);
     }
     setLoading(false);
@@ -57,16 +74,22 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
     });
   }, [drivers, query]);
 
+  // ------------------------ Assign handler ------------------------
   async function handleAssign() {
     if (!selectedId) {
       setErr("Choose a driver to assign.");
       return;
     }
+    if (!loadId) {
+      setErr("Load ID is missing. Please close and reopen this load.");
+      return;
+    }
+
     setBusy(true);
     setErr("");
 
     try {
-      // 1) Safety: ensure the chosen driver is still ACTIVE (RLS may return stale/none)
+      // 1) Safety: ensure the chosen driver is still ACTIVE
       const { data: checkDriver, error: checkErr } = await supabase
         .from("drivers")
         .select("id, status")
@@ -80,30 +103,42 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
         throw new Error("Selected driver is no longer ACTIVE.");
       }
 
-      // 2) Assign on loads table
-      const { error: updLoadErr } = await supabase
+      // 2) Assign on loads table and return the updated row
+      const { data: updatedLoad, error: updLoadErr } = await supabase
         .from("loads")
-        .update({ driver_id: selectedId })
-        .eq("id", loadId);
+        .update({
+          driver_id: selectedId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", loadId)
+        .select(
+          `
+          *,
+          driver:drivers!loads_driver_id_fkey(id, first_name, last_name)
+        `
+        )
+        .single();
 
       if (updLoadErr) {
         throw new Error(`Failed to update load: ${updLoadErr.message}`);
       }
 
-      // 3) Flip driver status to ASSIGNED to reflect the new state
+      // 3) Flip driver status to ASSIGNED (non-fatal if it fails)
       const { error: updDriverErr } = await supabase
         .from("drivers")
         .update({ status: "ASSIGNED" })
         .eq("id", selectedId)
-        .eq("status", "ACTIVE"); // guard: only flip if still ACTIVE
+        .eq("status", "ACTIVE");
 
       if (updDriverErr) {
-        // Not fatal to the assignment, but we should surface it
-        console.warn("[AssignDriverModal] Driver status update warning:", updDriverErr);
+        console.warn(
+          "[AssignDriverModal] Driver status update warning:",
+          updDriverErr
+        );
       }
 
-      // 4) Notify parent + close
-      if (onAssigned) onAssigned({ loadId, driverId: selectedId });
+      // 4) Notify parent with the full updated load row, then close
+      onAssigned?.(updatedLoad);
       onClose?.();
     } catch (e) {
       console.error("[AssignDriverModal] assign error:", e);
@@ -113,11 +148,7 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
     }
   }
 
-  /* =========================================================================
-     ADD-ONLY: Preference-aware fit scoring (no behavior changes required)
-     ========================================================================= */
-
-  // ðŸ†• Fetch minimal load info to compute fit (silently ignore if columns missing)
+  // ------------------------ Load info for fit scoring ------------------------
   useEffect(() => {
     let active = true;
     (async () => {
@@ -131,7 +162,10 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
         if (error) throw error;
         if (active) setLoadInfo(data || null);
       } catch (e) {
-        console.warn("[AssignDriverModal] load info fetch skipped:", e?.message);
+        console.warn(
+          "[AssignDriverModal] load info fetch skipped:",
+          e?.message
+        );
         if (active) setLoadInfo(null);
       }
     })();
@@ -140,7 +174,7 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
     };
   }, [loadId]);
 
-  // ðŸ†• When drivers list is loaded, bulk-fetch their preferences
+  // ------------------------ Driver preferences ------------------------
   useEffect(() => {
     let active = true;
     (async () => {
@@ -159,7 +193,10 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
         for (const row of data || []) map[row.driver_id] = row;
         if (active) setPrefsByDriver(map);
       } catch (e) {
-        console.warn("[AssignDriverModal] driver prefs fetch warning:", e?.message);
+        console.warn(
+          "[AssignDriverModal] driver prefs fetch warning:",
+          e?.message
+        );
         if (active) setPrefsByDriver({});
       }
     })();
@@ -168,7 +205,7 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
     };
   }, [drivers]);
 
-  // ðŸ†• Small pure helpers (duplicated here to avoid cross-file coupling)
+  // ------------------------ Fit helpers ------------------------
   function extractState(cityCommaState) {
     if (!cityCommaState || typeof cityCommaState !== "string") return null;
     const parts = cityCommaState.split(",").map((s) => s.trim());
@@ -176,6 +213,7 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
     const st = maybe.toUpperCase();
     return /^[A-Z]{2}$/.test(st) ? st : null;
   }
+
   function computeDriverLoadFit(prefs, load) {
     if (!prefs || !load) return 0;
     let score = 50; // base
@@ -184,7 +222,9 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
     if (Array.isArray(prefs.preferred_equipment) && prefs.preferred_equipment.length) {
       if (
         load.equipment &&
-        prefs.preferred_equipment.map((s) => s.toLowerCase()).includes(String(load.equipment).toLowerCase())
+        prefs.preferred_equipment
+          .map((s) => s.toLowerCase())
+          .includes(String(load.equipment).toLowerCase())
       ) {
         score += 15;
       } else {
@@ -195,7 +235,9 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
     // Avoid states vs destination
     const dstState = extractState(load.destination);
     if (dstState && Array.isArray(prefs.avoid_states)) {
-      if (prefs.avoid_states.map((s) => s.toUpperCase()).includes(dstState)) score -= 20;
+      if (prefs.avoid_states.map((s) => s.toUpperCase()).includes(dstState)) {
+        score -= 20;
+      }
     }
 
     // Distance
@@ -211,7 +253,6 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
     return Math.max(0, Math.min(100, score));
   }
 
-  // Derive a tiny shape from loadInfo for compute
   const loadBrief = useMemo(() => {
     if (!loadInfo) return null;
     return {
@@ -222,10 +263,12 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
     };
   }, [loadInfo]);
 
+  // ------------------------ Render ------------------------
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/50" onClick={() => onClose?.()} />
+
       {/* Card */}
       <div className="relative z-10 w-full max-w-xl rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-xl">
         <div className="flex items-center justify-between">
@@ -241,7 +284,9 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
         {/* Info / counts */}
         <div className="mt-3 text-sm text-zinc-400">
           Eligible ACTIVE drivers found:{" "}
-          <span className="font-medium text-zinc-200">{loading ? "â€¦" : filtered.length}</span>
+          <span className="font-medium text-zinc-200">
+            {loading ? "…" : filtered.length}
+          </span>
         </div>
 
         {/* Search */}
@@ -251,7 +296,7 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="w-full bg-transparent text-sm outline-none"
-            placeholder="Search drivers by nameâ€¦"
+            placeholder="Search drivers by name…"
           />
         </div>
 
@@ -263,8 +308,8 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
               <div className="font-medium">Something went wrong</div>
               <div className="opacity-90">{err}</div>
               <div className="mt-1 text-xs opacity-70">
-                If this persists, check RLS policies on <code>drivers</code> and that status values
-                match exactly (e.g., <code>ACTIVE</code>).
+                If this persists, check RLS policies on <code>drivers</code> and that
+                status values match exactly (e.g., <code>ACTIVE</code>).
               </div>
             </div>
           </div>
@@ -275,12 +320,13 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
           {loading ? (
             <div className="flex items-center justify-center gap-2 p-6 text-zinc-400">
               <Loader2 className="animate-spin" size={16} />
-              Loading driversâ€¦
+              Loading drivers…
             </div>
           ) : filtered.length === 0 ? (
             <div className="p-4 text-sm text-zinc-400">
-              No ACTIVE drivers visible. This is often due to RLS scope. Ensure at least one driver
-              is <span className="text-zinc-200">ACTIVE</span> and visible to your session.
+              No ACTIVE drivers visible. This is often due to RLS scope. Ensure at
+              least one driver is <span className="text-zinc-200">ACTIVE</span> and
+              visible to your session.
             </div>
           ) : (
             <ul className="divide-y divide-zinc-800">
@@ -288,7 +334,6 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
                 const name = `${d.first_name ?? ""} ${d.last_name ?? ""}`.trim();
                 const selected = selectedId === d.id;
 
-                // ðŸ†• Add-on: compute a non-blocking Fit score + snapshot badges (no behavior change)
                 const prefs = prefsByDriver[d.id];
                 const fit = loadBrief ? computeDriverLoadFit(prefs, loadBrief) : null;
 
@@ -312,10 +357,12 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
                           {name ? name[0]?.toUpperCase() : "D"}
                         </div>
                       )}
+
                       <div className="flex-1">
                         <div className="flex items-center justify-between">
-                          <div className="text-sm font-medium text-zinc-100">{name || d.id}</div>
-                          {/* ðŸ†• Fit pill (shown only if we have load + prefs) */}
+                          <div className="text-sm font-medium text-zinc-100">
+                            {name || d.id}
+                          </div>
                           {Number.isFinite(fit) ? (
                             <span className="ml-2 inline-flex items-center gap-1 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-300">
                               <GaugeCircle className="h-3.5 w-3.5" />
@@ -323,9 +370,10 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
                             </span>
                           ) : null}
                         </div>
-                        <div className="mt-0.5 text-xs text-zinc-400">Status: ACTIVE</div>
+                        <div className="mt-0.5 text-xs text-zinc-400">
+                          Status: ACTIVE
+                        </div>
 
-                        {/* ðŸ†• Snapshot badges (optional, quiet) */}
                         {prefs ? (
                           <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-zinc-300">
                             {prefs.home_base ? (
@@ -334,13 +382,15 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
                                 {prefs.home_base}
                               </span>
                             ) : null}
-                            {Array.isArray(prefs.preferred_equipment) && prefs.preferred_equipment.length ? (
+                            {Array.isArray(prefs.preferred_equipment) &&
+                            prefs.preferred_equipment.length ? (
                               <span className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-0.5">
                                 <Box className="h-3.5 w-3.5" />
                                 {prefs.preferred_equipment.join(", ")}
                               </span>
                             ) : null}
-                            {Array.isArray(prefs.avoid_states) && prefs.avoid_states.length ? (
+                            {Array.isArray(prefs.avoid_states) &&
+                            prefs.avoid_states.length ? (
                               <span className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-0.5">
                                 <Ban className="h-3.5 w-3.5" />
                                 Avoid: {prefs.avoid_states.join(", ")}
@@ -355,7 +405,10 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
                           </div>
                         ) : null}
                       </div>
-                      {selected ? <CheckCircle2 className="text-emerald-400" size={18} /> : null}
+
+                      {selected ? (
+                        <CheckCircle2 className="text-emerald-400" size={18} />
+                      ) : null}
                     </button>
                   </li>
                 );
@@ -390,4 +443,3 @@ export default function AssignDriverModal({ loadId, onClose, onAssigned }) {
     </div>
   );
 }
-

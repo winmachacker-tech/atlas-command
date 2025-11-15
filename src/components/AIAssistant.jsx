@@ -3,6 +3,7 @@
 // - Uses your existing Tailwind/Lucide stack
 // - No external deps, mounts anywhere in your layout
 // - Opinionated system prompt for freight/dispatch operations
+// 🎯 Now with Dipsy integration!
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -19,6 +20,7 @@ import {
   ArrowDown,
 } from "lucide-react";
 import useAIStream from "../hooks/useAIStream";
+import { useDipsy } from "../layout/MainLayout"; // 🎯 Add Dipsy
 
 function cx(...a) {
   return a.filter(Boolean).join(" ");
@@ -73,6 +75,8 @@ const SUGGESTIONS = [
 ];
 
 export default function AIAssistant({ className = "" }) {
+  const dipsy = useDipsy(); // 🎯 Dipsy control
+  
   const [input, setInput] = useState("");
   const [system, setSystem] = useState(DEFAULT_SYSTEM_PROMPT.trim());
   const [showSettings, setShowSettings] = useState(false);
@@ -93,6 +97,22 @@ export default function AIAssistant({ className = "" }) {
   const scrollRef = useRef(null);
   const outRef = useRef(null);
 
+  // 🎯 Dipsy reactions to streaming state
+  useEffect(() => {
+    if (isStreaming) {
+      dipsy.setThinking();
+    } else if (output && !error) {
+      // AI finished responding successfully
+      dipsy.setLightbulb();
+      // Return to idle after 2 seconds
+      const timer = setTimeout(() => dipsy.setIdle(), 2000);
+      return () => clearTimeout(timer);
+    } else if (error) {
+      // Error occurred, back to idle
+      dipsy.setIdle();
+    }
+  }, [isStreaming, output, error, dipsy]);
+
   // Auto-scroll when streaming
   useEffect(() => {
     if (!stickyScroll) return;
@@ -107,6 +127,15 @@ export default function AIAssistant({ className = "" }) {
     const prompt = (text ?? input).trim();
     if (!prompt) return;
     setInput("");
+    
+    // 🎯 Wake Dipsy if sleeping, then start thinking
+    if (dipsy.state === 'sleeping') {
+      dipsy.setIdle();
+      setTimeout(() => dipsy.setThinking(), 300);
+    } else {
+      dipsy.setThinking();
+    }
+    
     await send({
       prompt,
       system,
@@ -122,6 +151,9 @@ export default function AIAssistant({ className = "" }) {
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(output || "");
+      // 🎯 Little celebration for copying
+      dipsy.setCelebrating();
+      setTimeout(() => dipsy.setIdle(), 1500);
     } catch {
       // ignore
     }
@@ -138,6 +170,16 @@ export default function AIAssistant({ className = "" }) {
       if (maybeUser?.role === "user") trimmed.pop();
     }
     setHistory(trimmed);
+    
+    // 🎯 Dipsy acknowledges the undo
+    dipsy.setIdle();
+  };
+
+  const handleClear = () => {
+    reset();
+    setHistory([]);
+    // 🎯 Back to idle on clear
+    dipsy.setIdle();
   };
 
   const OutputHeader = useMemo(
@@ -172,10 +214,7 @@ export default function AIAssistant({ className = "" }) {
             Copy
           </button>
           <button
-            onClick={() => {
-              reset();
-              setHistory([]);
-            }}
+            onClick={handleClear}
             className="inline-flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-900"
             title="Clear"
             type="button"
@@ -195,7 +234,7 @@ export default function AIAssistant({ className = "" }) {
         </div>
       </div>
     ),
-    [handleCopy, reset, setHistory]
+    [handleCopy, handleClear, handleUndo]
   );
 
   return (
@@ -285,7 +324,7 @@ export default function AIAssistant({ className = "" }) {
         {isStreaming && (
           <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 px-2 py-1 text-xs text-zinc-400">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Streamingâ€¦
+            Streaming…
           </div>
         )}
 
@@ -319,7 +358,7 @@ export default function AIAssistant({ className = "" }) {
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask Dispatch AIâ€¦ (e.g., 'Draft a customer update for Load 12345 with a 30 min delay')"
+            placeholder="Ask Dispatch AI… (e.g., 'Draft a customer update for Load 12345 with a 30 min delay')"
             rows={2}
             className="min-h-[44px] w-full resize-y rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
             onKeyDown={(e) => {
@@ -367,4 +406,3 @@ export default function AIAssistant({ className = "" }) {
     </div>
   );
 }
-

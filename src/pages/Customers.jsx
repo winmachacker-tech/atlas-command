@@ -1,6 +1,6 @@
 // FILE: src/pages/Customers.jsx
 // Purpose: Lane training overview + working "Train AI" button + inline trainer per lane,
-// with robust fallbacks (no non-existent RPCs), clearer errors, and same UI.
+// scoped by org via Postgres RLS on AI tables.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
@@ -41,9 +41,9 @@ function parseLane(laneKey) {
   const arrow = laneKey.includes("→") ? "→" : laneKey.includes("->") ? "->" : null;
   if (!arrow) return { origin_city: null, origin_state: null, dest_city: null, dest_state: null };
 
-  const [left, right] = laneKey.split(arrow).map(s => s.trim());
-  const [oc, os] = (left || "").split(",").map(s => s.trim());
-  const [dc, ds] = (right || "").split(",").map(s => s.trim());
+  const [left, right] = laneKey.split(arrow).map((s) => s.trim());
+  const [oc, os] = (left || "").split(",").map((s) => s.trim());
+  const [dc, ds] = (right || "").split(",").map((s) => s.trim());
   return {
     origin_city: oc || null,
     origin_state: os || null,
@@ -82,44 +82,7 @@ function useToast() {
   return { show, ToastView: View };
 }
 
-/* ---------------- RPC helper (no bogus fallbacks) ---------------- */
-async function callRpcWithFallback(nameVariants, argVariants = [undefined]) {
-  const overloadMsg = "Could not choose the best candidate function";
-  const notFoundHints = [
-    "does not exist",
-    "schema cache",
-    "Could not find the function",
-    "PGRST301",
-  ];
-  let lastErr = null;
-
-  for (const name of nameVariants) {
-    for (const args of argVariants) {
-      try {
-        const resp = args === undefined
-          ? await supabase.rpc(name)
-          : await supabase.rpc(name, args);
-
-        if (resp.error) {
-          const msg = String(resp.error.message || "");
-          if (msg.includes(overloadMsg)) { lastErr = resp.error; continue; }
-          if (notFoundHints.some(h => msg.includes(h))) { lastErr = resp.error; break; }
-          throw resp.error;
-        }
-        return resp; // success
-      } catch (e) {
-        const msg = String(e.message || "");
-        if (msg.includes(overloadMsg)) { lastErr = e; continue; }
-        if (notFoundHints.some(h => msg.includes(h))) { lastErr = e; break; }
-        lastErr = e;
-      }
-    }
-  }
-  if (lastErr) throw lastErr;
-  throw new Error("RPC failed with all fallbacks.");
-}
-
-/* ----------------- lightweight lane trainer (inline) ------------- */
+/* ----------------- inline lane trainer --------------------------- */
 function LaneInlineTrainer({ laneKey, customerId = null, shipper = "Unknown", limit = 3 }) {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
@@ -147,12 +110,14 @@ function LaneInlineTrainer({ laneKey, customerId = null, shipper = "Unknown", li
     }
   }, [laneKey, limit]);
 
-  useEffect(() => { refetch(); }, [refetch]);
+  useEffect(() => {
+    refetch();
+  }, [refetch]);
 
   // Resolve driver names if not included
   useEffect(() => {
-    const ids = rows.map(r => r.driver_id).filter(Boolean);
-    const missing = ids.filter(id => !driverMeta[id]);
+    const ids = rows.map((r) => r.driver_id).filter(Boolean);
+    const missing = ids.filter((id) => !driverMeta[id]);
     if (!missing.length) return;
 
     (async () => {
@@ -162,9 +127,14 @@ function LaneInlineTrainer({ laneKey, customerId = null, shipper = "Unknown", li
         .in("id", missing);
 
       if (!error && Array.isArray(data)) {
-        setDriverMeta(prev => {
+        setDriverMeta((prev) => {
           const next = { ...prev };
-          for (const r of data) next[r.id] = { full_name: r.full_name || "", phone: r.phone || "" };
+          for (const r of data) {
+            next[r.id] = {
+              full_name: r.full_name || "",
+              phone: r.phone || "",
+            };
+          }
           return next;
         });
       }
@@ -218,7 +188,8 @@ function LaneInlineTrainer({ laneKey, customerId = null, shipper = "Unknown", li
       {SHOW_CREATE_BUTTONS && (
         <div className="mb-3 flex items-center justify-between gap-2">
           <div className="text-xs text-zinc-400">
-            Top drivers for <span className="text-zinc-200 font-medium">{laneKey}</span>
+            Top drivers for{" "}
+            <span className="text-zinc-200 font-medium">{laneKey}</span>
           </div>
 
           <div className="flex items-center gap-2">
@@ -240,7 +211,9 @@ function LaneInlineTrainer({ laneKey, customerId = null, shipper = "Unknown", li
               )}
               title="Create Load (direct RPC)"
             >
-              <PlayCircle className={cx("w-3.5 h-3.5", creating && "animate-pulse")} />
+              <PlayCircle
+                className={cx("w-3.5 h-3.5", creating && "animate-pulse")}
+              />
               {creating ? "Creating…" : "Create Load (direct)"}
             </button>
           </div>
@@ -249,11 +222,17 @@ function LaneInlineTrainer({ laneKey, customerId = null, shipper = "Unknown", li
 
       {createMsg && <div className="mb-2 text-xs text-zinc-400">{createMsg}</div>}
       {loading && <div className="text-xs text-zinc-400">Loading top drivers…</div>}
-      {err && <div className="text-xs text-rose-400">{String(err.message || err)}</div>}
+      {err && (
+        <div className="text-xs text-rose-400">
+          {String(err.message || err)}
+        </div>
+      )}
 
       {!loading && rows.length === 0 && (
         <div className="text-xs text-zinc-400">
-          No AI signals yet for <span className="text-zinc-200 font-medium">{laneKey}</span>. Click 👍/👎 to start training.
+          No AI signals yet for{" "}
+          <span className="text-zinc-200 font-medium">{laneKey}</span>. Click 👍/👎
+          to start training.
         </div>
       )}
 
@@ -264,13 +243,18 @@ function LaneInlineTrainer({ laneKey, customerId = null, shipper = "Unknown", li
             className="flex items-center justify-between rounded-xl border border-zinc-800/70 bg-zinc-900/40 px-3 py-2"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-6 text-zinc-500 text-xs tabular-nums">{idx + 1}</div>
+              <div className="w-6 text-zinc-500 text-xs tabular-nums">
+                {idx + 1}
+              </div>
               <div className="min-w-0">
                 <div className="text-sm text-zinc-100 font-medium truncate">
-                  {driverMeta[r.driver_id]?.full_name || r.driver_name || r.driver_id}
+                  {driverMeta[r.driver_id]?.full_name ||
+                    r.driver_name ||
+                    r.driver_id}
                 </div>
                 <div className="text-xs text-zinc-400">
-                  Score {num(r.fit_score, r.score)} • 👍 {num(r.up_events)} • 👎 {num(r.down_events)}
+                  Score {num(r.fit_score, r.score)} • 👍 {num(r.up_events)} • 👎{" "}
+                  {num(r.down_events)}
                 </div>
               </div>
             </div>
@@ -303,6 +287,7 @@ export default function Customers() {
 
   // Signal map (lane-level AI feedback totals)
   const [signalMap, setSignalMap] = useState({});
+
   const fetchSignals = useCallback(async () => {
     try {
       const { data, error } = await supabase.rpc("rpc_ai_lane_signal_totals");
@@ -311,7 +296,11 @@ export default function Customers() {
       if (Array.isArray(data)) {
         for (const r of data) {
           // normalize key just like fn_norm_lane does
-          const norm = (r.lane_key || "").toLowerCase().replace(/^lane\s+/, "").replace(/->/g, "→").trim();
+          const norm = (r.lane_key || "")
+            .toLowerCase()
+            .replace(/^lane\s+/, "")
+            .replace(/->/g, "→")
+            .trim();
           map[norm] = { up: r.up_total || 0, down: r.down_total || 0 };
         }
       }
@@ -324,11 +313,11 @@ export default function Customers() {
   const fetchRows = useCallback(async () => {
     setLoading(true);
     try {
-      const resp = await callRpcWithFallback(
-        ["rpc_ai_customer_training", "rpc_ai_customer_overview", "rpc_ai_customer_training_view"],
-        [{ limit_rows: 1000 }, undefined]
-      );
-      const { data } = resp;
+      // *** key piece: this RPC is now org-scoped via org_id + RLS ***
+      const { data, error } = await supabase.rpc("rpc_ai_customer_training", {
+        limit_rows: 5000, // you can bump this if you want more
+      });
+      if (error) throw error;
       setRows(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error(e);
@@ -339,27 +328,32 @@ export default function Customers() {
   }, [show]);
 
   // Load data & signal totals on mount
-  useEffect(() => { fetchRows(); }, [fetchRows]);
-  useEffect(() => { fetchSignals(); }, [fetchSignals]);
+  useEffect(() => {
+    fetchRows();
+  }, [fetchRows]);
+  useEffect(() => {
+    fetchSignals();
+  }, [fetchSignals]);
 
   async function handleTrainAI() {
     if (training) return;
     setTraining(true);
     setTrainStep("backfilling");
     try {
-      // Call YOUR backfill RPC first without args (uses default), then with p_lane_key:null
-      const backfillResp = await callRpcWithFallback(
-        ["rpc_ai_backfill_examples_from_raw"],
-        [undefined, { p_lane_key: null }]
-      );
-      const inserted = Number(backfillResp?.data ?? 0);
+      // Backfill examples for THIS org (RLS / org_id handles scoping)
+      const { data: backfillData, error: backfillError } =
+        await supabase.rpc("rpc_ai_backfill_examples_from_raw", {
+          p_lane_key: null,
+        });
+      if (backfillError) throw backfillError;
+      const inserted = Number(backfillData ?? 0);
 
       setTrainStep("retraining");
 
-      await callRpcWithFallback(
-        ["rpc_ai_retrain", "rpc_ai_train", "rpc_ai_fit"],
-        [undefined, { p_force: true }]
-      );
+// Call retrain with NO arguments – matches rpc_ai_retrain() in Postgres
+const { error: retrainError } = await supabase.rpc("rpc_ai_retrain");
+if (retrainError) throw retrainError;
+
 
       // Refresh both grids and signal totals after train
       await fetchRows();
@@ -402,17 +396,23 @@ export default function Customers() {
       {/* Header */}
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs">🧠</span>
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs">
+            🧠
+          </span>
           <h1 className="text-xl font-semibold text-zinc-100">Customers</h1>
 
           {/* Training status pill */}
           <div
             className={cx(
               "ml-3 text-xs px-2 py-1 rounded-md border transition",
-              trainStep === "idle"       && "border-zinc-700/60 text-zinc-400",
-              trainStep === "backfilling"&& "border-sky-600/40 text-sky-200 bg-sky-500/10",
-              trainStep === "retraining" && "border-violet-600/40 text-violet-200 bg-violet-500/10",
-              trainStep === "done"       && "border-emerald-600/40 text-emerald-200 bg-emerald-500/10"
+              trainStep === "idle" &&
+                "border-zinc-700/60 text-zinc-400",
+              trainStep === "backfilling" &&
+                "border-sky-600/40 text-sky-200 bg-sky-500/10",
+              trainStep === "retraining" &&
+                "border-violet-600/40 text-violet-200 bg-violet-500/10",
+              trainStep === "done" &&
+                "border-emerald-600/40 text-emerald-200 bg-emerald-500/10"
             )}
             title="Training progress"
           >
@@ -429,7 +429,9 @@ export default function Customers() {
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60"
             title="Refresh"
           >
-            <RefreshCw className={cx("w-4 h-4", loading && "animate-spin")} />
+            <RefreshCw
+              className={cx("w-4 h-4", loading && "animate-spin")}
+            />
             Refresh
           </button>
 
@@ -443,7 +445,9 @@ export default function Customers() {
             )}
             title="Train AI with historical + raw data"
           >
-            <PlayCircle className={cx("w-4 h-4", training && "animate-pulse")} />
+            <PlayCircle
+              className={cx("w-4 h-4", training && "animate-pulse")}
+            />
             {training ? "Training…" : "Train AI"}
           </button>
         </div>
@@ -485,7 +489,11 @@ export default function Customers() {
 
         <div className="divide-y divide-zinc-800/70">
           {filtered.map((r, i) => {
-            const label = firstKey(r, ["lane_key", "customer", "customer_name", "name", "title"], "");
+            const label = firstKey(
+              r,
+              ["lane_key", "customer", "customer_name", "name", "title"],
+              ""
+            );
             const isOpen = !!open[label];
             const laneLabel = label || "—";
             const laneKey = label || null;
@@ -493,13 +501,22 @@ export default function Customers() {
             const recent90 = num(r.recent_90d, r.recent90, r.recent);
             const total = num(r.total_rows, r.total, r.count);
 
-            const normLane = laneLabel.toLowerCase().replace(/^lane\s+/, "").replace(/->/g, "→").trim();
+            const normLane = laneLabel
+              .toLowerCase()
+              .replace(/^lane\s+/, "")
+              .replace(/->/g, "→")
+              .trim();
             const sig = signalMap[normLane] || {};
-            const upSig = sig.up ?? num(r.up_signals, r.ups, r.up_count, r.upvotes);
-            const downSig = sig.down ?? num(r.down_signals, r.downs, r.down_count, r.downvotes);
+            const upSig =
+              sig.up ?? num(r.up_signals, r.ups, r.up_count, r.upvotes);
+            const downSig =
+              sig.down ?? num(r.down_signals, r.downs, r.down_count, r.downvotes);
 
-            const shipper =
-              firstKey(r, ["customer_name", "customer", "name", "title", "shipper_name", "shipper"], "Unknown");
+            const shipper = firstKey(
+              r,
+              ["customer_name", "customer", "name", "title", "shipper_name", "shipper"],
+              "Unknown"
+            );
 
             return (
               <div key={`${laneLabel}-${i}`} className="group">
@@ -511,11 +528,17 @@ export default function Customers() {
                 >
                   {/* expand/collapse */}
                   <button
-                    onClick={() => setOpen((o) => ({ ...o, [laneLabel]: !isOpen }))}
+                    onClick={() =>
+                      setOpen((o) => ({ ...o, [laneLabel]: !isOpen }))
+                    }
                     className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-zinc-800/60 hover:bg-zinc-900/60"
                     title={isOpen ? "Hide trainer" : "Show trainer"}
                   >
-                    {isOpen ? <ChevronDown className="w-4 h-4 text-zinc-300" /> : <ChevronRight className="w-4 h-4 text-zinc-300" />}
+                    {isOpen ? (
+                      <ChevronDown className="w-4 h-4 text-zinc-300" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4 text-zinc-300" />
+                    )}
                   </button>
 
                   {/* lane / customer */}
@@ -527,7 +550,9 @@ export default function Customers() {
                   <div className="text-center text-zinc-500">—</div>
                   <div className="text-center tabular-nums">{recent90}</div>
                   <div className="text-center tabular-nums">{total}</div>
-                  <div className="text-center tabular-nums">{pct(r.avg_margin)}</div>
+                  <div className="text-center tabular-nums">
+                    {pct(r.avg_margin)}
+                  </div>
                   <div className="text-center text-zinc-500">—</div>
 
                   <div className="flex items-center justify-center gap-2">
@@ -555,7 +580,7 @@ export default function Customers() {
       </div>
 
       <div className="mt-2 text-xs text-zinc-500">
-        Data via <code>rpc_ai_customer_training</code> (with fallbacks) • Last refresh:{" "}
+        Data via <code>rpc_ai_customer_training</code> • Last refresh:{" "}
         {new Date().toLocaleString()}
       </div>
     </div>

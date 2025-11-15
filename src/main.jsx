@@ -17,6 +17,7 @@ import { ThemeProvider } from "./context/ThemeProvider.jsx";
 /* Lazy pages */
 const Dashboard         = lazy(() => import("./pages/Dashboard.jsx"));
 const Loads             = lazy(() => import("./pages/Loads.jsx"));
+const LoadDrafts        = lazy(() => import("./pages/LoadDrafts.jsx")); // 👈 Added
 const LoadDetails       = lazy(() => import("./pages/LoadDetails.jsx"));
 const InTransit         = lazy(() => import("./pages/InTransit.jsx"));
 const Delivered         = lazy(() => import("./pages/Delivered.jsx"));
@@ -37,6 +38,9 @@ const Login             = lazy(() => import("./pages/Login.jsx"));
 const Signup            = lazy(() => import("./pages/Signup.jsx"));
 const Customers         = lazy(() => import("./pages/Customers.jsx"));
 const CustomerDetail    = lazy(() => import("./pages/CustomerDetail.jsx"));
+const Audit = lazy(() => import("./pages/Audit.jsx"));
+const AiLaneIntelligence = lazy(() => import("./pages/AiLaneIntelligence.jsx"));
+
 
 // AI & Learning pages
 const DispatchAI        = lazy(() => import("./pages/DispatchAI.jsx").catch(() => ({ default: () => <div className="p-6">Dispatch AI (Lab) - Coming soon</div> })));
@@ -55,6 +59,7 @@ function AppRoutes() {
             <Suspense fallback={null}>
               <Routes>
                 {/* PUBLIC ROUTES - No Auth Required */}
+                <Route path="/auth" element={<Navigate to="/login" replace />} />
                 <Route path="/login" element={<Login />} />
                 <Route path="/signup" element={<Signup />} />
 
@@ -66,6 +71,7 @@ function AppRoutes() {
                   {/* Ops */}
                   <Route path="loads" element={<Loads />} />
                   <Route path="loads/:id" element={<LoadDetails />} />
+                  <Route path="load-drafts" element={<LoadDrafts />} /> {/* 👈 Added */}
                   <Route path="in-transit" element={<InTransit />} />
                   <Route path="delivered" element={<Delivered />} />
                   <Route path="drivers" element={<Drivers />} />
@@ -87,7 +93,8 @@ function AppRoutes() {
                   <Route path="ai-recommendations" element={<AIRecommendations />} />
                   <Route path="ai-insights" element={<AIInsights />} />
                   <Route path="ai-lab-proof" element={<AILabProof />} />
-
+                  <Route path="/audit" element={<Audit />} />
+                  <Route path="ai/lanes" element={<AiLaneIntelligence />} />
                   {/* Admin */}
                   <Route path="admin/driver-learning-test" element={<DriverLearningTest />} />
 

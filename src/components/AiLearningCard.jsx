@@ -1,236 +1,251 @@
 // FILE: src/components/AiLearningCard.jsx
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+// Purpose: AI Learning Proof card (dashboard)
+// - NOW: uses ONLY RLS-safe views (no RPCs) for multi-tenant safety.
+//   Source priority: v_ai_learning_summary_7d -> v_ai_learning_summary
+// - Normalizes fields into: total_votes, up_events, down_events, tracked_drivers, last_signal_ts
+// - % = ups / (ups + downs)
+// - Shows mismatch hint when total_votes !== (ups + downs)
+// - Safe date/number formatting, zero-division protection
+
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
-  BrainCircuit,
-  RefreshCw,
+  LayoutDashboard,
   CheckCircle2,
+  ArrowUp,
+  ArrowDown,
+  Users,
   AlertCircle,
-  ThumbsUp,
-  ThumbsDown,
-  Activity,
 } from "lucide-react";
 
-/** Simple time formatter */
-function fmtDateTime(ts) {
-  if (!ts) return "—";
+/* ---------------------------- helpers ---------------------------- */
+function cx(...a) {
+  return a.filter(Boolean).join(" ");
+}
+function num(n) {
+  const x = Number(n);
+  return Number.isFinite(x) ? x.toLocaleString() : "—";
+}
+function fmtDate(d) {
+  if (!d) return "—";
   try {
-    const d = new Date(ts);
-    return d.toLocaleString();
+    const t = new Date(d);
+    return Number.isNaN(t.getTime()) ? "—" : t.toLocaleString();
   } catch {
-    return String(ts);
+    return "—";
   }
 }
+function pct(n) {
+  if (!Number.isFinite(n)) return "0.0%";
+  return `${(n * 100).toFixed(1)}%`;
+}
+function firstRow(data) {
+  if (!data) return null;
+  if (Array.isArray(data)) return data[0] ?? null;
+  if (typeof data === "object") return data;
+  return null;
+}
 
+/** Map any supported shape (7d or base) -> normalized fields */
+function normalizeSummary(raw) {
+  if (!raw || typeof raw !== "object") {
+    return {
+      total_votes: 0,
+      up_events: 0,
+      down_events: 0,
+      tracked_drivers: 0,
+      last_signal_ts: null,
+      source: "none",
+    };
+  }
+
+  // 7d shape
+  if ("total_events_7d" in raw || "ups_7d" in raw || "downs_7d" in raw) {
+    return {
+      total_votes: Number(raw.total_events_7d ?? 0),
+      up_events: Number(raw.ups_7d ?? 0),
+      down_events: Number(raw.downs_7d ?? 0),
+      tracked_drivers: Number(raw.unique_drivers_7d ?? 0),
+      last_signal_ts: raw.last_event_7d ?? raw.first_event_7d ?? null,
+      source: "7d",
+    };
+  }
+
+  // Base shape
+  return {
+    total_votes: Number(raw.total_votes ?? 0),
+    up_events: Number(raw.up_events ?? 0),
+    down_events: Number(raw.down_events ?? 0),
+    tracked_drivers: Number(raw.tracked_drivers ?? 0),
+    last_signal_ts: raw.last_signal_ts ?? null,
+    source: "base",
+  };
+}
+
+/* ---------------------------- component -------------------------- */
 export default function AiLearningCard() {
   const [loading, setLoading] = useState(true);
-  const [top, setTop] = useState([]); // top rows from v_ai_learning_proof
-  const [totals, setTotals] = useState({ upTotal: 0, downTotal: 0, lastUpdated: null, drivers: 0, totalVotes: 0 });
-  const [error, setError] = useState("");
-  const subRef = useRef(null);
+  const [err, setErr] = useState("");
+  const [norm, setNorm] = useState(null);
 
-  const loadData = useCallback(async () => {
-    setError("");
-    setLoading(true);
-    try {
-      // 1) Top leaderboard (fit_score desc)
-      const { data: topRows, error: topErr } = await supabase
-        .from("v_ai_learning_proof")
-        .select("*")
-        .order("fit_score", { ascending: false })
-        .limit(5);
+  useEffect(() => {
+    let cancelled = false;
 
-      if (topErr) throw topErr;
+    async function fetchSummary() {
+      setLoading(true);
+      setErr("");
 
-      // 2) Global totals from driver_fit_scores (sum up/down’s client side)
-      const { data: scoreRows, error: scoreErr } = await supabase
-        .from("driver_fit_scores")
-        .select("driver_id, up_events, down_events, updated_at");
+      try {
+        let data = null;
 
-      if (scoreErr) throw scoreErr;
+        // 1) 7-day View (preferred, RLS-safe)
+        {
+          const { data: d, error } = await supabase
+            .from("v_ai_learning_summary_7d")
+            .select("*")
+            .limit(1)
+            .maybeSingle();
 
-      // Aggregate
-      let upTotal = 0;
-      let downTotal = 0;
-      let lastUpdated = null;
-      let drivers = 0;
-      for (const r of scoreRows || []) {
-        upTotal += Number(r.up_events || 0);
-        downTotal += Number(r.down_events || 0);
-        drivers += 1;
-        const t = r.updated_at ? new Date(r.updated_at).getTime() : 0;
-        if (t && (!lastUpdated || t > lastUpdated)) lastUpdated = t;
+          if (!error && d) {
+            data = d;
+          }
+        }
+
+        // 2) Base View (fallback, RLS-safe)
+        if (!data) {
+          const { data: d, error } = await supabase
+            .from("v_ai_learning_summary")
+            .select("*")
+            .limit(1)
+            .maybeSingle();
+
+          if (!error && d) {
+            data = d;
+          }
+        }
+
+        if (!data) {
+          // No data at all – treat as zeroed summary
+          if (!cancelled) {
+            setNorm(
+              normalizeSummary({
+                total_events_7d: 0,
+                ups_7d: 0,
+                downs_7d: 0,
+                unique_drivers_7d: 0,
+                last_event_7d: null,
+              }),
+            );
+          }
+        } else {
+          const row = firstRow(data);
+          const normalized = normalizeSummary(row);
+          if (!cancelled) setNorm(normalized);
+        }
+      } catch (e) {
+        console.error("[AiLearningCard] fetchSummary error:", e);
+        if (!cancelled) setErr(e.message || String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      // If we also want totalVotes quickly, sum from the topRows? That only has 5 rows.
-      // Better: quick small fetch of all v_ai_learning_proof and reduce total_votes.
-      const { data: allProof, error: proofErr } = await supabase
-        .from("v_ai_learning_proof")
-        .select("total_votes,last_vote,driver_id");
-      if (proofErr) throw proofErr;
-
-      const totalVotes = (allProof || []).reduce((acc, r) => acc + Number(r.total_votes || 0), 0);
-      // lastUpdated: consider proof last_vote too
-      for (const r of allProof || []) {
-        const t = r.last_vote ? new Date(r.last_vote).getTime() : 0;
-        if (t && (!lastUpdated || t > lastUpdated)) lastUpdated = t;
-      }
-
-      setTop(topRows || []);
-      setTotals({
-        upTotal,
-        downTotal,
-        lastUpdated: lastUpdated ? new Date(lastUpdated).toISOString() : null,
-        drivers,
-        totalVotes,
-      });
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error("AiLearningCard loadData error:", e);
-      setError(e?.message || "Failed to load learning proof.");
-    } finally {
-      setLoading(false);
     }
+
+    fetchSummary();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Initial load
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  const total_votes = norm?.total_votes ?? 0;
+  const up_events = norm?.up_events ?? 0;
+  const down_events = norm?.down_events ?? 0;
+  const tracked_drivers = norm?.tracked_drivers ?? 0;
+  const last_signal_ts = norm?.last_signal_ts ?? null;
 
-  // Realtime: refresh when a new driver_feedback is inserted
-  useEffect(() => {
-    try {
-      subRef.current = supabase
-        .channel("ai-learning-proof:driver_feedback")
-        .on(
-          "postgres_changes",
-          { event: "INSERT", schema: "public", table: "driver_feedback" },
-          () => {
-            // Light debounce to avoid spamming reloads on bursts
-            const id = setTimeout(loadData, 300);
-            return () => clearTimeout(id);
-          }
-        )
-        .subscribe();
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("Realtime subscription failed (AiLearningCard):", e);
-    }
-    return () => {
-      try {
-        if (subRef.current) supabase.removeChannel(subRef.current);
-      } catch {}
-    };
-  }, [loadData]);
+  // % from only up/down
+  const voteEvents = (Number(up_events) || 0) + (Number(down_events) || 0);
+  const upRate =
+    voteEvents > 0 ? (Number(up_events) || 0) / voteEvents : 0;
 
-  const upRate = useMemo(() => {
-    const denom = totals.upTotal + totals.downTotal;
-    if (!denom) return 0;
-    return Math.round((totals.upTotal / denom) * 1000) / 10; // one decimal
-  }, [totals]);
+  const mismatch = useMemo(() => {
+    const tv = Number(total_votes) || 0;
+    return tv !== voteEvents && (tv > 0 || voteEvents > 0);
+  }, [total_votes, voteEvents]);
 
   return (
-    <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/60 p-4 md:p-5 shadow-sm">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
-            <BrainCircuit className="w-5 h-5" />
+    <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950 p-4 md:p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <div className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500/10">
+          <LayoutDashboard className="h-4 w-4 text-emerald-400" />
+        </div>
+        <div>
+          <div className="text-sm text-zinc-400 tracking-wide">
+            AI LEARNING PROOF
           </div>
-          <div>
-            <div className="text-sm uppercase tracking-wider text-zinc-400">AI Learning Proof</div>
-            <div className="text-base md:text-lg font-semibold">Real-time driver fit learning</div>
+          <div className="text-lg md:text-xl font-semibold text-zinc-100">
+            Real-time driver fit learning
           </div>
         </div>
-        <button
-          onClick={loadData}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-zinc-700 hover:border-zinc-600 bg-zinc-800/60 text-sm"
-          title="Refresh"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Refresh
-        </button>
       </div>
 
-      {/* Status / Errors */}
-      <div className="mt-3">
-        {error ? (
-          <div className="flex items-start gap-2 text-amber-300 bg-amber-900/20 border border-amber-700/40 rounded-lg p-3">
-            <AlertCircle className="w-4 h-4 mt-0.5" />
-            <div className="text-sm">{error}</div>
+      {/* Stat tiles */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+        <StatTile
+          icon={CheckCircle2}
+          label="Total Votes"
+          value={loading ? "…" : num(total_votes)}
+        />
+        <StatTile
+          icon={ArrowUp}
+          label="Up Events"
+          value={loading ? "…" : num(up_events)}
+        />
+        <StatTile
+          icon={ArrowDown}
+          label="Down Events"
+          value={loading ? "…" : num(down_events)}
+        />
+        <StatTile
+          icon={Users}
+          label="Tracked Drivers"
+          value={loading ? "…" : num(tracked_drivers)}
+        />
+      </div>
+
+      {/* Global Up-Rate */}
+      <div className="mt-5 rounded-xl border border-zinc-800/60 bg-zinc-950/60 p-4">
+        <div className="text-sm text-zinc-400 mb-1">Global Up-Rate</div>
+        <div className="flex items-end justify-between">
+          <div className="text-3xl font-bold text-zinc-100">
+            {loading ? "…" : pct(upRate)}
           </div>
-        ) : loading ? (
-          <div className="text-sm text-zinc-400">Loading learning signals…</div>
-        ) : (
-          <div className="flex flex-col md:flex-row gap-4 md:gap-6">
-            {/* Left: global stats */}
-            <div className="flex-1 space-y-3">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <Stat
-                  label="Total Votes"
-                  value={totals.totalVotes}
-                  icon={<Activity className="w-4 h-4" />}
-                />
-                <Stat
-                  label="Up Events"
-                  value={totals.upTotal}
-                  icon={<ThumbsUp className="w-4 h-4" />}
-                />
-                <Stat
-                  label="Down Events"
-                  value={totals.downTotal}
-                  icon={<ThumbsDown className="w-4 h-4" />}
-                />
-                <Stat
-                  label="Tracked Drivers"
-                  value={totals.drivers}
-                  icon={<CheckCircle2 className="w-4 h-4" />}
-                />
-              </div>
+          <div className="text-xs text-zinc-400">
+            = ups / (ups + downs)
+          </div>
+        </div>
 
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
-                <div className="text-xs text-zinc-400">Global Up-Rate</div>
-                <div className="mt-1 flex items-baseline gap-2">
-                  <div className="text-2xl font-semibold">{upRate}%</div>
-                  <div className="text-xs text-zinc-500">= ups / (ups + downs)</div>
-                </div>
-                <div className="mt-2 text-xs text-zinc-500">
-                  Last signal: {fmtDateTime(totals.lastUpdated)}
-                </div>
-              </div>
-            </div>
+        <div className="mt-3 text-xs text-zinc-500">
+          Last signal: {loading ? "…" : fmtDate(last_signal_ts)}
+        </div>
 
-            {/* Right: leaderboard */}
-            <div className="w-full md:w-96 shrink-0">
-              <div className="text-sm text-zinc-400 mb-2">Top Drivers by Fit Score</div>
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 divide-y divide-zinc-800">
-                {top.length === 0 ? (
-                  <div className="p-3 text-sm text-zinc-400">No data yet.</div>
-                ) : (
-                  top.map((r, idx) => (
-                    <div key={r.driver_id} className="p-3 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-6 text-xs text-zinc-500">{idx + 1}.</div>
-                        <div>
-                          <div className="font-medium leading-tight">
-                            {r.driver_id?.slice(0, 8)}…{r.driver_id?.slice(24, 36)}
-                          </div>
-                          <div className="text-xs text-zinc-500">
-                            votes: {r.total_votes} • last: {fmtDateTime(r.last_vote)}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-base font-semibold">
-                          {Number(r.fit_score).toFixed(2)}
-                        </div>
-                        <div className="text-[11px] text-zinc-500">fit_score</div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
+        {/* Mismatch helper note */}
+        {mismatch && !loading && (
+          <div className="mt-3 inline-flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2">
+            <AlertCircle className="h-4 w-4 text-amber-400 mt-0.5" />
+            <div className="text-xs text-amber-200/90">
+              Heads up: <strong>Global %</strong> uses only up/down events (
+              {num(voteEvents)}), but <strong>Total Votes</strong> shows{" "}
+              {num(total_votes)} (e.g., includes other feedback rows). This is
+              expected if your feedback table stores more than just up/down
+              votes.
             </div>
+          </div>
+        )}
+
+        {/* Error surface */}
+        {err && (
+          <div className="mt-3 text-xs text-rose-300 bg-rose-900/30 border border-rose-700/40 rounded p-2">
+            {err}
           </div>
         )}
       </div>
@@ -238,15 +253,19 @@ export default function AiLearningCard() {
   );
 }
 
-/** Small stat pill */
-function Stat({ label, value, icon }) {
+/* ---------------------------- subcomponents ---------------------- */
+function StatTile({ icon: Icon, label, value }) {
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
-      <div className="flex items-center gap-2 text-xs text-zinc-400">
-        {icon}
-        <span>{label}</span>
+    <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/60 p-3">
+      <div className="flex items-center gap-2 text-zinc-400 text-sm">
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500/10">
+          <Icon className="h-3.5 w-3.5 text-emerald-400" />
+        </span>
+        {label}
       </div>
-      <div className="mt-1 text-xl font-semibold">{value ?? "—"}</div>
+      <div className="mt-1 text-2xl font-semibold text-zinc-100">
+        {value}
+      </div>
     </div>
   );
 }

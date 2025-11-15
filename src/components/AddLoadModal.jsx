@@ -1,7 +1,8 @@
 ﻿// src/components/AddLoadModal.jsx
 import { useState, useEffect } from "react";
-import { X, Loader2, Plus, ChevronDown } from "lucide-react";
+import { X, Loader2, Plus, ChevronDown, Upload } from "lucide-react";
 import { supabase } from "../lib/supabase";
+import { extractRateConfirmationData } from "../utils/bolOcrParser";
 
 function cx(...a) {
   return a.filter(Boolean).join(" ");
@@ -72,6 +73,11 @@ export default function AddLoadModal({ onClose, onAdded }) {
   const [loadingDrivers, setLoadingDrivers] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  
+  // OCR states
+  const [isProcessingOCR, setIsProcessingOCR] = useState(false);
+  const [ocrError, setOcrError] = useState(null);
+  const [ocrSuccess, setOcrSuccess] = useState(false);
 
   // Fetch available drivers on mount
   useEffect(() => {
@@ -94,6 +100,130 @@ export default function AddLoadModal({ onClose, onAdded }) {
     }
     fetchDrivers();
   }, []);
+
+  // OCR Upload Handler
+  async function handleOCRUpload(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/') && file.type !== 'application/pdf') {
+      setOcrError('Please upload an image file (JPG, PNG, etc.) or PDF');
+      return;
+    }
+
+    // Validate file size (max 20MB for OpenAI)
+    if (file.size > 20 * 1024 * 1024) {
+      setOcrError('File size must be under 20MB');
+      return;
+    }
+
+    setIsProcessingOCR(true);
+    setOcrError(null);
+    setOcrSuccess(false);
+
+    try {
+      const extractedData = await extractRateConfirmationData(file);
+      
+      // Count how many fields were extracted
+      let fieldsExtracted = 0;
+      
+      // Auto-populate form fields with extracted data
+      setFormData(prev => {
+        const updates = {};
+        
+        // Helper to add field if it has a value
+        const addField = (key, value) => {
+          if (value !== null && value !== undefined && value !== '') {
+            updates[key] = value;
+            fieldsExtracted++;
+          }
+        };
+        
+        addField('reference', extractedData.reference);
+        addField('shipper', extractedData.shipper);
+        addField('origin', extractedData.origin);
+        addField('destination', extractedData.destination);
+        addField('broker_name', extractedData.broker_name);
+        addField('pickup_date', extractedData.pickup_date);
+        addField('pickup_time', extractedData.pickup_time);
+        addField('delivery_date', extractedData.delivery_date);
+        addField('delivery_time', extractedData.delivery_time);
+        addField('shipper_contact_name', extractedData.shipper_contact_name);
+        addField('shipper_contact_phone', extractedData.shipper_contact_phone);
+        addField('shipper_contact_email', extractedData.shipper_contact_email);
+        addField('receiver_contact_name', extractedData.receiver_contact_name);
+        addField('receiver_contact_phone', extractedData.receiver_contact_phone);
+        addField('receiver_contact_email', extractedData.receiver_contact_email);
+        addField('bol_number', extractedData.bol_number);
+        addField('po_number', extractedData.po_number);
+        addField('customer_reference', extractedData.customer_reference);
+        addField('commodity', extractedData.commodity);
+        
+        if (extractedData.weight) {
+          addField('weight', extractedData.weight.toString());
+        }
+        if (extractedData.pieces) {
+          addField('pieces', extractedData.pieces.toString());
+        }
+        
+        addField('equipment_type', extractedData.equipment_type);
+        addField('temperature', extractedData.temperature);
+        addField('special_instructions', extractedData.special_instructions);
+        
+        if (extractedData.miles) {
+          addField('miles', extractedData.miles.toString());
+        }
+        if (extractedData.rate) {
+          addField('rate', extractedData.rate.toString());
+        }
+        if (extractedData.rate_per_mile) {
+          addField('rate_per_mile', extractedData.rate_per_mile.toString());
+        }
+        if (extractedData.detention_charges) {
+          addField('detention_charges', extractedData.detention_charges.toString());
+        }
+        if (extractedData.accessorial_charges) {
+          addField('accessorial_charges', extractedData.accessorial_charges.toString());
+        }
+        
+        return { ...prev, ...updates };
+      });
+
+      setOcrSuccess(true);
+      
+      // If we didn't extract miles but we have origin and destination, auto-calculate
+      if (!extractedData.miles && extractedData.origin && extractedData.destination) {
+        setTimeout(() => {
+          calculateMiles();
+        }, 500);
+      }
+
+      console.log(`✅ Extracted ${fieldsExtracted} fields from rate confirmation`);
+      
+      // Clear success message after 8 seconds
+      setTimeout(() => setOcrSuccess(false), 8000);
+      
+    } catch (error) {
+      console.error('OCR extraction error:', error);
+      
+      let errorMessage = 'Failed to extract data from document. ';
+      
+      if (error.message.includes('API')) {
+        errorMessage += 'There was an issue connecting to OpenAI. Check your API key.';
+      } else if (error.message.includes('JSON')) {
+        errorMessage += 'The document format was unclear. Please try a clearer image or enter data manually.';
+      } else {
+        errorMessage += 'Please try again with a clearer image or enter manually.';
+      }
+      
+      setOcrError(errorMessage);
+    } finally {
+      setIsProcessingOCR(false);
+      // Reset file input
+      event.target.value = '';
+    }
+  }
 
   // Auto-calculate miles using Google Maps Distance Matrix API
   async function calculateMiles() {
@@ -258,6 +388,78 @@ export default function AddLoadModal({ onClose, onAdded }) {
           <IconButton title="Close" onClick={onClose}>
             <Ico as={X} />
           </IconButton>
+        </div>
+
+        {/* OCR Upload Section */}
+        <div className="mb-6 rounded-xl border-2 border-dashed border-amber-500/30 bg-gradient-to-br from-amber-500/5 to-amber-500/10 p-4">
+          <div className="flex items-start gap-3">
+            <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/20 flex-shrink-0">
+              <Ico as={Upload} className="text-amber-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <h4 className="text-sm font-semibold">Upload Rate Confirmation</h4>
+                <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-medium text-emerald-300 uppercase tracking-wide">
+                  AI Powered
+                </span>
+              </div>
+              <p className="text-xs text-white/60 mb-3">
+                Upload your broker's rate confirmation (screenshot, photo, or PDF) and let AI automatically fill out the form for you.
+              </p>
+              
+              <div className="flex items-center gap-2">
+                <label className="inline-block">
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    onChange={handleOCRUpload}
+                    disabled={isProcessingOCR}
+                    className="hidden"
+                    id="ocr-upload"
+                  />
+                  <span className={cx(
+                    "inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium cursor-pointer transition-all",
+                    isProcessingOCR
+                      ? "bg-white/5 text-white/40 cursor-not-allowed"
+                      : "bg-amber-500/90 text-black hover:bg-amber-400 hover:shadow-lg hover:shadow-amber-500/20"
+                  )}>
+                    {isProcessingOCR ? (
+                      <>
+                        <Ico as={Loader2} className="animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <Ico as={Upload} />
+                        Choose File
+                      </>
+                    )}
+                  </span>
+                </label>
+                
+                {isProcessingOCR && (
+                  <div className="text-xs text-white/50">
+                    Reading document with AI...
+                  </div>
+                )}
+              </div>
+
+              {ocrSuccess && (
+                <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2.5">
+                  <div className="mt-0.5 h-2 w-2 rounded-full bg-emerald-400 flex-shrink-0"></div>
+                  <div className="text-xs text-emerald-200">
+                    <strong>Success!</strong> Rate confirmation processed. Review the auto-filled fields below and make any adjustments needed.
+                  </div>
+                </div>
+              )}
+
+              {ocrError && (
+                <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-xs text-red-200">
+                  <strong>Error:</strong> {ocrError}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Form */}
@@ -547,7 +749,7 @@ export default function AddLoadModal({ onClose, onAdded }) {
                   type="text"
                   value={formData.temperature}
                   onChange={(e) => handleChange("temperature", e.target.value)}
-                  placeholder="e.g. 35Â°F"
+                  placeholder="e.g. 35°F"
                   className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
                 />
               </div>

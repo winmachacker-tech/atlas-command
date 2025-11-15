@@ -1,0 +1,751 @@
+// src/components/DipsyAIAssistant.jsx
+// Enhanced AI Assistant with Dipsy Intelligence
+// Handles both database queries and OpenAI conversations
+// Now with stateful conversation support!
+
+import { useEffect, useRef, useState } from "react";
+import {
+  Bot,
+  Send,
+  StopCircle,
+  Loader2,
+  Trash2,
+  Clipboard,
+  Sparkles,
+  ArrowDown,
+  ExternalLink,
+  Paperclip,
+} from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import useAIStream from "../hooks/useAIStream";
+import { useDipsy } from "../layout/MainLayout";
+import { processDipsyQuery } from "../lib/dipsyIntelligence_v2.js"; // ← CHANGED to v2
+import { supabase } from "../lib/supabase";
+
+function cx(...a) {
+  return a.filter(Boolean).join(" ");
+}
+
+const SUGGESTIONS = [
+  { title: "Show available loads", prompt: "Show me available loads" },
+  { title: "Active drivers", prompt: "Show me active drivers" },
+  { title: "Create a load", prompt: "Create load from Chicago to Atlanta, rate $2500" },
+  { title: "Find drivers", prompt: "Find me an available driver" },
+  { title: "Problem loads", prompt: "Show me problem loads" },
+  { title: "Assign driver", prompt: "Assign driver John to load AC-12345" },
+];
+
+export default function DipsyAIAssistant({ className = "" }) {
+  const dipsy = useDipsy();
+  const navigate = useNavigate();
+  
+  const [input, setInput] = useState("");
+  const [messages, setMessages] = useState([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [stickyScroll, setStickyScroll] = useState(true);
+  const [userId, setUserId] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  
+  // ✅ CHANGED: New conversation history state for v2
+  const [conversationHistory, setConversationHistory] = useState([]);
+  
+  // 💰 Cost tracking
+  const [costStats, setCostStats] = useState({
+    freeQueries: 0,
+    paidQueries: 0,
+    estimatedCost: 0
+  });
+
+  const outRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  // Get current user
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      const uid = data?.user?.id;
+      setUserId(uid);
+    });
+  }, []);
+
+  // Auto-scroll when messages change
+  useEffect(() => {
+    if (!stickyScroll) return;
+    const el = outRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages, stickyScroll]);
+
+  const canSend = input.trim().length > 0 && !isProcessing;
+
+  const addMessage = (role, content, data = null, actions = null, usedAI = false) => {
+    setMessages(prev => [...prev, { role, content, data, actions, usedAI, timestamp: new Date() }]);
+    
+    // Update cost stats
+    if (role === 'assistant' && content) {
+      setCostStats(prev => ({
+        freeQueries: prev.freeQueries + (usedAI ? 0 : 1),
+        paidQueries: prev.paidQueries + (usedAI ? 1 : 0),
+        estimatedCost: prev.estimatedCost + (usedAI ? 0.00035 : 0) // ~$0.00035 per AI query
+      }));
+    }
+  };
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    console.log('📎 File selected:', file.name, file.type, file.size);
+    setSelectedFile(file);
+  };
+
+  const uploadFileToStorage = async (file) => {
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+      const filePath = `dipsy-uploads/${fileName}`;
+
+      console.log('📤 Uploading to Supabase Storage:', filePath);
+
+      const { data, error } = await supabase.storage
+        .from('documents')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (error) throw error;
+
+      // Get public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('documents')
+        .getPublicUrl(filePath);
+
+      console.log('✅ File uploaded:', publicUrl);
+
+      return { success: true, url: publicUrl, path: filePath };
+    } catch (error) {
+      console.error('❌ Upload error:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
+  const fileToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result.split(',')[1]; // Remove data URL prefix
+        resolve(base64);
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const extractTextFromPDF = async (file) => {
+    try {
+      console.log('📄 Extracting text from PDF...');
+      
+      // Dynamically import pdf.js
+      const pdfjsLib = await import('pdfjs-dist');
+      
+      // Try local worker first, then fallback to CDN
+      const workerSrc = '/pdf.worker.min.mjs'; // Served from public folder
+      pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
+      
+      console.log('🔧 Worker path set to:', pdfjsLib.GlobalWorkerOptions.workerSrc);
+      
+      // Read file as array buffer
+      const arrayBuffer = await file.arrayBuffer();
+      
+      console.log('📦 Array buffer size:', arrayBuffer.byteLength);
+      
+      // Load PDF with explicit worker
+      const loadingTask = pdfjsLib.getDocument({
+        data: arrayBuffer,
+        useWorkerFetch: false,
+        isEvalSupported: false,
+        useSystemFonts: true
+      });
+      
+      const pdf = await loadingTask.promise;
+      
+      console.log('📄 PDF loaded, pages:', pdf.numPages);
+      
+      let fullText = '';
+      
+      // Extract text from each page
+      for (let i = 1; i <= pdf.numPages; i++) {
+        console.log(`📖 Reading page ${i}/${pdf.numPages}...`);
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map(item => item.str).join(' ');
+        fullText += pageText + '\n';
+      }
+      
+      console.log('✅ Extracted text from PDF (first 200 chars):', fullText.substring(0, 200));
+      console.log('📏 Total text length:', fullText.length);
+      
+      return { success: true, text: fullText };
+    } catch (error) {
+      console.error('❌ PDF extraction error:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
+  const readDocumentWithAI = async (imageUrl, fileName, fileObject = null) => {
+    try {
+      console.log('🔮 Reading document with OpenAI:', imageUrl);
+      console.log('📋 File name:', fileName);
+      console.log('📦 File object exists:', !!fileObject);
+
+      // Check if it's a PDF
+      const isPDF = fileName.toLowerCase().endsWith('.pdf');
+      console.log('📄 Is PDF:', isPDF);
+      
+      // Get OpenAI API key from your config
+      const { getOpenAIApiKey } = await import('../lib/openaiConfig');
+      const apiKey = getOpenAIApiKey();
+
+      let messages;
+
+      if (isPDF && fileObject) {
+        console.log('🔄 Starting PDF extraction...');
+        // For PDFs, extract text first
+        const extractResult = await extractTextFromPDF(fileObject);
+        
+        console.log('📊 Extract result:', extractResult);
+        
+        if (!extractResult.success) {
+          throw new Error(`Failed to extract PDF text: ${extractResult.error}`);
+        }
+        
+        console.log('✅ PDF text extracted, sending to OpenAI...');
+        
+        // Send extracted text to regular chat completion (not vision)
+        messages = [
+          {
+            role: 'user',
+            content: `You are reading a trucking/logistics document (rate confirmation, BOL, POD, etc.).
+
+Here is the extracted text from the PDF:
+
+${extractResult.text}
+
+Extract ALL information you can find. Pay special attention to:
+- Pickup location (origin city, state, zip)
+- Delivery location (destination city, state, zip)
+- Pickup date/time
+- Delivery date/time
+- Rate/payment amount
+- Commodity/cargo description
+- Weight
+- Equipment type (dry van, reefer, flatbed, etc.)
+- Shipper/customer name
+- Reference numbers (PO, BOL, load number)
+- Any special instructions
+
+Format your response as a clear summary of what you found. Be specific and include all details.
+If this looks like a rate confirmation, say "This is a rate confirmation" at the start.`
+          }
+        ];
+      } else {
+        console.log('🖼️ Using image Vision API...');
+        // For images, use Vision API
+        messages = [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `You are reading a trucking/logistics document (rate confirmation, BOL, POD, etc.).
+
+Extract ALL information you can find. Pay special attention to:
+- Pickup location (origin city, state, zip)
+- Delivery location (destination city, state, zip)
+- Pickup date/time
+- Delivery date/time
+- Rate/payment amount
+- Commodity/cargo description
+- Weight
+- Equipment type (dry van, reefer, flatbed, etc.)
+- Shipper/customer name
+- Reference numbers (PO, BOL, load number)
+- Any special instructions
+
+Format your response as a clear summary of what you found. Be specific and include all details.
+If this looks like a rate confirmation, say "This is a rate confirmation" at the start.`
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: imageUrl
+                }
+              }
+            ]
+          }
+        ];
+      }
+
+      console.log('📤 Sending to OpenAI...');
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o',
+          messages: messages,
+          max_tokens: 1000
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`OpenAI API error: ${response.status} - ${error}`);
+      }
+
+      const data = await response.json();
+      const extractedText = data.choices[0]?.message?.content;
+
+      console.log('✅ AI extracted text:', extractedText);
+
+      return {
+        success: true,
+        text: extractedText
+      };
+
+    } catch (error) {
+      console.error('❌ AI reading error:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  };
+
+  const handleSend = async (text) => {
+    const userMessage = (text ?? input).trim();
+    const fileToUpload = selectedFile;
+    
+    // Clear input and file immediately
+    setInput("");
+    setSelectedFile(null);
+    
+    // If there's a file but no message, add a default message
+    const finalMessage = fileToUpload && !userMessage 
+      ? "I'm uploading a document for you to read" 
+      : userMessage;
+    
+    if (!finalMessage && !fileToUpload) return;
+    
+    // Show user message with file indicator
+    if (fileToUpload) {
+      addMessage('user', `${finalMessage}\n📎 ${fileToUpload.name}`);
+    } else {
+      addMessage('user', finalMessage);
+    }
+    
+    setIsProcessing(true);
+
+    // Wake Dipsy if sleeping
+    if (dipsy.state === 'sleeping') {
+      dipsy.setIdle();
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    
+    dipsy.setThinking();
+
+    try {
+      // 🆕 If there's a file, upload it first
+      if (fileToUpload) {
+        addMessage('assistant', '📤 Uploading your document...', null, null, false);
+        
+        const uploadResult = await uploadFileToStorage(fileToUpload);
+        
+        if (!uploadResult.success) {
+          addMessage('assistant', `❌ Failed to upload file: ${uploadResult.error}`);
+          dipsy.setIdle();
+          setIsProcessing(false);
+          return;
+        }
+        
+        addMessage('assistant', `✅ Document uploaded! Now reading it with AI...`, null, null, false);
+        
+        // 🆕 Read the document with OpenAI Vision (pass file object for PDFs)
+        const readResult = await readDocumentWithAI(uploadResult.url, fileToUpload.name, fileToUpload);
+        
+        if (!readResult.success) {
+          addMessage('assistant', `❌ Failed to read document: ${readResult.error}\n\nBut here's the file: ${uploadResult.url}`);
+          dipsy.setIdle();
+          setIsProcessing(false);
+          return;
+        }
+        
+        // 🎯 ADD THE EXTRACTION TO CONVERSATION HISTORY so Dipsy remembers it!
+        const updatedHistory = [
+          ...conversationHistory,
+          {
+            role: 'assistant',
+            content: `I read the document and found:\n\n${readResult.text}\n\nThis information is now in my memory. When you ask me to create the load, I'll use these details.`
+          }
+        ];
+        setConversationHistory(updatedHistory);
+        
+        // Show what AI found
+        addMessage('assistant', `📄 **I read your document!**\n\n${readResult.text}\n\n---\n\n💡 **What would you like me to do?**\nSay "create the load" or "make the load" and I'll set it up for you!`, null, null, true);
+        
+        dipsy.setLightbulb();
+        setTimeout(() => dipsy.setIdle(), 2000);
+        setIsProcessing(false);
+        return;
+      }
+
+      // Normal text query (no file)
+      // ✅ CHANGED: Pass conversation history to v2 API
+      const result = await processDipsyQuery(finalMessage, userId, {
+        conversationHistory
+      });
+
+      console.log('📝 Dipsy result:', result);
+
+      if (result.success) {
+        // Dipsy understood and executed the query!
+        dipsy.setLightbulb();
+        
+        addMessage('assistant', result.message, result.data, result.actions, result.usedAI || false);
+        
+        // ✅ CHANGED: Update conversation history from response
+        if (result.conversationHistory) {
+          console.log('📝 Updating conversation history:', result.conversationHistory.length, 'messages');
+          setConversationHistory(result.conversationHistory);
+        }
+
+        setTimeout(() => dipsy.setIdle(), 2000);
+      } else {
+        // Dipsy couldn't help
+        addMessage('assistant', result.message, null, null, false);
+        dipsy.setIdle();
+      }
+    } catch (error) {
+      console.error('Dipsy error:', error);
+      addMessage('assistant', `Oops! Something went wrong: ${error.message}`);
+      dipsy.setIdle();
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleSuggestion = (s) => {
+    setInput(s.prompt);
+  };
+
+  const handleCopy = async (content) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      dipsy.setCelebrating();
+      setTimeout(() => dipsy.setIdle(), 1500);
+    } catch {}
+  };
+
+  const handleAction = (action) => {
+    if (action.action === 'navigate' && action.path) {
+      navigate(action.path);
+    }
+  };
+
+  const handleClear = () => {
+    setMessages([]);
+    setCostStats({ freeQueries: 0, paidQueries: 0, estimatedCost: 0 });
+    setConversationHistory([]); // ✅ CHANGED: Clear conversation history
+    setSelectedFile(null);
+    dipsy.setIdle();
+  };
+
+  return (
+    <div
+      className={cx(
+        "rounded-2xl border border-zinc-800 bg-zinc-950/60 shadow-xl backdrop-blur",
+        "flex flex-col overflow-hidden",
+        className
+      )}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-zinc-800/50 p-3">
+        <div className="flex items-center gap-2">
+          <div className="h-8 w-8 rounded-full bg-emerald-500/15 flex items-center justify-center">
+            <Bot className="h-4 w-4 text-emerald-400" />
+          </div>
+          <div className="text-sm">
+            <div className="font-medium text-zinc-100">Dipsy</div>
+            <div className="text-xs text-zinc-400">
+              Your intelligent dispatch assistant
+              {/* ✅ Show conversation context indicator */}
+              {conversationHistory.length > 0 && (
+                <span className="ml-2 text-emerald-400">
+                  • {conversationHistory.length} messages in context
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Cost Stats */}
+          {(costStats.freeQueries + costStats.paidQueries) > 0 && (
+            <div className="flex items-center gap-2 text-xs">
+              <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                <span className="text-emerald-400 font-medium">{costStats.freeQueries}</span>
+                <span className="text-zinc-400">free</span>
+              </div>
+              {costStats.paidQueries > 0 && (
+                <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                  <span className="text-amber-400 font-medium">{costStats.paidQueries}</span>
+                  <span className="text-zinc-400">paid</span>
+                  <span className="text-amber-400 font-medium">
+                    (${costStats.estimatedCost.toFixed(4)})
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+          
+          <button
+            onClick={handleClear}
+            className="inline-flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-900"
+            title="Clear"
+            type="button"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Clear
+          </button>
+        </div>
+      </div>
+
+      {/* Suggestions */}
+      {messages.length === 0 && (
+        <div className="border-b border-zinc-800/50">
+          <div className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-2">
+            {SUGGESTIONS.map((s, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => handleSuggestion(s)}
+                className="group flex items-start gap-2 rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 text-left hover:bg-zinc-900"
+                title={s.title}
+              >
+                <div className="mt-0.5 rounded-md bg-emerald-500/15 p-1.5">
+                  <Sparkles className="h-4 w-4 text-emerald-400" />
+                </div>
+                <div>
+                  <div className="text-xs font-medium text-zinc-200">{s.title}</div>
+                  <div className="mt-0.5 text-xs text-zinc-400">{s.prompt}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Messages */}
+      <div
+        ref={outRef}
+        className="min-h-[220px] max-h-[50vh] overflow-auto p-4 space-y-4"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 10;
+          setStickyScroll(atBottom);
+        }}
+      >
+        {messages.length === 0 && (
+          <div className="text-zinc-400 text-sm text-center py-8">
+            👋 Hi! I'm Dipsy, your AI dispatch assistant. Ask me about loads, drivers, assignments, or create new loads!
+          </div>
+        )}
+
+        {messages.map((msg, idx) => (
+          <div
+            key={idx}
+            className={cx(
+              "flex gap-3",
+              msg.role === 'user' ? 'justify-end' : 'justify-start'
+            )}
+          >
+            {msg.role === 'assistant' && (
+              <div className="h-8 w-8 rounded-full bg-emerald-500/15 flex items-center justify-center shrink-0">
+                <Bot className="h-4 w-4 text-emerald-400" />
+              </div>
+            )}
+            
+            <div className={cx(
+              "max-w-[80%] rounded-xl p-3 text-sm",
+              msg.role === 'user'
+                ? "bg-emerald-600 text-white"
+                : "bg-zinc-800/50 text-zinc-100"
+            )}>
+              {/* Cost Badge for AI responses */}
+              {msg.role === 'assistant' && msg.usedAI && (
+                <div className="mb-2 inline-flex items-center gap-1 rounded-full bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-[10px] font-medium text-amber-400">
+                  <span>💰</span>
+                  <span>AI API Used</span>
+                </div>
+              )}
+              
+              {msg.role === 'assistant' && !msg.usedAI && msg.content && (
+                <div className="mb-2 inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
+                  <span>✅</span>
+                  <span>Free Query</span>
+                </div>
+              )}
+              
+              <div className="whitespace-pre-wrap">{msg.content}</div>
+              
+              {/* Action Buttons */}
+              {msg.actions && msg.actions.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {msg.actions.map((action, i) => (
+                    <button
+                      key={i}
+                      onClick={() => handleAction(action)}
+                      className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-xs font-medium text-white transition-colors"
+                    >
+                      {action.label}
+                      <ExternalLink className="h-3 w-3" />
+                    </button>
+                  ))}
+                </div>
+              )}
+              
+              {msg.role === 'assistant' && (
+                <button
+                  onClick={() => handleCopy(msg.content)}
+                  className="mt-2 inline-flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-300"
+                >
+                  <Clipboard className="h-3 w-3" />
+                  Copy
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+
+        {isProcessing && (
+          <div className="flex gap-3">
+            <div className="h-8 w-8 rounded-full bg-emerald-500/15 flex items-center justify-center shrink-0">
+              <Bot className="h-4 w-4 text-emerald-400" />
+            </div>
+            <div className="bg-zinc-800/50 rounded-xl p-3">
+              <div className="flex items-center gap-2 text-xs text-zinc-400">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Thinking...
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!stickyScroll && (
+          <button
+            type="button"
+            onClick={() => {
+              const el = outRef.current;
+              if (!el) return;
+              el.scrollTop = el.scrollHeight;
+              setStickyScroll(true);
+            }}
+            className="sticky bottom-0 left-1/2 -translate-x-1/2 inline-flex items-center gap-1 rounded-full border border-zinc-800 bg-zinc-900/90 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-900 backdrop-blur"
+          >
+            <ArrowDown className="h-3.5 w-3.5" />
+            Jump to latest
+          </button>
+        )}
+      </div>
+
+      {/* Input */}
+      <div className="border-t border-zinc-800/50 p-3">
+        {/* File preview */}
+        {selectedFile && (
+          <div className="mb-2 flex items-center gap-2 rounded-lg bg-zinc-800/50 p-2">
+            <Paperclip className="h-4 w-4 text-emerald-400" />
+            <span className="text-sm text-zinc-300">{selectedFile.name}</span>
+            <button
+              onClick={() => setSelectedFile(null)}
+              className="ml-auto text-xs text-zinc-400 hover:text-zinc-300"
+            >
+              Remove
+            </button>
+          </div>
+        )}
+        
+        <div className="flex items-end gap-2">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask Dipsy... (e.g., 'Show me load 4404' then 'Assign John Smith to that load')"
+            rows={2}
+            className="min-h-[44px] w-full resize-y rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                if (canSend) handleSend();
+              }
+            }}
+          />
+          
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,.pdf"
+            onChange={handleFileSelect}
+            className="hidden"
+          />
+          
+          {/* Attachment button */}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="inline-flex h-[44px] items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
+            title="Upload rate confirmation (PDF or image)"
+          >
+            <Paperclip className="h-4 w-4" />
+          </button>
+          
+          {!isProcessing ? (
+            <button
+              type="button"
+              disabled={!canSend}
+              onClick={() => handleSend()}
+              className={cx(
+                "inline-flex h-[44px] items-center gap-2 rounded-xl px-4 text-sm font-medium",
+                canSend
+                  ? "bg-emerald-600 text-white hover:bg-emerald-500"
+                  : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+              )}
+              title="Send (Ctrl/Cmd+Enter)"
+            >
+              <Send className="h-4 w-4" />
+              Send
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled
+              className="inline-flex h-[44px] items-center gap-2 rounded-xl bg-zinc-800 px-4 text-sm font-medium text-zinc-400 cursor-not-allowed"
+            >
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Processing
+            </button>
+          )}
+        </div>
+
+        <div className="mt-2 text-[11px] text-zinc-500 text-center">
+          Press <kbd className="rounded bg-zinc-800 px-1">Ctrl/Cmd+Enter</kbd> to send • 
+          {conversationHistory.length > 0 ? (
+            <span className="text-emerald-400"> Context active: I remember our conversation!</span>
+          ) : (
+            <span> Try: "Show load 4404" then "Assign John to that load"</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

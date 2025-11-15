@@ -1,11 +1,10 @@
 ﻿// src/components/AIQuickLauncher.jsx
 // Floating button that opens Dispatch AI in a modal overlay.
-// No changes to main.jsx or App.jsx required.
-// Drop <AIQuickLauncher /> anywhere (e.g., in MainLayout) and you're done.
+// Can be controlled externally via openTrigger prop
 
 import { useEffect, useRef, useState } from "react";
 import { Bot, X } from "lucide-react";
-import AIAssistant from "./AIAssistant";
+import DipsyAIAssistant from "./DipsyAIAssistant"; // 🎯 Using intelligent Dipsy
 
 function cx(...a) {
   return a.filter(Boolean).join(" ");
@@ -14,9 +13,17 @@ function cx(...a) {
 export default function AIQuickLauncher({
   initialOpen = false,
   placement = "bottom-right", // 'bottom-right' | 'bottom-left'
+  openTrigger = 0, // 🎯 Increment this to trigger opening from outside
 }) {
   const [open, setOpen] = useState(initialOpen);
   const overlayRef = useRef(null);
+
+  // 🎯 Open when external trigger changes
+  useEffect(() => {
+    if (openTrigger > 0) {
+      setOpen(true);
+    }
+  }, [openTrigger]);
 
   // Close on ESC
   useEffect(() => {
@@ -88,11 +95,13 @@ export default function AIQuickLauncher({
             </button>
 
             {/* AI Panel */}
-            <AIAssistant className="max-w-none" />
+            <DipsyAIAssistant 
+              className="max-w-none"
+              onNavigate={() => setOpen(false)}
+            />
           </div>
         </div>
       )}
     </>
   );
 }
-

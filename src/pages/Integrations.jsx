@@ -132,6 +132,7 @@ export default function Integrations() {
   const [msg, setMsg] = useState(null);
   const [user, setUser] = useState(null);
   const [googleMapsConnected, setGoogleMapsConnected] = useState(false);
+  const [emailConnected, setEmailConnected] = useState(true); // Email is now connected!
 
   // Load integrations
   useEffect(() => {
@@ -178,13 +179,27 @@ export default function Integrations() {
     });
   };
 
+  const handleEmailConfigure = () => {
+    setMsg({ 
+      kind: "success", 
+      text: "✅ Email notifications are ACTIVE! Emails automatically send when loads change to: ASSIGNED, IN_TRANSIT, or DELIVERED. Powered by Resend." 
+    });
+  };
+
+  const handleEmailDisconnect = () => {
+    setMsg({ 
+      kind: "info", 
+      text: "To disable email notifications, run this in Supabase SQL Editor: DROP TRIGGER on_load_status_change ON loads;" 
+    });
+  };
+
   if (loading) {
     return (
       <div className="p-6">
         <div className="mx-auto max-w-5xl">
           <div className="flex items-center gap-2 text-white/70">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span>Loading integrationsâ€¦</span>
+            <span>Loading integrations…</span>
           </div>
         </div>
       </div>
@@ -226,6 +241,29 @@ export default function Integrations() {
             </div>
           )}
         </div>
+
+        {/* Email Status Banner */}
+        {emailConnected && (
+          <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4">
+            <div className="flex items-center gap-3">
+              <Mail className="h-5 w-5 text-emerald-400" />
+              <div className="flex-1">
+                <p className="text-sm text-emerald-200 font-medium">Email Notifications Active</p>
+                <p className="text-sm text-emerald-200/80 mt-0.5">
+                  Automatically sending emails to customers when load status changes • Powered by Resend
+                </p>
+              </div>
+              <a 
+                href="https://resend.com/emails" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-sm text-emerald-300 hover:text-emerald-200 flex items-center gap-1 transition"
+              >
+                View Logs <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+          </div>
+        )}
 
         {/* Mapping & Routing Section */}
         <div>
@@ -364,13 +402,17 @@ export default function Integrations() {
               onConfigure={() => setMsg({ kind: "info", text: "OpenAI integration is configured and active." })}
               onDisconnect={() => setMsg({ kind: "info", text: "OpenAI integration cannot be disconnected as it's a core feature." })}
             />
+            
             <IntegrationCard
               icon={Mail}
               name="Gmail / Email"
               description="Send automated load confirmations and delivery notifications"
-              status="premium"
-              badge="Premium"
+              status="connected"
+              badge="Connected"
+              onConfigure={handleEmailConfigure}
+              onDisconnect={handleEmailDisconnect}
             />
+            
             <IntegrationCard
               icon={MessageSquare}
               name="Twilio SMS"
@@ -382,12 +424,12 @@ export default function Integrations() {
         </div>
 
         {/* Info Box */}
-        <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4">
+        <div className="rounded-xl border border-sky-500/40 bg-sky-500/10 p-4">
           <div className="flex items-start gap-3">
-            <CheckCircle2 className="h-5 w-5 text-emerald-400 mt-0.5" />
+            <CheckCircle2 className="h-5 w-5 text-sky-400 mt-0.5" />
             <div>
-              <p className="text-sm text-emerald-200 font-medium">Premium Integrations Coming Soon</p>
-              <p className="text-sm text-emerald-200/80 mt-1">
+              <p className="text-sm text-sky-200 font-medium">Premium Integrations Coming Soon</p>
+              <p className="text-sm text-sky-200/80 mt-1">
                 We're actively working on these integrations. Contact us to be notified when they're ready for your account.
               </p>
             </div>

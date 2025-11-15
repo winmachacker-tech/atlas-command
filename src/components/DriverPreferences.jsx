@@ -196,14 +196,19 @@ export default function DriverPreferences({ driverId }) {
     }
   }
 
-  // Handle array inputs (comma-separated)
-  const handleArrayInput = (field, value) => {
+  // Handle array inputs (comma-separated) - NOW MEMOIZED WITH useCallback
+  const handleArrayInput = useCallback((field, value) => {
     const arr = value
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
     setFormData((prev) => ({ ...prev, [field]: arr }));
-  };
+  }, []);
+
+  // Handle simple text inputs - STABLE HANDLER WITH useCallback
+  const handleTextInput = useCallback((field, value) => {
+    setFormData((prev) => ({ ...prev, [field]: value }));
+  }, []);
 
   if (loading) {
     return (
@@ -299,7 +304,7 @@ export default function DriverPreferences({ driverId }) {
               <input
                 type="text"
                 value={formData.home_base}
-                onChange={(e) => setFormData({ ...formData, home_base: e.target.value })}
+                onChange={(e) => handleTextInput("home_base", e.target.value)}
                 placeholder="e.g. Dallas, TX"
                 className="w-full px-3 py-2 rounded-lg border border-zinc-700/60 bg-zinc-800/40 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
               />
@@ -343,7 +348,7 @@ export default function DriverPreferences({ driverId }) {
               </label>
               <select
                 value={formData.equipment}
-                onChange={(e) => setFormData({ ...formData, equipment: e.target.value })}
+                onChange={(e) => handleTextInput("equipment", e.target.value)}
                 className="w-full px-3 py-2 rounded-lg border border-zinc-700/60 bg-zinc-800/40 text-zinc-200 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
               >
                 <option value="">-- Select --</option>
@@ -365,7 +370,7 @@ export default function DriverPreferences({ driverId }) {
               <input
                 type="text"
                 value={formData.trailer_type}
-                onChange={(e) => setFormData({ ...formData, trailer_type: e.target.value })}
+                onChange={(e) => handleTextInput("trailer_type", e.target.value)}
                 placeholder="e.g. 53ft dry van"
                 className="w-full px-3 py-2 rounded-lg border border-zinc-700/60 bg-zinc-800/40 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
               />
@@ -380,7 +385,7 @@ export default function DriverPreferences({ driverId }) {
               <input
                 type="number"
                 value={formData.max_distance_mi}
-                onChange={(e) => setFormData({ ...formData, max_distance_mi: e.target.value })}
+                onChange={(e) => handleTextInput("max_distance_mi", e.target.value)}
                 placeholder="e.g. 500"
                 className="w-full px-3 py-2 rounded-lg border border-zinc-700/60 bg-zinc-800/40 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
               />
@@ -394,7 +399,7 @@ export default function DriverPreferences({ driverId }) {
               </label>
               <textarea
                 value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                onChange={(e) => handleTextInput("notes", e.target.value)}
                 placeholder="Any special requirements, quirks, or preferences..."
                 rows={3}
                 className="w-full px-3 py-2 rounded-lg border border-zinc-700/60 bg-zinc-800/40 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40 resize-none"

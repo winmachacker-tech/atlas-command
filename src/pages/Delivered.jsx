@@ -1,5 +1,6 @@
 ﻿// src/pages/Delivered.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
+import RunAutoTrainButton from "../components/RunAutoTrainButton.jsx";
 import { supabase } from "../lib/supabase";
 import {
   Loader2,
@@ -291,27 +292,33 @@ export default function DeliveredPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => fetchPage(page)}
-            className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 hover:bg-white/5"
-            title="Refresh"
-          >
-            {loading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCcw className="h-4 w-4" />
-            )}
-            <span className="text-sm">Refresh</span>
-          </button>
-          <button
-            onClick={onExportCSV}
-            className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 hover:bg-white/5"
-            title="Export CSV (current page)"
-          >
-            <Download className="h-4 w-4" />
-            <span className="text-sm">Export CSV</span>
-          </button>
+        {/* Right side: actions + auto-train */}
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => fetchPage(page)}
+              className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 hover:bg-white/5"
+              title="Refresh"
+            >
+              {loading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCcw className="h-4 w-4" />
+              )}
+              <span className="text-sm">Refresh</span>
+            </button>
+            <button
+              onClick={onExportCSV}
+              className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 hover:bg-white/5"
+              title="Export CSV (current page)"
+            >
+              <Download className="h-4 w-4" />
+              <span className="text-sm">Export CSV</span>
+            </button>
+          </div>
+
+          {/* AI auto-train button */}
+          <RunAutoTrainButton />
         </div>
       </div>
 
@@ -582,4 +589,3 @@ function Th({ children }) {
 function Td({ children, className }) {
   return <td className={cx("px-4 py-3 align-top", className)}>{children}</td>;
 }
-

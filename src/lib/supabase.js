@@ -88,3 +88,7 @@ if (typeof window !== "undefined") {
   };
   window._supabaseHealthCheck = supabaseHealthCheck;
 }
+// TEMP: expose supabase client for browser debugging
+if (typeof window !== "undefined") {
+  window.supabase = supabase;
+}

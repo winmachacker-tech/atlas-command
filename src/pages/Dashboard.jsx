@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import AiLearningCard from "../components/AiLearningCard.jsx";
+import AiAccuracyTrend from "../components/AiAccuracyTrend.jsx";
 import {
   LayoutDashboard,
   Truck,
@@ -472,6 +473,9 @@ export default function Dashboard() {
           onClick={() => navigate("/loads")}
         />
       </div>
+
+      {/* AI Accuracy Trend — full width at bottom */}
+      <AiAccuracyTrend weeks={8} />
 
       {/* Empty state helper */}
       {!loading && counts.all === 0 ? (

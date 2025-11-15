@@ -1,5 +1,6 @@
 // src/layout/MainLayout.jsx
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import Sidebar from "../components/Sidebar.jsx";
+import { useEffect, useMemo, useState, useCallback, useRef, createContext, useContext } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Home,
@@ -24,10 +25,24 @@ import {
   Sparkles,
   GraduationCap,
   Users,
+  BarChart3,
+  FileCheck, // 👈 Added
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { trackLogout } from "../lib/activityTracker";
 import AIQuickLauncher from "../components/AIQuickLauncher";
+import { DipsyFloatingWidget } from "../components/DipsyFloating";
+
+/* Create context for Dipsy state that can be accessed from any page */
+export const DipsyContext = createContext();
+
+export function useDipsy() {
+  const context = useContext(DipsyContext);
+  if (!context) {
+    throw new Error('useDipsy must be used within MainLayout');
+  }
+  return context;
+}
 
 /* -------------------------- tiny class joiner -------------------------- */
 function cx(...a) {
@@ -416,11 +431,33 @@ export default function MainLayout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
+  // Dipsy state management - accessible to all child pages
+  const [dipsyState, setDipsyState] = useState('idle');
+  
+  // AI Chat trigger - increment to open
+  const [aiChatTrigger, setAiChatTrigger] = useState(0);
+
+  // Auto-sleep after 2 minutes of being idle
+  useEffect(() => {
+    let sleepTimer;
+    
+    if (dipsyState === 'idle') {
+      // Set timer to go to sleep after 2 minutes
+      sleepTimer = setTimeout(() => {
+        setDipsyState('sleeping');
+      }, 120000); // 2 minutes
+    }
+    
+    return () => {
+      if (sleepTimer) clearTimeout(sleepTimer);
+    };
+  }, [dipsyState]);
+
   // Auto-open groups if a child route is active
   const activeGroupByPath = useMemo(() => {
     if (pathname.startsWith("/billing")) return "accounting";
     if (
-      ["/", "/loads", "/in-transit", "/delivered", "/drivers", "/trucks", "/customers"].some(
+      ["/", "/loads", "/load-drafts", "/in-transit", "/delivered", "/drivers", "/trucks", "/customers"].some(
         (p) => (p === "/" ? pathname === "/" : pathname.startsWith(p))
       )
     )
@@ -466,171 +503,219 @@ export default function MainLayout() {
     }
   }, [navigate]);
 
+  // Dipsy context value
+  const dipsyContextValue = useMemo(() => ({
+    state: dipsyState,
+    setState: setDipsyState,
+    // Helper functions for common state changes
+    setThinking: () => setDipsyState('thinking'),
+    setConfident: () => setDipsyState('confident-victory'),
+    setLightbulb: () => setDipsyState('confident-lightbulb'),
+    setCelebrating: () => setDipsyState('celebrating'),
+    setLearning: () => setDipsyState('learning'),
+    setIdle: () => setDipsyState('idle'),
+    setSleeping: () => setDipsyState('sleeping'),
+  }), [dipsyState]);
+
   return (
-    <div className="min-h-screen bg-[var(--bg-app)] text-[var(--text-base)]">
-      <div className="grid grid-cols-[260px,1fr] md:grid-cols-[260px,1fr]">
-        {/* Sidebar */}
-        <aside className="hidden md:block h-screen sticky top-0 border-r border-[var(--border)] bg-[var(--bg-panel)]">
-          <div className="h-full flex flex-col p-3">
-            {/* Brand / Header */}
-            <div className="flex items-center justify-between px-2 py-3">
-              <div className="flex items-center gap-2">
-                <FolderKanban className="h-5 w-5 text-emerald-400" />
-                <span className="font-semibold tracking-wide">Atlas Command</span>
+    <DipsyContext.Provider value={dipsyContextValue}>
+      <div className="min-h-screen bg-[var(--bg-app)] text-[var(--text-base)]">
+        <div className="grid grid-cols-[260px,1fr] md:grid-cols-[260px,1fr]">
+          {/* Sidebar */}
+          <aside className="hidden md:block h-screen sticky top-0 border-r border-[var(--border)] bg-[var(--bg-panel)]">
+            <div className="h-full flex flex-col p-3">
+              {/* Brand / Header */}
+              <div className="flex items-center justify-between px-2 py-3">
+                <div className="flex items-center gap-2">
+                  <FolderKanban className="h-5 w-5 text-emerald-400" />
+                  <span className="font-semibold tracking-wide">Atlas Command</span>
+                </div>
+              </div>
+
+              {/* Groups */}
+              <nav className="mt-2 space-y-1 overflow-y-auto">
+                {/* Operations */}
+                <SideGroup
+                  id="operations"
+                  title="Operations"
+                  icon={ShieldCheck}
+                  defaultOpen={activeGroupByPath === "operations"}
+                >
+                  <SideLink to="/" end icon={Home}>
+                    Dashboard
+                  </SideLink>
+                  <SideLink to="/loads" icon={ClipboardList}>
+                    Loads
+                  </SideLink>
+                  <SideLink to="/load-drafts" icon={FileCheck}>
+                    Load Drafts
+                  </SideLink>
+                  <SideLink to="/in-transit" icon={Send}>
+                    In Transit
+                  </SideLink>
+                  <SideLink to="/delivered" icon={CheckCircle2}>
+                    Delivered
+                  </SideLink>
+                  <SideLink to="/drivers" icon={UserRound}>
+                    Drivers
+                  </SideLink>
+                  <SideLink to="/customers" icon={Users}>
+                    Customers
+                  </SideLink>
+                  <SideLink to="/learning" icon={GraduationCap}>
+                    Learning
+                  </SideLink>
+                  <SideLink to="/trucks" icon={Truck}>
+                    Trucks
+                  </SideLink>
+                </SideGroup>
+
+                {/* Accounting */}
+                <SideGroup
+                  id="accounting"
+                  title="Accounting"
+                  icon={DollarSign}
+                  defaultOpen={activeGroupByPath === "accounting"}
+                >
+                  <SideLink to="/billing" icon={CreditCard}>
+                    Billing
+                  </SideLink>
+                </SideGroup>
+
+                {/* Admin */}
+                <SideGroup
+                  id="admin"
+                  title="Admin"
+                  icon={Shield}
+                  defaultOpen={activeGroupByPath === "admin"}
+                >
+                  <SideLink to="/profile" icon={UserRound}>
+                    Profile &amp; Account
+                  </SideLink>
+                  <SideLink to="/settings/appearance" icon={Palette}>
+                    Appearance
+                  </SideLink>
+                  <SideLink to="/settings/notifications" icon={Bell}>
+                    Notifications
+                  </SideLink>
+                  <SideLink to="/settings/integrations" icon={Plug}>
+                    Integrations
+                  </SideLink>
+                  <SideLink to="/settings/security" icon={Shield}>
+                    Security
+                  </SideLink>
+                  <SideLink to="/teammanagement" icon={UserRound}>
+                    Team Management
+                  </SideLink>
+                  <SideLink to="/admin/driver-learning-test" icon={GraduationCap}>
+                    Driver Learning Test
+                  </SideLink>
+                </SideGroup>
+
+                {/* AI Tools */}
+                <SideGroup
+                  id="ai"
+                  title="AI Tools"
+                  icon={Bot}
+                  defaultOpen={true}
+                >
+                  <SideLink to="/dispatch-ai" icon={Bot}>
+                    Dispatch AI (Lab)
+                  </SideLink>
+                  <SideLink to="/ai" icon={Sparkles}>
+                    AI Recommendations
+                  </SideLink>
+                  <SideLink to="/ai/lanes" icon={BarChart3}>
+                    Lane Intelligence
+                  </SideLink>
+                  <SideLink to="/ai-lab-proof" icon={Sparkles}>
+                    AI Lab Proof
+                  </SideLink>
+                </SideGroup>
+
+                {/* Standalone link (outside groups) */}
+                <SideLink to="/ai-insights" icon={Sparkles}>
+                  AI Insights
+                </SideLink>
+              </nav>
+
+              {/* Footer actions */}
+              <div className="mt-auto pt-3 space-y-2">
+                <button
+                  onClick={signOut}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-base)] hover:bg-[var(--bg-hover)] transition"
+                >
+                  <LogOut className="h-4 w-4" />
+                  <span>Sign out</span>
+                </button>
+              </div>
+            </div>
+          </aside>
+
+          {/* Main content */}
+          <main className="min-h-screen">
+            {/* Mobile top bar */}
+            <div className="md:hidden sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg-panel)]/80 backdrop-blur">
+              <div className="flex items-center justify-between px-3 py-2">
+                <button
+                  onClick={() => {
+                    // Optional: hook up a mobile drawer in the future
+                  }}
+                  className="p-2 rounded-lg hover:bg-[var(--bg-hover)]"
+                  aria-label="Open menu"
+                >
+                  <Menu className="h-5 w-5" />
+                </button>
+                <span className="font-semibold">Atlas Command</span>
+                <div className="flex items-center gap-2">
+                  <NotificationBell />
+                </div>
               </div>
             </div>
 
-            {/* Groups */}
-            <nav className="mt-2 space-y-1 overflow-y-auto">
-              {/* Operations */}
-              <SideGroup
-                id="operations"
-                title="Operations"
-                icon={ShieldCheck}
-                defaultOpen={activeGroupByPath === "operations"}
-              >
-                <SideLink to="/" end icon={Home}>
-                  Dashboard
-                </SideLink>
-                <SideLink to="/loads" icon={ClipboardList}>
-                  Loads
-                </SideLink>
-                <SideLink to="/in-transit" icon={Send}>
-                  In Transit
-                </SideLink>
-                <SideLink to="/delivered" icon={CheckCircle2}>
-                  Delivered
-                </SideLink>
-                <SideLink to="/drivers" icon={UserRound}>
-                  Drivers
-                </SideLink>
-                <SideLink to="/customers" icon={Users}>
-                  Customers
-                </SideLink>
-                <SideLink to="/learning" icon={GraduationCap}>
-                  Learning
-                </SideLink>
-                <SideLink to="/trucks" icon={Truck}>
-                  Trucks
-                </SideLink>
-              </SideGroup>
-
-              {/* Accounting */}
-              <SideGroup
-                id="accounting"
-                title="Accounting"
-                icon={DollarSign}
-                defaultOpen={activeGroupByPath === "accounting"}
-              >
-                <SideLink to="/billing" icon={CreditCard}>
-                  Billing
-                </SideLink>
-              </SideGroup>
-
-              {/* Admin */}
-              <SideGroup
-                id="admin"
-                title="Admin"
-                icon={Shield}
-                defaultOpen={activeGroupByPath === "admin"}
-              >
-                <SideLink to="/profile" icon={UserRound}>
-                  Profile &amp; Account
-                </SideLink>
-                <SideLink to="/settings/appearance" icon={Palette}>
-                  Appearance
-                </SideLink>
-                <SideLink to="/settings/notifications" icon={Bell}>
-                  Notifications
-                </SideLink>
-                <SideLink to="/settings/integrations" icon={Plug}>
-                  Integrations
-                </SideLink>
-                <SideLink to="/settings/security" icon={Shield}>
-                  Security
-                </SideLink>
-                <SideLink to="/teammanagement" icon={UserRound}>
-                  Team Management
-                </SideLink>
-                <SideLink to="/admin/driver-learning-test" icon={GraduationCap}>
-                  Driver Learning Test
-                </SideLink>
-              </SideGroup>
-
-              {/* AI Tools */}
-              <SideGroup
-                id="ai"
-                title="AI Tools"
-                icon={Bot}
-                defaultOpen={true}
-              >
-                <SideLink to="/dispatch-ai" icon={Bot}>
-                  Dispatch AI (Lab)
-                </SideLink>
-                <SideLink to="/ai" icon={Sparkles}>
-                  AI Recommendations
-                </SideLink>
-                {/* New: alternate path that avoids the ai-proof route funk */}
-                <SideLink to="/ai-lab-proof" icon={Sparkles}>
-                  AI Lab Proof
-                </SideLink>
-              </SideGroup>
-
-              {/* Standalone link (outside groups) */}
-              <SideLink to="/ai-insights" icon={Sparkles}>
-                AI Insights
-              </SideLink>
-            </nav>
-
-            {/* Footer actions */}
-            <div className="mt-auto pt-3 space-y-2">
-              <button
-                onClick={signOut}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-base)] hover:bg-[var(--bg-hover)] transition"
-              >
-                <LogOut className="h-4 w-4" />
-                <span>Sign out</span>
-              </button>
-            </div>
-          </div>
-        </aside>
-
-        {/* Main content */}
-        <main className="min-h-screen">
-          {/* Mobile top bar */}
-          <div className="md:hidden sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg-panel)]/80 backdrop-blur">
-            <div className="flex items-center justify-between px-3 py-2">
-              <button
-                onClick={() => {
-                  // Optional: hook up a mobile drawer in the future
-                }}
-                className="p-2 rounded-lg hover:bg-[var(--bg-hover)]"
-                aria-label="Open menu"
-              >
-                <Menu className="h-5 w-5" />
-              </button>
-              <span className="font-semibold">Atlas Command</span>
-              <div className="flex items-center gap-2">
+            {/* Desktop top bar */}
+            <div className="hidden md:block sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg-panel)] backdrop-blur-sm">
+              <div className="flex items-center justify-end px-6 py-3 gap-2">
                 <NotificationBell />
+                <AvatarMenu onSignOut={signOut} />
               </div>
             </div>
-          </div>
 
-          {/* Desktop top bar */}
-          <div className="hidden md:block sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg-panel)] backdrop-blur-sm">
-            <div className="flex items-center justify-end px-6 py-3 gap-2">
-              <NotificationBell />
-              <AvatarMenu onSignOut={signOut} />
+            {/* Routed content */}
+            <div className="p-4 md:p-6">
+              <Outlet />
+              <AIQuickLauncher 
+                openTrigger={aiChatTrigger} 
+              />
+              
+              {/* Dipsy Floating Widget - visible on all pages */}
+              <DipsyFloatingWidget 
+                initialState={dipsyState}
+                defaultPosition={{ 
+                  x: typeof window !== 'undefined' ? window.innerWidth - 250 : 100, 
+                  y: 100 
+                }}
+                onAskDipsy={() => {
+                  // 🎯 Wake Dipsy if sleeping, then show excitement
+                  if (dipsyState === 'sleeping') {
+                    setDipsyState('idle');
+                    setTimeout(() => {
+                      setDipsyState('confident-lightbulb');
+                      setTimeout(() => setDipsyState('idle'), 1500);
+                    }, 300);
+                  } else {
+                    setDipsyState('confident-lightbulb');
+                    setTimeout(() => setDipsyState('idle'), 1500);
+                  }
+                  
+                  // Trigger AI chat opening
+                  setAiChatTrigger(prev => prev + 1);
+                }}
+              />
             </div>
-          </div>
-
-          {/* Routed content */}
-          <div className="p-4 md:p-6">
-            <Outlet />
-            <AIQuickLauncher />
-          </div>
-        </main>
+          </main>
+        </div>
       </div>
-    </div>
+    </DipsyContext.Provider>
   );
 }
