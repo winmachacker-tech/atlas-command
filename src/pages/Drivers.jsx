@@ -1,6 +1,6 @@
 ﻿// FILE: src/pages/Drivers.jsx
 // Purpose: Editable Drivers page with inline editing + slide-over "Preferences" editor per driver.
-// - Auto-detects columns for the table (truck_id vs truck, etc.)
+// - Auto-detects columns for the table (truck_id vs truck, etc.).
 // - Preferences are stored in drivers.preferences (JSON/JSONB). If column is missing, shows a banner with SQL.
 // - No route changes required. A "Prefs" button on each row opens the drawer.
 
@@ -21,9 +21,15 @@ import {
 } from "lucide-react";
 
 /* ---------------------------- helpers ---------------------------- */
-function cx(...a) { return a.filter(Boolean).join(" "); }
-function cleanStr(v) { return (v ?? "").toString().trim(); }
-function isBlank(v) { return cleanStr(v) === ""; }
+function cx(...a) {
+  return a.filter(Boolean).join(" ");
+}
+function cleanStr(v) {
+  return (v ?? "").toString().trim();
+}
+function isBlank(v) {
+  return cleanStr(v) === "";
+}
 function toast(setToast, tone, msg) {
   setToast({ tone, msg });
   setTimeout(() => setToast(null), 2400);
@@ -37,13 +43,37 @@ function firstExisting(cols, candidates) {
 
 // Small coercers for preferences
 const asArray = (v) =>
-  Array.isArray(v) ? v : (typeof v === "string" && v.trim()
-    ? v.split(",").map(s => s.trim()).filter(Boolean) : []);
-const asString = (arr) => Array.isArray(arr) ? arr.join(", ") : (arr ?? "");
+  Array.isArray(v)
+    ? v
+    : typeof v === "string" && v.trim()
+    ? v
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
+const asString = (arr) => (Array.isArray(arr) ? arr.join(", ") : arr ?? "");
 const toInt = (v) => {
   const n = parseInt(String(v ?? "").replace(/[^\d-]/g, ""), 10);
   return Number.isFinite(n) ? n : null;
 };
+
+/**
+ * Fallback columns for an empty drivers table.
+ * This fixes the "Add Driver" button not working when there are zero rows,
+ * because we still know the expected schema even if no data has been inserted yet.
+ */
+const FALLBACK_DRIVER_COLS = [
+  "id",
+  "org_id",
+  "full_name",
+  "phone",
+  "email",
+  "status",
+  "truck_id",
+  "notes",
+  "active",
+  "preferences",
+];
 
 /* ------------------------- tiny toast UI ------------------------- */
 function Toast({ tone = "zinc", msg = "" }) {
@@ -55,14 +85,26 @@ function Toast({ tone = "zinc", msg = "" }) {
       ? "bg-emerald-600 text-white"
       : "bg-zinc-800 text-zinc-100";
   return (
-    <div className={cx("fixed bottom-5 right-5 px-4 py-2 rounded-lg shadow-lg z-50", t)}>
+    <div
+      className={cx(
+        "fixed bottom-5 right-5 px-4 py-2 rounded-lg shadow-lg z-50",
+        t
+      )}
+    >
       {msg}
     </div>
   );
 }
 
 /* ------------------------- Input cell ---------------------------- */
-function EditableCell({ value, onChange, onCommit, onCancel, type = "text", disabled }) {
+function EditableCell({
+  value,
+  onChange,
+  onCommit,
+  onCancel,
+  type = "text",
+  disabled,
+}) {
   const [v, setV] = useState(value ?? "");
   useEffect(() => setV(value ?? ""), [value]);
 
@@ -115,7 +157,9 @@ function DriverRow({
 }) {
   const [edit, setEdit] = useState(false);
   const [draft, setDraft] = useState(row);
-  useEffect(() => { if (!edit) setDraft(row); }, [row, edit]);
+  useEffect(() => {
+    if (!edit) setDraft(row);
+  }, [row, edit]);
 
   const saving = savingId === row[colKeys.idKey];
 
@@ -144,7 +188,9 @@ function DriverRow({
         {edit ? (
           <EditableCell
             value={draft[colKeys.nameKey]}
-            onChange={(v) => setDraft((d) => ({ ...d, [colKeys.nameKey]: v }))}
+            onChange={(v) =>
+              setDraft((d) => ({ ...d, [colKeys.nameKey]: v }))
+            }
             onCommit={commit}
             onCancel={cancel}
           />
@@ -160,12 +206,16 @@ function DriverRow({
             <EditableCell
               type="tel"
               value={draft[colKeys.phoneKey]}
-              onChange={(v) => setDraft((d) => ({ ...d, [colKeys.phoneKey]: v }))}
+              onChange={(v) =>
+                setDraft((d) => ({ ...d, [colKeys.phoneKey]: v }))
+              }
               onCommit={commit}
               onCancel={cancel}
             />
           ) : (
-            <span className="text-zinc-200">{row[colKeys.phoneKey] || "—"}</span>
+            <span className="text-zinc-200">
+              {row[colKeys.phoneKey] || "—"}
+            </span>
           )}
         </td>
       )}
@@ -177,12 +227,16 @@ function DriverRow({
             <EditableCell
               type="email"
               value={draft[colKeys.emailKey]}
-              onChange={(v) => setDraft((d) => ({ ...d, [colKeys.emailKey]: v }))}
+              onChange={(v) =>
+                setDraft((d) => ({ ...d, [colKeys.emailKey]: v }))
+              }
               onCommit={commit}
               onCancel={cancel}
             />
           ) : (
-            <span className="text-zinc-200">{row[colKeys.emailKey] || "—"}</span>
+            <span className="text-zinc-200">
+              {row[colKeys.emailKey] || "—"}
+            </span>
           )}
         </td>
       )}
@@ -193,7 +247,9 @@ function DriverRow({
           {edit ? (
             <EditableCell
               value={draft[colKeys.statusKey]}
-              onChange={(v) => setDraft((d) => ({ ...d, [colKeys.statusKey]: v }))}
+              onChange={(v) =>
+                setDraft((d) => ({ ...d, [colKeys.statusKey]: v }))
+              }
               onCommit={commit}
               onCancel={cancel}
             />
@@ -205,7 +261,8 @@ function DriverRow({
                   "bg-emerald-600/15 text-emerald-400 border-emerald-700/40",
                 row[colKeys.statusKey] === "on_load" &&
                   "bg-sky-600/15 text-sky-400 border-sky-700/40",
-                !row[colKeys.statusKey] && "text-zinc-400 border-zinc-700/40"
+                !row[colKeys.statusKey] &&
+                  "text-zinc-400 border-zinc-700/40"
               )}
             >
               {row[colKeys.statusKey] || "—"}
@@ -220,12 +277,16 @@ function DriverRow({
           {edit ? (
             <EditableCell
               value={draft[colKeys.truckKey]}
-              onChange={(v) => setDraft((d) => ({ ...d, [colKeys.truckKey]: v }))}
+              onChange={(v) =>
+                setDraft((d) => ({ ...d, [colKeys.truckKey]: v }))
+              }
               onCommit={commit}
               onCancel={cancel}
             />
           ) : (
-            <span className="text-zinc-200">{row[colKeys.truckKey] || "—"}</span>
+            <span className="text-zinc-200">
+              {row[colKeys.truckKey] || "—"}
+            </span>
           )}
         </td>
       )}
@@ -236,12 +297,16 @@ function DriverRow({
           {edit ? (
             <EditableCell
               value={draft[colKeys.notesKey]}
-              onChange={(v) => setDraft((d) => ({ ...d, [colKeys.notesKey]: v }))}
+              onChange={(v) =>
+                setDraft((d) => ({ ...d, [colKeys.notesKey]: v }))
+              }
               onCommit={commit}
               onCancel={cancel}
             />
           ) : (
-            <span className="text-zinc-300 line-clamp-2">{row[colKeys.notesKey] || "—"}</span>
+            <span className="text-zinc-300 line-clamp-2">
+              {row[colKeys.notesKey] || "—"}
+            </span>
           )}
         </td>
       )}
@@ -325,9 +390,9 @@ export default function Drivers() {
   }, []);
 
   const handlePrefsCertChange = useCallback((cert, checked) => {
-    setPrefsDraft((d) => ({ 
-      ...d, 
-      certifications: { ...d.certifications, [cert]: checked } 
+    setPrefsDraft((d) => ({
+      ...d,
+      certifications: { ...d.certifications, [cert]: checked },
     }));
   }, []);
 
@@ -343,13 +408,24 @@ export default function Drivers() {
     const truckKey = firstExisting(cols, ["truck_id", "truck", "vehicle_id"]);
     const activeKey = firstExisting(cols, ["active", "is_active"]);
 
-    return { idKey, nameKey, phoneKey, emailKey, statusKey, notesKey, truckKey, activeKey };
+    return {
+      idKey,
+      nameKey,
+      phoneKey,
+      emailKey,
+      statusKey,
+      notesKey,
+      truckKey,
+      activeKey,
+    };
   }, [knownCols]);
 
-  const hasPreferencesCol = useMemo(() => knownCols.includes("preferences"), [knownCols]);
+  const hasPreferencesCol = useMemo(
+    () => knownCols.includes("preferences"),
+    [knownCols]
+  );
 
   const buildEmptyNewDraft = (cols) => {
-    const d = {};
     const nameKey = firstExisting(cols, ["full_name", "name", "driver_name"]);
     const statusKey = firstExisting(cols, ["status", "state"]);
     const activeKey = firstExisting(cols, ["active", "is_active"]);
@@ -357,29 +433,43 @@ export default function Drivers() {
       [nameKey ?? "full_name"]: "",
       [statusKey ?? "status"]: "available",
     };
-    if (firstExisting(cols, ["phone", "phone_number"])) defaults[firstExisting(cols, ["phone", "phone_number"])] = "";
+    if (firstExisting(cols, ["phone", "phone_number"]))
+      defaults[firstExisting(cols, ["phone", "phone_number"])] = "";
     if (firstExisting(cols, ["email"])) defaults["email"] = "";
-    if (firstExisting(cols, ["notes", "note"])) defaults[firstExisting(cols, ["notes", "note"])] = "";
-    if (firstExisting(cols, ["truck_id", "truck", "vehicle_id"])) defaults[firstExisting(cols, ["truck_id", "truck", "vehicle_id"])] = "";
+    if (firstExisting(cols, ["notes", "note"]))
+      defaults[firstExisting(cols, ["notes", "note"])] = "";
+    if (firstExisting(cols, ["truck_id", "truck", "vehicle_id"]))
+      defaults[firstExisting(cols, ["truck_id", "truck", "vehicle_id"])] = "";
     if (activeKey) defaults[activeKey] = true;
     return defaults;
   };
 
   const fetchDrivers = async () => {
     setLoading(true);
-    const { data, error } = await supabase.from("drivers").select("*").order("id", { ascending: true });
+    const { data, error } = await supabase
+      .from("drivers")
+      .select("*")
+      .order("id", { ascending: true });
     if (error) {
       console.error("fetch drivers error:", error);
       toast(setToast, "red", `Load failed: ${error.message}`);
       setRows([]);
       setKnownCols([]);
     } else {
-      const cols = Array.from(
-        data?.reduce((set, row) => {
-          Object.keys(row || {}).forEach((k) => set.add(k));
-          return set;
-        }, new Set())
-      );
+      // IMPORTANT FIX:
+      // If there are no rows yet, fall back to a known schema so the "Add Driver"
+      // quick-add section still works and the button is enabled.
+      let cols;
+      if (data && data.length > 0) {
+        cols = Array.from(
+          data.reduce((set, row) => {
+            Object.keys(row || {}).forEach((k) => set.add(k));
+            return set;
+          }, new Set())
+        );
+      } else {
+        cols = [...FALLBACK_DRIVER_COLS];
+      }
       setKnownCols(cols);
       setRows(data || []);
       setNewDraft(buildEmptyNewDraft(cols));
@@ -394,7 +484,9 @@ export default function Drivers() {
   const filtered = useMemo(() => {
     const q = cleanStr(query).toLowerCase();
     if (!q) return rows;
-    return rows.filter((r) => cleanStr(JSON.stringify(r)).toLowerCase().includes(q));
+    return rows.filter((r) =>
+      cleanStr(JSON.stringify(r)).toLowerCase().includes(q)
+    );
   }, [rows, query]);
 
   const onSave = async (idValue, fullDraft) => {
@@ -409,7 +501,12 @@ export default function Drivers() {
         toast(setToast, "zinc", "Nothing to update.");
         return;
       }
-      const { error } = await supabase.from("drivers").update(payload).eq(colKeys.idKey, idValue).select().single();
+      const { error } = await supabase
+        .from("drivers")
+        .update(payload)
+        .eq(colKeys.idKey, idValue)
+        .select()
+        .single();
       if (error) throw error;
       toast(setToast, "green", "Driver updated.");
       await fetchDrivers();
@@ -426,7 +523,10 @@ export default function Drivers() {
     if (!sure) return;
     try {
       setSavingId(idValue);
-      const { error } = await supabase.from("drivers").delete().eq(colKeys.idKey, idValue);
+      const { error } = await supabase
+        .from("drivers")
+        .delete()
+        .eq(colKeys.idKey, idValue);
       if (error) throw error;
       toast(setToast, "green", "Driver deleted.");
       setRows((r) => r.filter((x) => x[colKeys.idKey] !== idValue));
@@ -455,7 +555,11 @@ export default function Drivers() {
       for (const k of Object.keys(newDraft)) {
         if (knownCols.includes(k)) payload[k] = newDraft[k];
       }
-      const { data, error } = await supabase.from("drivers").insert(payload).select().single();
+      const { data, error } = await supabase
+        .from("drivers")
+        .insert(payload)
+        .select()
+        .single();
       if (error) throw error;
       toast(setToast, "green", "Driver created.");
       setRows((r) => [...r, data]);
@@ -485,7 +589,10 @@ export default function Drivers() {
     // Known columns for prefs rely on table-level cols:
     setPrefsColsKnown(hasPreferencesCol);
     // Merge defaults with existing
-    const incoming = (row?.preferences && typeof row.preferences === "object") ? row.preferences : {};
+    const incoming =
+      row?.preferences && typeof row.preferences === "object"
+        ? row.preferences
+        : {};
     setPrefsDraft({
       equipment_types: asArray(incoming.equipment_types),
       lane_whitelist: asArray(incoming.lane_whitelist),
@@ -508,7 +615,11 @@ export default function Drivers() {
 
   const savePrefs = async () => {
     if (!prefsColsKnown) {
-      toast(setToast, "red", "No preferences column on drivers. Add it first (see banner).");
+      toast(
+        setToast,
+        "red",
+        "No preferences column on drivers. Add it first (see banner)."
+      );
       return;
     }
     if (!selectedDriver) return;
@@ -529,7 +640,9 @@ export default function Drivers() {
           certifications: {
             twic: Boolean(prefsDraft?.certifications?.twic),
             tsa: Boolean(prefsDraft?.certifications?.tsa),
-            dod_clearance: Boolean(prefsDraft?.certifications?.dod_clearance),
+            dod_clearance: Boolean(
+              prefsDraft?.certifications?.dod_clearance
+            ),
           },
           notes: prefsDraft.notes ?? "",
         },
@@ -557,27 +670,30 @@ export default function Drivers() {
     }
   };
 
-  const PrefsBanner = () => (!prefsColsKnown ? (
-    <div className="mb-3 p-3 rounded-lg border border-amber-700/40 bg-amber-600/10 text-amber-200 flex items-start gap-2">
-      <AlertTriangle className="w-4 h-4 mt-0.5" />
-      <div className="text-xs">
-        <div className="font-medium">Preferences column not found.</div>
-        <div className="opacity-90">
-          Run this once, then reopen this drawer:
-          <pre className="mt-2 p-2 rounded bg-zinc-900/60 border border-zinc-700 text-[11px] overflow-auto">
-{`alter table public.drivers
+  const PrefsBanner = () =>
+    !prefsColsKnown ? (
+      <div className="mb-3 p-3 rounded-lg border border-amber-700/40 bg-amber-600/10 text-amber-200 flex items-start gap-2">
+        <AlertTriangle className="w-4 h-4 mt-0.5" />
+        <div className="text-xs">
+          <div className="font-medium">Preferences column not found.</div>
+          <div className="opacity-90">
+            Run this once, then reopen this drawer:
+            <pre className="mt-2 p-2 rounded bg-zinc-900/60 border border-zinc-700 text-[11px] overflow-auto">
+              {`alter table public.drivers
 add column if not exists preferences jsonb not null default '{}';`}
-          </pre>
+            </pre>
+          </div>
         </div>
       </div>
-    </div>
-  ) : null);
+    ) : null;
 
   const PrefsInput = ({ label, children, help }) => (
     <div className="mb-3">
       <div className="text-xs text-zinc-300 mb-1">{label}</div>
       {children}
-      {help && <div className="text-[11px] text-zinc-400 mt-1">{help}</div>}
+      {help && (
+        <div className="text-[11px] text-zinc-400 mt-1">{help}</div>
+      )}
     </div>
   );
 
@@ -611,7 +727,9 @@ add column if not exists preferences jsonb not null default '{}';`}
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-semibold text-zinc-100">Drivers</h1>
-          <p className="text-zinc-400 text-sm">Manage, edit, and create drivers.</p>
+          <p className="text-zinc-400 text-sm">
+            Manage, edit, and create drivers.
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -649,7 +767,12 @@ add column if not exists preferences jsonb not null default '{}';`}
                 className="px-2 py-1 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm"
                 placeholder="Full name *"
                 value={newDraft[colKeys.nameKey] ?? ""}
-                onChange={(e) => setNewDraft((d) => ({ ...d, [colKeys.nameKey]: e.target.value }))}
+                onChange={(e) =>
+                  setNewDraft((d) => ({
+                    ...d,
+                    [colKeys.nameKey]: e.target.value,
+                  }))
+                }
               />
             )}
             {colKeys.phoneKey && (
@@ -657,7 +780,12 @@ add column if not exists preferences jsonb not null default '{}';`}
                 className="px-2 py-1 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm"
                 placeholder="Phone"
                 value={newDraft[colKeys.phoneKey] ?? ""}
-                onChange={(e) => setNewDraft((d) => ({ ...d, [colKeys.phoneKey]: e.target.value }))}
+                onChange={(e) =>
+                  setNewDraft((d) => ({
+                    ...d,
+                    [colKeys.phoneKey]: e.target.value,
+                  }))
+                }
               />
             )}
             {colKeys.emailKey && (
@@ -665,7 +793,12 @@ add column if not exists preferences jsonb not null default '{}';`}
                 className="px-2 py-1 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm"
                 placeholder="Email"
                 value={newDraft[colKeys.emailKey] ?? ""}
-                onChange={(e) => setNewDraft((d) => ({ ...d, [colKeys.emailKey]: e.target.value }))}
+                onChange={(e) =>
+                  setNewDraft((d) => ({
+                    ...d,
+                    [colKeys.emailKey]: e.target.value,
+                  }))
+                }
               />
             )}
             {colKeys.statusKey && (
@@ -673,7 +806,12 @@ add column if not exists preferences jsonb not null default '{}';`}
                 className="px-2 py-1 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm"
                 placeholder="Status (e.g., available/on_load)"
                 value={newDraft[colKeys.statusKey] ?? ""}
-                onChange={(e) => setNewDraft((d) => ({ ...d, [colKeys.statusKey]: e.target.value }))}
+                onChange={(e) =>
+                  setNewDraft((d) => ({
+                    ...d,
+                    [colKeys.statusKey]: e.target.value,
+                  }))
+                }
               />
             )}
             {colKeys.truckKey && (
@@ -681,7 +819,12 @@ add column if not exists preferences jsonb not null default '{}';`}
                 className="px-2 py-1 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm"
                 placeholder="Truck"
                 value={newDraft[colKeys.truckKey] ?? ""}
-                onChange={(e) => setNewDraft((d) => ({ ...d, [colKeys.truckKey]: e.target.value }))}
+                onChange={(e) =>
+                  setNewDraft((d) => ({
+                    ...d,
+                    [colKeys.truckKey]: e.target.value,
+                  }))
+                }
               />
             )}
             {colKeys.notesKey && (
@@ -689,7 +832,12 @@ add column if not exists preferences jsonb not null default '{}';`}
                 className="px-2 py-1 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm md:col-span-2"
                 placeholder="Notes"
                 value={newDraft[colKeys.notesKey] ?? ""}
-                onChange={(e) => setNewDraft((d) => ({ ...d, [colKeys.notesKey]: e.target.value }))}
+                onChange={(e) =>
+                  setNewDraft((d) => ({
+                    ...d,
+                    [colKeys.notesKey]: e.target.value,
+                  }))
+                }
               />
             )}
           </div>
@@ -699,7 +847,11 @@ add column if not exists preferences jsonb not null default '{}';`}
               onClick={onCreate}
               disabled={creating || !colKeys.nameKey}
             >
-              {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+              {creating ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Plus className="w-4 h-4" />
+              )}
               Add Driver
             </button>
           </div>
@@ -711,9 +863,16 @@ add column if not exists preferences jsonb not null default '{}';`}
         <table className="min-w-full text-sm">
           <thead className="bg-zinc-900/60 border-b border-zinc-800 text-zinc-300">
             <tr>
-              <th className="text-left px-3 py-2 font-medium">{idHeader.toUpperCase()}</th>
+              <th className="text-left px-3 py-2 font-medium">
+                {idHeader.toUpperCase()}
+              </th>
               {colsToShow.map((c) => (
-                <th key={c.key} className="text-left px-3 py-2 font-medium">{c.label}</th>
+                <th
+                  key={c.key}
+                  className="text-left px-3 py-2 font-medium"
+                >
+                  {c.label}
+                </th>
               ))}
               <th className="text-center px-3 py-2 font-medium">Actions</th>
             </tr>
@@ -722,14 +881,20 @@ add column if not exists preferences jsonb not null default '{}';`}
           <tbody className="divide-y divide-zinc-800">
             {loading ? (
               <tr>
-                <td colSpan={1 + colsToShow.length + 1} className="px-3 py-8 text-center text-zinc-400">
+                <td
+                  colSpan={1 + colsToShow.length + 1}
+                  className="px-3 py-8 text-center text-zinc-400"
+                >
                   <Loader2 className="w-5 h-5 animate-spin inline-block mr-2" />
                   Loading drivers…
                 </td>
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={1 + colsToShow.length + 1} className="px-3 py-10 text-center text-zinc-400">
+                <td
+                  colSpan={1 + colsToShow.length + 1}
+                  className="px-3 py-10 text-center text-zinc-400"
+                >
                   No drivers found.
                 </td>
               </tr>
@@ -761,9 +926,12 @@ add column if not exists preferences jsonb not null default '{}';`}
           <div className="fixed inset-y-0 right-0 w-full sm:max-w-xl bg-zinc-950 border-l border-zinc-800 z-50 shadow-2xl flex flex-col">
             <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
               <div>
-                <div className="text-zinc-100 font-semibold text-lg">Driver Preferences</div>
+                <div className="text-zinc-100 font-semibold text-lg">
+                  Driver Preferences
+                </div>
                 <div className="text-zinc-400 text-xs">
-                  {selectedDriver?.[colKeys.nameKey] || "Driver"} · ID {String(selectedDriver?.[colKeys.idKey]).slice(0,8)}
+                  {selectedDriver?.[colKeys.nameKey] || "Driver"} · ID{" "}
+                  {String(selectedDriver?.[colKeys.idKey]).slice(0, 8)}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -777,9 +945,17 @@ add column if not exists preferences jsonb not null default '{}';`}
                   className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-emerald-700 bg-emerald-600/20 hover:bg-emerald-600/30"
                   onClick={savePrefs}
                   disabled={prefsSaving || !prefsColsKnown}
-                  title={!prefsColsKnown ? "Add preferences column first" : "Save preferences"}
+                  title={
+                    !prefsColsKnown
+                      ? "Add preferences column first"
+                      : "Save preferences"
+                  }
                 >
-                  {prefsSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {prefsSaving ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Save className="w-4 h-4" />
+                  )}
                   Save
                 </button>
               </div>
@@ -789,35 +965,64 @@ add column if not exists preferences jsonb not null default '{}';`}
               <PrefsBanner />
 
               <div className="grid grid-cols-1 gap-3">
-                <PrefsInput label="Equipment types" help="Comma-separated (e.g., dry van, flatbed, stepdeck, rgn, reefer)">
+                <PrefsInput
+                  label="Equipment types"
+                  help="Comma-separated (e.g., dry van, flatbed, stepdeck, rgn, reefer)"
+                >
                   <PrefsText
                     placeholder="dry van, flatbed, stepdeck…"
                     value={asString(prefsDraft.equipment_types)}
-                    onChange={(e) => handlePrefsArrayChange("equipment_types", e.target.value)}
+                    onChange={(e) =>
+                      handlePrefsArrayChange(
+                        "equipment_types",
+                        e.target.value
+                      )
+                    }
                   />
                 </PrefsInput>
 
-                <PrefsInput label="Preferred lanes" help="Comma-separated. Free text or City, ST → City, ST">
+                <PrefsInput
+                  label="Preferred lanes"
+                  help="Comma-separated. Free text or City, ST → City, ST"
+                >
                   <PrefsText
                     placeholder="Sacramento, CA → Phoenix, AZ"
                     value={asString(prefsDraft.lane_whitelist)}
-                    onChange={(e) => handlePrefsArrayChange("lane_whitelist", e.target.value)}
+                    onChange={(e) =>
+                      handlePrefsArrayChange(
+                        "lane_whitelist",
+                        e.target.value
+                      )
+                    }
                   />
                 </PrefsInput>
 
-                <PrefsInput label="Avoid lanes/regions" help="Comma-separated">
+                <PrefsInput
+                  label="Avoid lanes/regions"
+                  help="Comma-separated"
+                >
                   <PrefsText
                     placeholder="Portland, OR, NYC metro"
                     value={asString(prefsDraft.lane_blacklist)}
-                    onChange={(e) => handlePrefsArrayChange("lane_blacklist", e.target.value)}
+                    onChange={(e) =>
+                      handlePrefsArrayChange(
+                        "lane_blacklist",
+                        e.target.value
+                      )
+                    }
                   />
                 </PrefsInput>
 
-                <PrefsInput label="Home days" help="Comma-separated: Mon, Tue, Wed, Thu, Fri, Sat, Sun">
+                <PrefsInput
+                  label="Home days"
+                  help="Comma-separated: Mon, Tue, Wed, Thu, Fri, Sat, Sun"
+                >
                   <PrefsText
                     placeholder="Fri, Sat"
                     value={asString(prefsDraft.home_days)}
-                    onChange={(e) => handlePrefsArrayChange("home_days", e.target.value)}
+                    onChange={(e) =>
+                      handlePrefsArrayChange("home_days", e.target.value)
+                    }
                   />
                 </PrefsInput>
 
@@ -827,24 +1032,45 @@ add column if not exists preferences jsonb not null default '{}';`}
                       inputMode="numeric"
                       placeholder="e.g., 45000"
                       value={prefsDraft.max_weight_lbs ?? ""}
-                      onChange={(e) => handlePrefsNumberChange("max_weight_lbs", e.target.value)}
+                      onChange={(e) =>
+                        handlePrefsNumberChange(
+                          "max_weight_lbs",
+                          e.target.value
+                        )
+                      }
                     />
                   </PrefsInput>
-                  <PrefsInput label="Home radius (miles)" help="Preferred dispatch radius around home base">
+                  <PrefsInput
+                    label="Home radius (miles)"
+                    help="Preferred dispatch radius around home base"
+                  >
                     <PrefsText
                       inputMode="numeric"
                       placeholder="e.g., 100"
                       value={prefsDraft.distance_radius_miles ?? ""}
-                      onChange={(e) => handlePrefsNumberChange("distance_radius_miles", e.target.value)}
+                      onChange={(e) =>
+                        handlePrefsNumberChange(
+                          "distance_radius_miles",
+                          e.target.value
+                        )
+                      }
                     />
                   </PrefsInput>
                 </div>
 
-                <PrefsInput label="Avoid customers" help="Comma-separated customer names">
+                <PrefsInput
+                  label="Avoid customers"
+                  help="Comma-separated customer names"
+                >
                   <PrefsText
                     placeholder="Shipper A, Consignee B"
                     value={asString(prefsDraft.avoid_customers)}
-                    onChange={(e) => handlePrefsArrayChange("avoid_customers", e.target.value)}
+                    onChange={(e) =>
+                      handlePrefsArrayChange(
+                        "avoid_customers",
+                        e.target.value
+                      )
+                    }
                   />
                 </PrefsInput>
 
@@ -853,7 +1079,9 @@ add column if not exists preferences jsonb not null default '{}';`}
                     <input
                       type="checkbox"
                       checked={!!prefsDraft?.certifications?.twic}
-                      onChange={(e) => handlePrefsCertChange("twic", e.target.checked)}
+                      onChange={(e) =>
+                        handlePrefsCertChange("twic", e.target.checked)
+                      }
                     />
                     TWIC
                   </label>
@@ -861,7 +1089,9 @@ add column if not exists preferences jsonb not null default '{}';`}
                     <input
                       type="checkbox"
                       checked={!!prefsDraft?.certifications?.tsa}
-                      onChange={(e) => handlePrefsCertChange("tsa", e.target.checked)}
+                      onChange={(e) =>
+                        handlePrefsCertChange("tsa", e.target.checked)
+                      }
                     />
                     TSA
                   </label>
@@ -869,17 +1099,27 @@ add column if not exists preferences jsonb not null default '{}';`}
                     <input
                       type="checkbox"
                       checked={!!prefsDraft?.certifications?.dod_clearance}
-                      onChange={(e) => handlePrefsCertChange("dod_clearance", e.target.checked)}
+                      onChange={(e) =>
+                        handlePrefsCertChange(
+                          "dod_clearance",
+                          e.target.checked
+                        )
+                      }
                     />
                     DOD Clearance
                   </label>
                 </div>
 
-                <PrefsInput label="Languages" help="Comma-separated. Example: English, Russian, Ukrainian">
+                <PrefsInput
+                  label="Languages"
+                  help="Comma-separated. Example: English, Russian, Ukrainian"
+                >
                   <PrefsText
                     placeholder="English, Russian, Ukrainian"
                     value={asString(prefsDraft.languages)}
-                    onChange={(e) => handlePrefsArrayChange("languages", e.target.value)}
+                    onChange={(e) =>
+                      handlePrefsArrayChange("languages", e.target.value)
+                    }
                   />
                 </PrefsInput>
 
@@ -887,7 +1127,9 @@ add column if not exists preferences jsonb not null default '{}';`}
                   <PrefsArea
                     placeholder="Any extra constraints or preferences…"
                     value={prefsDraft.notes ?? ""}
-                    onChange={(e) => handlePrefsTextChange("notes", e.target.value)}
+                    onChange={(e) =>
+                      handlePrefsTextChange("notes", e.target.value)
+                    }
                   />
                 </PrefsInput>
               </div>

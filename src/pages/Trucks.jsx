@@ -27,7 +27,7 @@ import {
 import { supabase } from "../lib/supabase";
 import TruckDocumentsModal from "../components/TruckDocumentsModal.jsx";
 import PMSchedulerModal from "../components/PMSchedulerModal.jsx";
-import { Link } from "react-router-dom"; // ðŸ‘ˆ ADDED
+import { Link } from "react-router-dom"; // 👈 ADDED
 
 /** Status options must match DB enum/check */
 const STATUS_CHOICES = ["ACTIVE", "INACTIVE", "MAINTENANCE"];
@@ -62,9 +62,9 @@ function daysUntil(d) {
 
 function fmtDate(d) {
   try {
-    return d ? new Date(d).toLocaleDateString() : "â€”";
+    return d ? new Date(d).toLocaleDateString() : "—";
   } catch {
-    return "â€”";
+    return "—";
   }
 }
 
@@ -72,7 +72,7 @@ function fmtDate(d) {
 function duePill(d) {
   const n = daysUntil(d);
   if (n === null) {
-    return { text: "â€”", className: "bg-transparent text-[var(--text-soft)]" };
+    return { text: "—", className: "bg-transparent text-[var(--text-soft)]" };
   }
   if (n < 0) {
     return {
@@ -265,7 +265,7 @@ function OdometerModal({ open, onClose, truck, onSaved }) {
 
   return (
     <ModalShell
-      title={`Update Odometer â€¢ ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      title={`Update Odometer • ${truck.truck_number ?? truck.vin ?? truck.id}`}
       onClose={onClose}
       footer={
         <>
@@ -280,7 +280,7 @@ function OdometerModal({ open, onClose, truck, onSaved }) {
             disabled={busy}
             className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50"
           >
-            {busy ? "Savingâ€¦" : "Save"}
+            {busy ? "Saving…" : "Save"}
           </button>
         </>
       }
@@ -316,7 +316,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
     async function load() {
       try {
         setErr(null);
-        // ðŸ”§ swapped full_name -> first_name, last_name
+        // 🔧 swapped full_name -> first_name, last_name
         const { data, error } = await supabase
           .from("drivers")
           .select("id, first_name, last_name, status")
@@ -368,7 +368,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
 
   return (
     <ModalShell
-      title={`Assign Driver â€¢ ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      title={`Assign Driver • ${truck.truck_number ?? truck.vin ?? truck.id}`}
       onClose={onClose}
       footer={
         <>
@@ -383,7 +383,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
             disabled={busy}
             className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50"
           >
-            {busy ? "Savingâ€¦" : "Save"}
+            {busy ? "Saving…" : "Save"}
           </button>
         </>
       }
@@ -399,7 +399,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Type a driver name or statusâ€¦"
+          placeholder="Type a driver name or status…"
           className="w-full pl-9 pr-3 py-2 rounded-xl border bg-transparent outline-none"
         />
       </div>
@@ -432,7 +432,7 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
                         <div>
                           <div className="font-medium">{name}</div>
                           <div className="text-xs opacity-70">
-                            {d.status || "â€”"}
+                            {d.status || "—"}
                           </div>
                         </div>
                       </label>
@@ -516,7 +516,7 @@ function EditComplianceModal({ open, onClose, truck, onSaved }) {
 
   return (
     <ModalShell
-      title={`Edit Compliance & Status â€¢ ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      title={`Edit Compliance & Status • ${truck.truck_number ?? truck.vin ?? truck.id}`}
       onClose={onClose}
       footer={
         <>
@@ -531,7 +531,7 @@ function EditComplianceModal({ open, onClose, truck, onSaved }) {
             disabled={busy}
             className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50"
           >
-            {busy ? "Savingâ€¦" : "Save"}
+            {busy ? "Saving…" : "Save"}
           </button>
         </>
       }
@@ -561,6 +561,245 @@ function EditComplianceModal({ open, onClose, truck, onSaved }) {
           {field("Inspection Due", "insp_due")}
           {field("IFTA Due", "ifta_due")}
           {field("Insurance Due", "ins_due")}
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+/** MODAL: Add New Truck */
+function AddTruckModal({ open, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    truck_number: "",
+    vin: "",
+    make: "",
+    model: "",
+    year: "",
+    status: "ACTIVE",
+    odometer: "",
+    reg_due: "",
+    insp_due: "",
+    ifta_due: "",
+    ins_due: "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    if (open) {
+      // Reset form when opening
+      setForm({
+        truck_number: "",
+        vin: "",
+        make: "",
+        model: "",
+        year: "",
+        status: "ACTIVE",
+        odometer: "",
+        reg_due: "",
+        insp_due: "",
+        ifta_due: "",
+        ins_due: "",
+      });
+      setErr(null);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  function change(k, v) {
+    setForm((s) => ({ ...s, [k]: v }));
+  }
+
+  async function save() {
+    try {
+      setBusy(true);
+      setErr(null);
+
+      // Validation
+      if (!form.truck_number?.trim()) {
+        throw new Error("Truck number is required.");
+      }
+
+      const payload = {
+        truck_number: form.truck_number.trim(),
+        vin: form.vin?.trim() || null,
+        make: form.make?.trim() || null,
+        model: form.model?.trim() || null,
+        year: form.year?.trim() || null,
+        status: form.status || "ACTIVE",
+        odometer: form.odometer === "" ? null : Number(form.odometer),
+        reg_due: form.reg_due || null,
+        insp_due: form.insp_due || null,
+        ifta_due: form.ifta_due || null,
+        ins_due: form.ins_due || null,
+      };
+
+      // Validate odometer if provided
+      if (
+        payload.odometer !== null &&
+        (!Number.isFinite(payload.odometer) || payload.odometer < 0)
+      ) {
+        throw new Error("Odometer must be a non-negative number.");
+      }
+
+      const { error } = await supabase.from("trucks").insert(payload);
+      if (error) throw error;
+
+      onSaved?.();
+      onClose?.();
+    } catch (e) {
+      setErr(e.message || "Failed to add truck.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const dateField = (label, key) => (
+    <div>
+      <label className="text-sm block mb-1 opacity-80">{label}</label>
+      <input
+        type="date"
+        value={form[key] ? String(form[key]).slice(0, 10) : ""}
+        onChange={(e) => change(key, e.target.value || "")}
+        className="w-full px-3 py-2 rounded-xl border bg-transparent"
+      />
+    </div>
+  );
+
+  return (
+    <ModalShell
+      title="Add New Truck"
+      onClose={onClose}
+      maxWidth="max-w-2xl"
+      footer={
+        <>
+          <button
+            onClick={onClose}
+            className="px-3 py-2 rounded-xl border hover:bg-[var(--bg-hover)]"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={busy}
+            className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50"
+          >
+            {busy ? "Adding…" : "Add Truck"}
+          </button>
+        </>
+      }
+    >
+      {err && (
+        <div className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-200 px-3 py-2 text-sm">
+          {err}
+        </div>
+      )}
+      <div className="grid gap-4">
+        {/* Basic Info */}
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <label className="text-sm block mb-1 opacity-80">
+              Truck Number <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="text"
+              value={form.truck_number}
+              onChange={(e) => change("truck_number", e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border bg-transparent"
+              placeholder="e.g. 101"
+              required
+            />
+          </div>
+          <div>
+            <label className="text-sm block mb-1 opacity-80">VIN</label>
+            <input
+              type="text"
+              value={form.vin}
+              onChange={(e) => change("vin", e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border bg-transparent"
+              placeholder="17-character VIN"
+              maxLength={17}
+            />
+          </div>
+        </div>
+
+        {/* Make/Model/Year */}
+        <div className="grid md:grid-cols-3 gap-4">
+          <div>
+            <label className="text-sm block mb-1 opacity-80">Make</label>
+            <input
+              type="text"
+              value={form.make}
+              onChange={(e) => change("make", e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border bg-transparent"
+              placeholder="e.g. Freightliner"
+            />
+          </div>
+          <div>
+            <label className="text-sm block mb-1 opacity-80">Model</label>
+            <input
+              type="text"
+              value={form.model}
+              onChange={(e) => change("model", e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border bg-transparent"
+              placeholder="e.g. Cascadia"
+            />
+          </div>
+          <div>
+            <label className="text-sm block mb-1 opacity-80">Year</label>
+            <input
+              type="text"
+              value={form.year}
+              onChange={(e) => change("year", e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border bg-transparent"
+              placeholder="e.g. 2020"
+            />
+          </div>
+        </div>
+
+        {/* Status & Odometer */}
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <label className="text-sm block mb-1 opacity-80">Status</label>
+            <select
+              value={form.status}
+              onChange={(e) => change("status", e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border bg-transparent"
+            >
+              {STATUS_CHOICES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-sm block mb-1 opacity-80">
+              Odometer (optional)
+            </label>
+            <input
+              type="number"
+              inputMode="numeric"
+              value={form.odometer}
+              onChange={(e) => change("odometer", e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border bg-transparent"
+              placeholder="e.g. 120000"
+            />
+          </div>
+        </div>
+
+        {/* Compliance Dates */}
+        <div className="border-t pt-4">
+          <div className="text-sm font-medium mb-3 opacity-90">
+            Compliance Due Dates (optional)
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            {dateField("Registration Due", "reg_due")}
+            {dateField("Inspection Due", "insp_due")}
+            {dateField("IFTA Due", "ifta_due")}
+            {dateField("Insurance Due", "ins_due")}
+          </div>
         </div>
       </div>
     </ModalShell>
@@ -697,7 +936,7 @@ function MaintenanceModal({ open, onClose, truck, onSaved }) {
 
   return (
     <ModalShell
-      title={`Maintenance â€¢ ${truck.truck_number ?? truck.vin ?? truck.id}`}
+      title={`Maintenance • ${truck.truck_number ?? truck.vin ?? truck.id}`}
       onClose={onClose}
       maxWidth="max-w-3xl"
       footer={
@@ -713,7 +952,7 @@ function MaintenanceModal({ open, onClose, truck, onSaved }) {
             disabled={busy}
             className="px-3 py-2 rounded-xl border bg-[var(--bg-active)] disabled:opacity-50"
           >
-            {busy ? "Savingâ€¦" : editing ? "Update Entry" : "Add Entry"}
+            {busy ? "Saving…" : editing ? "Update Entry" : "Add Entry"}
           </button>
         </>
       }
@@ -794,7 +1033,7 @@ function MaintenanceModal({ open, onClose, truck, onSaved }) {
             {busy && rows.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-3 py-10 text-center">
-                  <Loader2 className="inline w-4 h-4 animate-spin" /> Loadingâ€¦
+                  <Loader2 className="inline w-4 h-4 animate-spin" /> Loading…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
@@ -811,16 +1050,16 @@ function MaintenanceModal({ open, onClose, truck, onSaved }) {
                     <td className="px-3 py-3 whitespace-nowrap">
                       {fmtDate(r.date)}
                     </td>
-                    <td className="px-3 py-3">{r.type || "â€”"}</td>
+                    <td className="px-3 py-3">{r.type || "—"}</td>
                     <td className="px-3 py-3 whitespace-nowrap">
-                      {r.odometer ?? "â€”"}
+                      {r.odometer ?? "—"}
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
                       {r.cost != null
                         ? `$${Number(r.cost).toLocaleString()}`
-                        : "â€”"}
+                        : "—"}
                     </td>
-                    <td className="px-3 py-3">{r.notes || "â€”"}</td>
+                    <td className="px-3 py-3">{r.notes || "—"}</td>
                     <td className="px-3 py-3 text-right">
                       <div className="inline-flex items-center gap-2">
                         <button
@@ -883,7 +1122,7 @@ function PMAlertsDrawer({
               {refetching ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Refreshingâ€¦
+                  Refreshing…
                 </>
               ) : (
                 <>
@@ -936,7 +1175,7 @@ function PMAlertsDrawer({
                           </div>
                         </div>
                         <div className="text-sm opacity-80 mt-1">
-                          {a.policy?.name || "Policy"} â€¢ {a.reason || "â€”"}
+                          {a.policy?.name || "Policy"} • {a.reason || "—"}
                         </div>
                         <div className="text-xs opacity-60 mt-1">
                           Opened {new Date(a.created_at).toLocaleString()}
@@ -1009,6 +1248,7 @@ export default function Trucks() {
   const [editOpen, setEditOpen] = useState(false);
   const [maintOpen, setMaintOpen] = useState(false);
   const [pmOpen, setPmOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false); // 👈 NEW STATE
 
   /** Alerts UI */
   const [alertsOpen, setAlertsOpen] = useState(false);
@@ -1049,7 +1289,7 @@ export default function Trucks() {
         );
         let map = {};
         if (ids.length) {
-          // ðŸ”§ swapped full_name -> first_name,last_name
+          // 🔧 swapped full_name -> first_name,last_name
           const { data: dData, error: dErr } = await supabase
             .from("drivers")
             .select("id, first_name, last_name")
@@ -1127,7 +1367,7 @@ export default function Trucks() {
       );
       let map = {};
       if (ids.length) {
-        // ðŸ”§ swapped full_name -> first_name,last_name
+        // 🔧 swapped full_name -> first_name,last_name
         const { data: dData, error: dErr } = await supabase
           .from("drivers")
           .select("id, first_name, last_name")
@@ -1403,7 +1643,7 @@ export default function Trucks() {
             {refetching ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Refreshingâ€¦
+                Refreshing…
               </>
             ) : (
               <>
@@ -1417,7 +1657,7 @@ export default function Trucks() {
               "inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-sm",
               "bg-[var(--bg-active)] hover:opacity-90 transition"
             )}
-            onClick={() => alert("TODO: Add Truck modal")}
+            onClick={() => setAddOpen(true)} // 👈 UPDATED
           >
             <Plus className="w-4 h-4" />
             Add Truck
@@ -1427,11 +1667,11 @@ export default function Trucks() {
 
       <div className="text-xs text-[var(--text-soft)] mb-3">
         Track registrations, inspections, IFTA, insurance
-        <span className="mx-2">â€¢</span>
+        <span className="mx-2">•</span>
         {lastUpdated ? (
           <span>Last updated {lastUpdated.toLocaleTimeString()}</span>
         ) : (
-          <span>Loadingâ€¦</span>
+          <span>Loading…</span>
         )}
       </div>
 
@@ -1442,7 +1682,7 @@ export default function Trucks() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search truck #, VIN, make/model, driverâ€¦"
+            placeholder="Search truck #, VIN, make/model, driver…"
             className="w-full pl-9 pr-3 py-2 rounded-xl border bg-transparent outline-none"
           />
         </div>
@@ -1470,7 +1710,7 @@ export default function Trucks() {
           >
             <option value="ALL">All</option>
             <option value="OVERDUE">Overdue</option>
-            <option value="DUE_SOON">Due â‰¤ 7 days</option>
+            <option value="DUE_SOON">Due ≤ 7 days</option>
           </select>
         </div>
         <div className="flex items-center gap-2">
@@ -1531,7 +1771,7 @@ export default function Trucks() {
                 <td colSpan={9} className="px-3 py-10 text-center">
                   <div className="inline-flex items-center gap-2 text-[var(--text-soft)]">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Loading trucksâ€¦
+                    Loading trucks…
                   </div>
                 </td>
               </tr>
@@ -1576,7 +1816,7 @@ export default function Trucks() {
                 return (
                   <tr key={t.id} className={cx(zebra, "border-t relative")}>
                     <td className="px-3 py-3 whitespace-nowrap">
-                      {/* ðŸ‘‡ LINK to truck profile */}
+                      {/* 👇 LINK to truck profile */}
                       {t.truck_number ? (
                         <Link
                           to={`/trucks/${t.id}`}
@@ -1591,12 +1831,12 @@ export default function Trucks() {
                           className="underline underline-offset-2 hover:opacity-90"
                           title="Open truck profile"
                         >
-                          â€”
+                          —
                         </Link>
                       )}
                     </td>
                     <td className="px-3 py-3">
-                      {/* ðŸ‘‡ LINK to truck profile */}
+                      {/* 👇 LINK to truck profile */}
                       {t.vin ? (
                         <Link
                           to={`/trucks/${t.id}`}
@@ -1611,16 +1851,16 @@ export default function Trucks() {
                           className="underline underline-offset-2 hover:opacity-90"
                           title="Open truck profile"
                         >
-                          â€”
+                          —
                         </Link>
                       )}
                     </td>
                     <td className="px-3 py-3">
-                      {(t.make || "â€”") +
+                      {(t.make || "—") +
                         " / " +
-                        (t.model || "â€”") +
+                        (t.model || "—") +
                         " / " +
-                        (t.year || "â€”")}
+                        (t.year || "—")}
                     </td>
                     <td className="px-3 py-3">
                       <span
@@ -1629,14 +1869,14 @@ export default function Trucks() {
                           statusBadge
                         )}
                       >
-                        {(t.status || "â€”").toUpperCase()}
+                        {(t.status || "—").toUpperCase()}
                       </span>
                     </td>
                     <td className="px-3 py-3">
                       {t.driver_id ? (
                         <Link
                           className="underline underline-offset-2 hover:opacity-90"
-                          to={`/drivers/${t.driver_id}`} // ðŸ‘ˆ LINK to driver profile
+                          to={`/drivers/${t.driver_id}`} // 👈 LINK to driver profile
                           title="Open driver profile"
                         >
                           {driverNameFromMap(driversById, t.driver_id)}
@@ -1689,7 +1929,7 @@ export default function Trucks() {
                         </span>
                       </div>
                     </td>
-                    <td className="px-3 py-3">{t.odometer ?? "â€”"}</td>
+                    <td className="px-3 py-3">{t.odometer ?? "—"}</td>
                     <td className="px-3 py-3">
                       <button
                         className={cx(
@@ -1791,6 +2031,11 @@ export default function Trucks() {
         truck={activeTruck}
         onSaved={refetch}
       />
+      <AddTruckModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onSaved={refetch}
+      /> 
       <MaintenanceModal
         open={maintOpen}
         onClose={() => setMaintOpen(false)}

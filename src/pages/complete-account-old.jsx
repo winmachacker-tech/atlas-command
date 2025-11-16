@@ -4,7 +4,7 @@
 //   automatically finish their account setup and then send them
 //   straight to the Profile page.
 //
-// Flow:
+// New Flow:
 //   1) User clicks invite email → /complete-account
 //   2) This page runs auto-setup:
 //        - Mark auth.user_metadata.profile_complete = true
@@ -12,13 +12,6 @@
 //        - Link pending org invites (rpc_link_invited_user_to_orgs)
 //        - Bootstrap org if needed (rpc_bootstrap_org_for_user)
 //   3) Then navigate("/profile") so they can review details / password.
-//
-// NEW SAFETY GUARD:
-//   - If a user hits this page but already has:
-//       • user_metadata.profile_complete = true
-//       • AND an org membership in team_members
-//     → we SKIP all setup and immediately navigate("/profile").
-//   - This prevents any weird feeling of "looping" if they revisit the link.
 //
 // Security:
 // - No service keys, no RLS bypass. All writes go through normal Supabase
@@ -65,56 +58,6 @@ export default function CompleteAccount() {
 
         const userId = user.id;
         const email = user.email || "";
-
-        // --------- NEW: quick "already complete" guard ----------
-        // If the user already has profile_complete in metadata AND
-        // is already attached to at least one org via team_members,
-        // we skip all the setup logic and go straight to /profile.
-        try {
-          const metaComplete =
-            user.user_metadata && user.user_metadata.profile_complete === true;
-
-          let hasOrg = false;
-          if (metaComplete) {
-            const { data: tmRows, error: tmErr } = await supabase
-              .from("team_members")
-              .select("org_id")
-              .eq("user_id", userId)
-              .limit(1);
-
-            if (tmErr) {
-              console.error(
-                "[CompleteAccount] team_members check error:",
-                tmErr
-              );
-            } else {
-              hasOrg =
-                Array.isArray(tmRows) &&
-                tmRows.length > 0 &&
-                Boolean(tmRows[0]?.org_id);
-            }
-          }
-
-          if (metaComplete && hasOrg) {
-            console.log(
-              "[CompleteAccount] User already fully set up, skipping auto-setup."
-            );
-            if (!cancelled) {
-              setStatus("done");
-              setTimeout(() => {
-                navigate("/profile", { replace: true });
-              }, 100);
-            }
-            return; // 🚪 Early exit, no more setup work.
-          }
-        } catch (guardErr) {
-          console.error(
-            "[CompleteAccount] 'already complete' guard error:",
-            guardErr
-          );
-          // If this guard fails, we just fall through to the normal setup path.
-        }
-        // --------------------------------------------------------
 
         // 2) Ensure metadata has profile_complete = true
         const hasProfileCompleteMeta =
@@ -276,7 +219,7 @@ export default function CompleteAccount() {
       <div className="min-h-screen grid place-items-center bg-slate-950 text-slate-100 px-4">
         <div className="w-full max-w-lg rounded-2xl border border-rose-800/60 bg-slate-900/80 p-6 shadow-xl shadow-black/40 space-y-4">
           <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-2xl border border-rose-700/70 bg-slate-900 flex items-center justify-center">
+            <div className="h-9 w-9 rounded-xl border border-rose-700/70 bg-slate-900 flex items-center justify-center">
               <AlertTriangle className="h-4 w-4 text-rose-400" />
             </div>
             <div>

@@ -3,20 +3,23 @@
 //
 // Flow when you click "Send invite":
 //  1) RPC: rpc_invite_existing_user_to_org(p_email, p_org_role)
-//     -> creates/updates a row in public.team_members for this org/email
+//     -> creates/updates a row in public.team_members for THIS org/email,
+//        using the inviter's org + role from team_members (never from client)
 //  2) Edge Function: admin-invite-user
 //     -> sends Supabase Auth invite email using service role key
 //
 // This works for:
-//  - Existing users (already in Auth → Users)   -> status "added"
-//  - Brand new emails (no account yet)          -> status "pending_user"
+//  - Existing users (already in Auth → Users)
+//     -> team_members row is "active" (or your default status for existing users)
+//  - Brand new emails (no account yet)
+//     -> team_members.status should typically be "pending_user" or "invited"
 //
 // Extended: Per-user feature toggles
 //  - Uses team_members.ai_recommendations_enabled boolean
 //  - Only ORG OWNER / ADMIN can see and change toggles
 //  - Nobody can flip their OWN toggle from this page
 //
-// NEW (Admin controls per member):
+// Admin controls per member (all enforced server-side):
 //  - Role change dropdown (owner/admin/member) via RPC rpc_admin_set_member_role
 //  - Enable / disable user via RPC rpc_admin_set_member_status
 //  - Resend invite via Edge Function admin-invite-user
@@ -97,6 +100,7 @@ export default function TeamManagementPage() {
             created_at,
             updated_at,
             user_id,
+            org_id,
             ai_recommendations_enabled
           `
         )
@@ -149,7 +153,7 @@ export default function TeamManagementPage() {
     try {
       setInviteLoading(true);
 
-      // 1) Ensure org membership via RPC
+      // 1) Ensure org membership via secure RPC (org + role enforced server-side)
       const { data: rpcData, error: rpcError } = await supabase.rpc(
         "rpc_invite_existing_user_to_org",
         {
@@ -173,13 +177,33 @@ export default function TeamManagementPage() {
         "[TeamManagement] rpc_invite_existing_user_to_org result:",
         rpcData
       );
-      const statusFromRpc = rpcData?.status;
+
+      // rpcData is a team_members row; we can look at its status if it exists
+      const statusFromRpc = (rpcData?.status || "").toLowerCase();
+      const orgIdFromRpc = rpcData?.org_id;
+
+      if (!orgIdFromRpc) {
+        console.error(
+          "[TeamManagement] Missing org_id from rpc_invite_existing_user_to_org result:",
+          rpcData
+        );
+        setMessage({
+          type: "error",
+          text:
+            "Invite created, but organization ID was missing from the server response. Please contact support or try again.",
+        });
+        return;
+      }
 
       // 2) Send Auth invite email via Supabase Edge Function
       const { data: fnData, error: fnError } = await supabase.functions.invoke(
         "admin-invite-user",
         {
-          body: { email },
+          body: {
+            email,
+            org_role: role,
+            org_id: orgIdFromRpc,
+          },
         }
       );
 
@@ -188,12 +212,19 @@ export default function TeamManagementPage() {
           "[TeamManagement] admin-invite-user function error:",
           fnError
         );
+
+        const context = fnError?.context || {};
+        const msg =
+          context.error ||
+          context.details ||
+          fnError.message ||
+          "Failed to send invite email, but the user may still have been added to the org.";
+
         setMessage({
           type: "error",
-          text:
-            fnError.message ||
-            "Failed to send invite email, but the user may still have been added to the org.",
+          text: msg,
         });
+
         await fetchMembers();
         return;
       }
@@ -203,14 +234,8 @@ export default function TeamManagementPage() {
         fnData
       );
 
-      // Friendly success message based on RPC status
-      if (statusFromRpc === "added") {
-        setMessage({
-          type: "success",
-          text:
-            "User already has an account. They were added to this organization and an invite email was sent.",
-        });
-      } else if (statusFromRpc === "pending_user") {
+      // Friendly success message based on membership status
+      if (statusFromRpc === "pending_user" || statusFromRpc === "invited") {
         setMessage({
           type: "success",
           text:
@@ -220,7 +245,7 @@ export default function TeamManagementPage() {
         setMessage({
           type: "success",
           text:
-            "Invite processed and the user has been linked to this organization.",
+            "User has been linked to this organization and an invite email was sent.",
         });
       }
 
@@ -276,7 +301,8 @@ export default function TeamManagementPage() {
   );
   const currentRole = (currentMember?.role || "").toLowerCase();
 
-  // Only org OWNER or ADMIN can manage feature flags and member controls
+  // Only org OWNER or ADMIN can manage feature flags and member controls (frontend guard).
+  // Backend RPCs STILL enforce all real permission checks.
   const canManageFeatures =
     currentRole === "owner" || currentRole === "admin";
 
@@ -449,7 +475,20 @@ export default function TeamManagementPage() {
   async function handleResendInvite(member) {
     if (!canManageFeatures) return;
 
-    const { id, email } = member;
+    const { id, email, org_id, role } = member;
+
+    if (!org_id) {
+      console.error(
+        "[TeamManagement] Missing org_id on member while attempting resend invite:",
+        member
+      );
+      setMessage({
+        type: "error",
+        text:
+          "Cannot resend invite because the organization ID is missing for this member. Please contact support.",
+      });
+      return;
+    }
 
     try {
       setResendInviteId(id);
@@ -457,7 +496,11 @@ export default function TeamManagementPage() {
       const { data: fnData, error: fnError } = await supabase.functions.invoke(
         "admin-invite-user",
         {
-          body: { email },
+          body: {
+            email,
+            org_role: role,
+            org_id,
+          },
         }
       );
 
@@ -466,11 +509,17 @@ export default function TeamManagementPage() {
           "[TeamManagement] admin-invite-user (resend) error:",
           fnError
         );
+
+        const context = fnError?.context || {};
+        const msg =
+          context.error ||
+          context.details ||
+          fnError.message ||
+          `Failed to resend invite email to ${email}. Please try again.`;
+
         setMessage({
           type: "error",
-          text:
-            fnError.message ||
-            `Failed to resend invite email to ${email}. Please try again.`,
+          text: msg,
         });
         return;
       }
@@ -603,84 +652,91 @@ export default function TeamManagementPage() {
           </div>
         )}
 
-        {/* Invite Form */}
-        <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-xl shadow-sm p-4 md:p-5 space-y-4">
-          <div className="flex items-center gap-2">
-            <UserPlus className="w-5 h-5 text-sky-500" />
-            <h2 className="text-base md:text-lg font-semibold text-slate-900 dark:text-slate-50">
-              Invite team member
-            </h2>
-          </div>
-          <p className="text-xs md:text-sm text-slate-500 dark:text-slate-400">
-            Enter an email to invite them to this organization. If they already
-            have an Atlas account, they&apos;ll be added immediately. If not,
-            they&apos;ll get an email to set up their account and will appear as
-            &quot;Invited&quot; until they sign up.
-          </p>
-
-          <form
-            onSubmit={handleInviteSubmit}
-            className="flex flex-col md:flex-row gap-3 md:items-end"
-          >
-            <div className="flex-1">
-              <label
-                htmlFor="invite-email"
-                className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1"
-              >
-                Email
-              </label>
-              <div className="relative">
-                <Mail className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
-                <input
-                  id="invite-email"
-                  type="email"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  className="w-full pl-8 pr-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 bg-slate-50 dark:bg-slate-900 dark:text-slate-50"
-                  placeholder="person@company.com"
-                  autoComplete="off"
-                />
-              </div>
+        {/* Invite Form (owner/admin only on the frontend; backend still enforces) */}
+        {canManageFeatures ? (
+          <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-xl shadow-sm p-4 md:p-5 space-y-4">
+            <div className="flex items-center gap-2">
+              <UserPlus className="w-5 h-5 text-sky-500" />
+              <h2 className="text-base md:text-lg font-semibold text-slate-900 dark:text-slate-50">
+                Invite team member
+              </h2>
             </div>
+            <p className="text-xs md:text-sm text-slate-500 dark:text-slate-400">
+              Enter an email to invite them to this organization. If they
+              already have an Atlas account, they&apos;ll be added immediately.
+              If not, they&apos;ll get an email to set up their account and will
+              appear as &quot;Invited&quot; until they sign up.
+            </p>
 
-            <div className="w-full md:w-40">
-              <label
-                htmlFor="invite-role"
-                className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1"
-              >
-                Role
-              </label>
-              <select
-                id="invite-role"
-                value={inviteRole}
-                onChange={(e) => setInviteRole(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm bg-white dark:bg-slate-900 dark:text-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
-              >
-                <option value="member">Member</option>
-                <option value="admin">Admin</option>
-                <option value="owner">Owner</option>
-              </select>
-            </div>
-
-            <button
-              type="submit"
-              disabled={inviteLoading}
-              className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-60 disabled:cursor-not-allowed shadow-sm"
+            <form
+              onSubmit={handleInviteSubmit}
+              className="flex flex-col md:flex-row gap-3 md:items-end"
             >
-              {inviteLoading ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Sending…
-                </>
-              ) : (
-                <>
-                  <UserPlus className="w-4 h-4 mr-2" />
-                  Send invite
-                </>
-              )}
-            </button>
-          </form>
-        </div>
+              <div className="flex-1">
+                <label
+                  htmlFor="invite-email"
+                  className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1"
+                >
+                  Email
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
+                  <input
+                    id="invite-email"
+                    type="email"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    className="w-full pl-8 pr-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 bg-slate-50 dark:bg-slate-900 dark:text-slate-50"
+                    placeholder="person@company.com"
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
+
+              <div className="w-full md:w-40">
+                <label
+                  htmlFor="invite-role"
+                  className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1"
+                >
+                  Role
+                </label>
+                <select
+                  id="invite-role"
+                  value={inviteRole}
+                  onChange={(e) => setInviteRole(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm bg-white dark:bg-slate-900 dark:text-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+                >
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                  <option value="owner">Owner</option>
+                </select>
+              </div>
+
+              <button
+                type="submit"
+                disabled={inviteLoading}
+                className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-lg bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-60 disabled:cursor-not-allowed shadow-sm"
+              >
+                {inviteLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Sending…
+                  </>
+                ) : (
+                  <>
+                    <UserPlus className="w-4 h-4 mr-2" />
+                    Send invite
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
+        ) : (
+          <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-xl shadow-sm p-4 md:p-5 text-sm text-slate-500 dark:text-slate-400">
+            Only organization owners or admins can invite new team members.
+            Contact your admin if you need access.
+          </div>
+        )}
 
         {/* Team members list */}
         <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-xl shadow-sm p-4 md:p-5 mt-6">
