@@ -20,6 +20,12 @@ import { supabase } from "../lib/supabase";
  * - Updates user_metadata: { full_name, phone, avatar_url, avatar_key }
  * - Email is read-only
  *
+ * Added:
+ * - Organization section:
+ *   - Loads user's default org via team_members
+ *   - Reads org name from orgs (fallback: organizations)
+ *   - Allows renaming org (updates orgs + organizations)
+ *
  * Optional env:
  *   VITE_SUPABASE_FUNCTIONS_URL (falls back to `${VITE_SUPABASE_URL}/functions/v1`)
  */
@@ -50,6 +56,11 @@ export default function Profile() {
   const [lastSignIn, setLastSignIn] = useState(null);
   const [note, setNote] = useState("");
 
+  // Org info
+  const [orgId, setOrgId] = useState(null);
+  const [orgName, setOrgName] = useState("");
+  const [orgSaving, setOrgSaving] = useState(false);
+
   // Prefer explicit functions URL, else rely on project URL
   const FUNCTIONS_URL =
     import.meta.env.VITE_SUPABASE_FUNCTIONS_URL?.replace(/\/+$/, "") ||
@@ -60,6 +71,8 @@ export default function Profile() {
     (async () => {
       try {
         setLoading(true);
+        setNote("");
+
         const [{ data: sess }, { data: usr }] = await Promise.all([
           supabase.auth.getSession(),
           supabase.auth.getUser(),
@@ -83,11 +96,58 @@ export default function Profile() {
         const url = meta.avatar_url || "";
         setAvatarKey(key || "");
         setAvatarUrl(url || "");
+
+        // --- Load organization info for this user ---
+        // 1) Get default membership from team_members
+        const { data: memberships, error: tmError } = await supabase
+          .from("team_members")
+          .select("org_id, is_default, role, status")
+          .eq("user_id", user.id)
+          .order("is_default", { ascending: false })
+          .limit(1);
+
+        if (tmError) throw tmError;
+
+        const defaultMembership = memberships?.[0] || null;
+
+        if (defaultMembership?.org_id) {
+          const thisOrgId = defaultMembership.org_id;
+
+          // 2) Try to load name from orgs
+          const { data: orgsData, error: orgsError } = await supabase
+            .from("orgs")
+            .select("id, name")
+            .eq("id", thisOrgId)
+            .limit(1);
+
+          if (orgsError) throw orgsError;
+
+          let name = orgsData?.[0]?.name || "";
+
+          // 3) Fallback: try organizations if orgs row missing
+          if (!name) {
+            const { data: orgMirrorData, error: orgMirrorError } = await supabase
+              .from("organizations")
+              .select("id, name")
+              .eq("id", thisOrgId)
+              .limit(1);
+
+            if (orgMirrorError) throw orgMirrorError;
+            name = orgMirrorData?.[0]?.name || "";
+          }
+
+          if (alive) {
+            setOrgId(thisOrgId);
+            setOrgName(name || "");
+          }
+        }
       } catch (err) {
         console.error("[Profile] init error:", err);
-        setNote("Could not load your profile.");
+        if (alive) {
+          setNote(err.message || "Could not load your profile.");
+        }
       } finally {
-        setLoading(false);
+        if (alive) setLoading(false);
       }
     })();
     return () => {
@@ -193,7 +253,9 @@ export default function Profile() {
       }
 
       // Cache-bust the avatar preview to reflect the fresh upload immediately
-      const previewUrl = `${publicUrl}${publicUrl.includes("?") ? "&" : "?"}t=${Date.now()}`;
+      const previewUrl = `${publicUrl}${
+        publicUrl.includes("?") ? "&" : "?"
+      }t=${Date.now()}`;
 
       // Update UI immediately
       setAvatarKey(path || "");
@@ -216,6 +278,53 @@ export default function Profile() {
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function onSaveOrgName(e) {
+    e.preventDefault();
+    setNote("");
+
+    if (!orgId) {
+      setNote("No organization is linked to this account.");
+      return;
+    }
+
+    const trimmed = (orgName || "").trim();
+    if (!trimmed) {
+      setNote("Organization name cannot be empty.");
+      return;
+    }
+    if (trimmed.length < 3) {
+      setNote("Organization name should be at least 3 characters long.");
+      return;
+    }
+
+    try {
+      setOrgSaving(true);
+
+      // Update orgs
+      const { error: orgUpdateError } = await supabase
+        .from("orgs")
+        .update({ name: trimmed })
+        .eq("id", orgId);
+
+      if (orgUpdateError) throw orgUpdateError;
+
+      // Update organizations mirror
+      const { error: orgMirrorUpdateError } = await supabase
+        .from("organizations")
+        .update({ name: trimmed })
+        .eq("id", orgId);
+
+      if (orgMirrorUpdateError) throw orgMirrorUpdateError;
+
+      setNote("Organization name updated.");
+    } catch (err) {
+      console.error("[Profile] Failed to update org name:", err);
+      setNote(err.message || "Failed to update organization name.");
+    } finally {
+      setOrgSaving(false);
     }
   }
 
@@ -248,7 +357,7 @@ export default function Profile() {
             Profile &amp; Account
           </h1>
           <p className="text-sm text-[var(--text-muted)]">
-            Manage your personal details and account security.
+            Manage your personal details, organization, and account security.
           </p>
         </div>
         <div className="ml-auto hidden md:flex items-center gap-2 text-xs text-[var(--text-muted)]">
@@ -259,8 +368,10 @@ export default function Profile() {
 
       {/* Status / note */}
       {note ? (
-        <div className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--panel)]
-                        text-[var(--text-base)] px-4 py-3">
+        <div
+          className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--panel)]
+                        text-[var(--text-base)] px-4 py-3"
+        >
           {note}
         </div>
       ) : null}
@@ -272,8 +383,10 @@ export default function Profile() {
       >
         <div className="px-6 pt-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl
-                            bg-[var(--bg-muted)] border border-[var(--border)]">
+            <div
+              className="inline-flex h-9 w-9 items-center justify-center rounded-xl
+                            bg-[var(--bg-muted)] border border-[var(--border)]"
+            >
               <UserRound className="h-5 w-5" />
             </div>
             <div>
@@ -322,9 +435,14 @@ export default function Profile() {
           </div>
         </div>
 
-        <form onSubmit={onSaveProfile} className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <form
+          onSubmit={onSaveProfile}
+          className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4"
+        >
           <div className="col-span-1">
-            <label className="block text-xs mb-1 text-[var(--text-muted)]">Full name</label>
+            <label className="block text-xs mb-1 text-[var(--text-muted)]">
+              Full name
+            </label>
             <input
               type="text"
               value={fullName}
@@ -337,7 +455,9 @@ export default function Profile() {
           </div>
 
           <div className="col-span-1">
-            <label className="block text-xs mb-1 text-[var(--text-muted)]">Phone</label>
+            <label className="block text-xs mb-1 text-[var(--text-muted)]">
+              Phone
+            </label>
             <input
               type="tel"
               value={phone}
@@ -350,7 +470,9 @@ export default function Profile() {
           </div>
 
           <div className="col-span-1 md:col-span-2">
-            <label className="block text-xs mb-1 text-[var(--text-muted)]">Email</label>
+            <label className="block text-xs mb-1 text-[var(--text-muted)]">
+              Email
+            </label>
             <input
               type="email"
               value={email}
@@ -373,8 +495,82 @@ export default function Profile() {
                          bg-[var(--accent)] text-white disabled:opacity-60
                          shadow-sm hover:shadow transition"
             >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
               <span>Save changes</span>
+            </button>
+          </div>
+        </form>
+      </section>
+
+      {/* Organization panel */}
+      <section
+        className="mb-8 rounded-2xl border border-[var(--border)] bg-[var(--panel)]
+                   shadow-sm overflow-hidden"
+      >
+        <div className="flex items-center gap-3 px-6 pt-6">
+          <div
+            className="inline-flex h-9 w-9 items-center justify-center rounded-xl
+                          bg-[var(--bg-muted)] border border-[var(--border)]"
+          >
+            <ShieldCheck className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-medium">Organization</h2>
+            <p className="text-xs text-[var(--text-muted)]">
+              Rename your default organization. This is how your company appears in Atlas.
+            </p>
+          </div>
+        </div>
+
+        <form
+          onSubmit={onSaveOrgName}
+          className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4"
+        >
+          <div className="col-span-1 md:col-span-2">
+            <label className="block text-xs mb-1 text-[var(--text-muted)]">
+              Organization name
+            </label>
+            <input
+              type="text"
+              value={orgName}
+              onChange={(e) => setOrgName(e.target.value)}
+              disabled={!orgId}
+              className="w-full h-11 px-3 rounded-xl border border-[var(--border)]
+                         bg-[var(--bg-input)] text-[var(--text-base)]
+                         focus:outline-none focus:ring-4 focus:ring-[var(--ring)]
+                         disabled:bg-[var(--bg-muted)]/60 disabled:text-[var(--text-muted)]
+                         disabled:cursor-not-allowed"
+              placeholder="e.g. VNG Transport Inc"
+            />
+            {orgId ? (
+              <p className="mt-1 text-[10px] text-[var(--text-muted)] font-mono">
+                org_id: <span className="text-[var(--text-base)]">{orgId}</span>
+              </p>
+            ) : (
+              <p className="mt-1 text-[10px] text-[var(--text-muted)]">
+                No organization is linked to this account yet.
+              </p>
+            )}
+          </div>
+
+          <div className="col-span-1 md:col-span-2 flex justify-end">
+            <button
+              type="submit"
+              disabled={orgSaving || loading || !orgId}
+              className="inline-flex items-center gap-2 h-11 px-4 rounded-xl
+                         bg-[var(--accent)] text-white disabled:opacity-60
+                         shadow-sm hover:shadow transition"
+            >
+              {orgSaving ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
+              <span>Save org name</span>
             </button>
           </div>
         </form>
@@ -386,8 +582,10 @@ export default function Profile() {
                    shadow-sm overflow-hidden"
       >
         <div className="flex items-center gap-3 px-6 pt-6">
-          <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl
-                          bg-[var(--bg-muted)] border border-[var(--border)]">
+          <div
+            className="inline-flex h-9 w-9 items-center justify-center rounded-xl
+                          bg-[var(--bg-muted)] border border-[var(--border)]"
+          >
             <KeyRound className="h-5 w-5" />
           </div>
           <div>
@@ -398,9 +596,14 @@ export default function Profile() {
           </div>
         </div>
 
-        <form onSubmit={onChangePassword} className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <form
+          onSubmit={onChangePassword}
+          className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4"
+        >
           <div className="col-span-1">
-            <label className="block text-xs mb-1 text-[var(--text-muted)]">New password</label>
+            <label className="block text-xs mb-1 text-[var(--text-muted)]">
+              New password
+            </label>
             <input
               type="password"
               value={pw1}
@@ -412,7 +615,9 @@ export default function Profile() {
           </div>
 
           <div className="col-span-1">
-            <label className="block text-xs mb-1 text-[var(--text-muted)]">Confirm password</label>
+            <label className="block text-xs mb-1 text-[var(--text-muted)]">
+              Confirm password
+            </label>
             <input
               type="password"
               value={pw2}
@@ -423,11 +628,11 @@ export default function Profile() {
             />
           </div>
 
-        <div className="col-span-1 md:col-span-2 text-xs text-[var(--text-muted)]">
+          <div className="col-span-1 md:col-span-2 text-xs text-[var(--text-muted)]">
             {lastSignIn ? (
               <span>Last sign-in: {new Date(lastSignIn).toLocaleString()}</span>
             ) : (
-              <span>Last sign-in: â€”</span>
+              <span>Last sign-in: —</span>
             )}
           </div>
 
@@ -439,7 +644,11 @@ export default function Profile() {
                          bg-[var(--accent)] text-white disabled:opacity-60
                          shadow-sm hover:shadow transition"
             >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <KeyRound className="h-4 w-4" />
+              )}
               <span>Change password</span>
             </button>
           </div>
@@ -448,4 +657,3 @@ export default function Profile() {
     </div>
   );
 }
-

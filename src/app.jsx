@@ -4,7 +4,8 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import MainLayout from "./layout/MainLayout.jsx";
 import AuthGuard from "./components/AuthGuard.jsx";
 import MfaAuthGate from "./components/MfaAuthGate.jsx";
-import LoadDrafts from './pages/LoadDrafts';
+import LoadDrafts from "./pages/LoadDrafts";
+import OrgBootstrapGate from "./components/OrgBootstrapGate.jsx";
 
 console.log("App routes version: ai-proof nested");
 
@@ -13,60 +14,75 @@ import DriverLearningTest from "./pages/DriverLearningTest.jsx";
 import AIProof from "./pages/AIProof.jsx";
 
 /** Lazy pages (unchanged) */
-const Dashboard       = lazy(() => import("./pages/Dashboard.jsx"));
-const Loads           = lazy(() => import("./pages/Loads.jsx"));
-const InTransit       = lazy(() => import("./pages/InTransit.jsx"));
-const Delivered       = lazy(() =>
+const Dashboard = lazy(() => import("./pages/Dashboard.jsx"));
+const Loads = lazy(() => import("./pages/Loads.jsx"));
+const InTransit = lazy(() => import("./pages/InTransit.jsx"));
+const Delivered = lazy(() =>
   import("./pages/Delivered.jsx").catch(() => ({
     default: () => <div className="p-6">Delivered</div>,
   }))
 );
-const Billing         = lazy(() => import("./pages/Billing.jsx"));
-const Drivers         = lazy(() =>
+const Billing = lazy(() => import("./pages/Billing.jsx"));
+const Drivers = lazy(() =>
   import("./pages/Drivers.jsx").catch(() => ({
     default: () => <div className="p-6">Drivers</div>,
   }))
 );
-const Customers       = lazy(() =>
+const Customers = lazy(() =>
   import("./pages/Customers.jsx").catch(() => ({
     default: () => <div className="p-6">Customers</div>,
   }))
 );
-const Trucks          = lazy(() =>
+const Trucks = lazy(() =>
   import("./pages/Trucks.jsx").catch(() => ({
     default: () => <div className="p-6">Trucks</div>,
   }))
 );
-const Settings        = lazy(() => import("./pages/Settings.jsx"));
-const TeamManagement  = lazy(() => import("./pages/TeamManagement.jsx"));
-const Login           = lazy(() =>
+const Settings = lazy(() => import("./pages/Settings.jsx"));
+const TeamManagement = lazy(() => import("./pages/TeamManagement.jsx"));
+const Login = lazy(() =>
   import("./pages/Login.jsx").catch(() => ({
     default: () => <div className="p-6">Login</div>,
   }))
 );
 
+const TrustCenter = lazy(() =>
+  import("./pages/TrustCenter.jsx").catch(() => ({
+    default: () => <div className="p-6">Trust & Security Center</div>,
+  }))
+);
+
+// 👇 Privacy Policy page (single definition)
+const PrivacyPolicy = lazy(() =>
+  import("./pages/PrivacyPolicy.jsx").catch(() => ({
+    default: () => <div className="p-6">Privacy Policy</div>,
+  }))
+);
+
 /* Dispatch AI (Lab) */
-const DispatchAI      = lazy(() => import("./pages/DispatchAI.jsx"));
+const DispatchAI = lazy(() => import("./pages/DispatchAI.jsx"));
 
 /* AI Recommendations page */
 const AIRecommendations = lazy(() => import("./pages/AIRecommendations.jsx"));
 
 /* Auth + Callback + onboarding */
-const Auth            = lazy(() => import("./pages/Auth.jsx"));
-const AuthCallback    = lazy(() => import("./pages/AuthCallback.jsx"));
+const Auth = lazy(() => import("./pages/Auth.jsx"));
+const AuthCallback = lazy(() => import("./pages/AuthCallback.jsx"));
 const CompleteAccount = lazy(() => import("./pages/CompleteAccount.jsx"));
-const ForgotPassword  = lazy(() => import("./pages/ForgotPassword.jsx"));
-const SetPassword     = lazy(() => import("./pages/SetPassword.jsx"));
+const ForgotPassword = lazy(() => import("./pages/ForgotPassword.jsx"));
+const SetPassword = lazy(() => import("./pages/SetPassword.jsx"));
 
 /* Driver Learning page */
-const DriverLearning  = lazy(() =>
+const DriverLearning = lazy(() =>
   import("./pages/DriverLearning.jsx").catch(() => ({
-    default: () => <div className="p-6">Error loading Driver Learning page</div>,
+    default: () => (
+      <div className="p-6">Error loading Driver Learning page</div>
+    ),
   }))
 );
 
 /* (Optional) Insights page if you have it */
-const AIInsights      = lazy(() =>
+const AIInsights = lazy(() =>
   import("./pages/AIInsights.jsx").catch(() => ({
     default: () => <div className="p-6">AI Insights</div>,
   }))
@@ -81,6 +97,9 @@ const AiLaneIntelligence = lazy(() =>
   }))
 );
 
+/* NEW: Super Admin page (platform-level control center) */
+const SuperAdmin = lazy(() => import("./pages/SuperAdmin.jsx"));
+
 export default function App() {
   return (
     <Suspense fallback={<div className="p-6 text-sm">Loading…</div>}>
@@ -89,7 +108,19 @@ export default function App() {
         <Route path="/login" element={<Navigate to="/auth" replace />} />
         <Route path="/auth" element={<Auth />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
-        <Route path="/complete-account" element={<CompleteAccount />} />
+
+        {/* Onboarding route: logged-in user, no MainLayout */}
+        <Route
+          path="/complete-account"
+          element={
+            <AuthGuard loginPath="/auth">
+              <MfaAuthGate>
+                <CompleteAccount />
+              </MfaAuthGate>
+            </AuthGuard>
+          }
+        />
+
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/set-password" element={<SetPassword />} />
         <Route
@@ -115,7 +146,9 @@ export default function App() {
           element={
             <AuthGuard loginPath="/auth">
               <MfaAuthGate>
-                <MainLayout />
+                <OrgBootstrapGate>
+                  <MainLayout />
+                </OrgBootstrapGate>
               </MfaAuthGate>
             </AuthGuard>
           }
@@ -144,8 +177,11 @@ export default function App() {
           <Route path="teammanagement" element={<TeamManagement />} />
           <Route path="ai-insights" element={<AIInsights />} />
 
+          {/* 👇 TRUST & PRIVACY PAGES INSIDE MAINLAYOUT */}
+          <Route path="trust-center" element={<TrustCenter />} />
+          <Route path="privacy" element={<PrivacyPolicy />} />
+
           {/* NEW: Lane Intelligence under AI Lab */}
-          {/* URL: /ai/lanes (matches sidebar NavLink) */}
           <Route path="ai/lanes" element={<AiLaneIntelligence />} />
 
           {/* Admin segment */}
@@ -155,6 +191,9 @@ export default function App() {
               element={<DriverLearningTest />}
             />
           </Route>
+
+          {/* ✅ Super Admin route inside protected app */}
+          <Route path="super-admin" element={<SuperAdmin />} />
 
           {/* Keep nested ai-proof as well */}
           <Route path="ai-lab-proof" element={<AIProof />} />

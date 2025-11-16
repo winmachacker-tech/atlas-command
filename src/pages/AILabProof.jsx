@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   Clock,
 } from "lucide-react";
+import AiFeatureGate from "../components/AiFeatureGate";
 
 /* ----------------------------- helpers ----------------------------- */
 function cx(...a) {
@@ -41,8 +42,9 @@ function num(n) {
   return x.toLocaleString();
 }
 
-/* ----------------------------- main page ----------------------------- */
-export default function AiLabProof() {
+/* ----------------------------- inner gated page ----------------------------- */
+
+function AiLabProofInner() {
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState("idle"); // idle | loading | error | ready
   const [err, setErr] = useState("");
@@ -299,5 +301,15 @@ function NotesCell({ totalFeedback, lastFeedbackAt, notes }) {
         <span className="font-medium">{fmtDateTime(lastFeedbackAt)}</span>
       </span>
     </div>
+  );
+}
+
+/* ----------------------------- gated default export ----------------------------- */
+
+export default function AiLabProof() {
+  return (
+    <AiFeatureGate>
+      <AiLabProofInner />
+    </AiFeatureGate>
   );
 }

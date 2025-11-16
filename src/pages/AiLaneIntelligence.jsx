@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { RefreshCw, AlertTriangle, Info } from "lucide-react";
+import AiFeatureGate from "../components/AiFeatureGate";
 
 /* ---------------------- helpers ---------------------- */
 
@@ -133,9 +134,9 @@ function scoreToColor(score) {
   return `hsl(${hue} 70% 40%)`;
 }
 
-/* ---------------------- main page ---------------------- */
+/* ---------------------- inner gated page ---------------------- */
 
-export default function AiLaneIntelligence() {
+function AiLaneIntelligenceInner() {
   const [days, setDays] = useState(90); // lookback window
   const [rows, setRows] = useState([]);
   const [count, setCount] = useState(0);
@@ -344,9 +345,10 @@ export default function AiLaneIntelligence() {
                       <div className="flex flex-1 gap-2">
                         {destinations.map((d, di) => {
                           const lane = matrix[oi][di];
-                          const bg = lane?.score != null
-                            ? scoreToColor(lane.score)
-                            : "transparent";
+                          const bg =
+                            lane?.score != null
+                              ? scoreToColor(lane.score)
+                              : "transparent";
                           const border =
                             lane?.score != null
                               ? "border-transparent"
@@ -455,5 +457,15 @@ export default function AiLaneIntelligence() {
         </div>
       </div>
     </section>
+  );
+}
+
+/* ---------------------- gated default export ---------------------- */
+
+export default function AiLaneIntelligence() {
+  return (
+    <AiFeatureGate>
+      <AiLaneIntelligenceInner />
+    </AiFeatureGate>
   );
 }

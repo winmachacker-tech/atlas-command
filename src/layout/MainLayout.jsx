@@ -1,6 +1,13 @@
-// src/layout/MainLayout.jsx
 import Sidebar from "../components/Sidebar.jsx";
-import { useEffect, useMemo, useState, useCallback, useRef, createContext, useContext } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  useCallback,
+  useRef,
+  createContext,
+  useContext,
+} from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Home,
@@ -27,6 +34,7 @@ import {
   Users,
   BarChart3,
   FileCheck, // 👈 Added
+  Crown, // 👈 icon for Super Admin link
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { trackLogout } from "../lib/activityTracker";
@@ -39,7 +47,7 @@ export const DipsyContext = createContext();
 export function useDipsy() {
   const context = useContext(DipsyContext);
   if (!context) {
-    throw new Error('useDipsy must be used within MainLayout');
+    throw new Error("useDipsy must be used within MainLayout");
   }
   return context;
 }
@@ -147,9 +155,7 @@ function AvatarMenu({ onSignOut }) {
       const user = data?.user ?? null;
 
       const metaUrl =
-        user?.user_metadata?.avatar_url ||
-        user?.user_metadata?.avatar ||
-        "";
+        user?.user_metadata?.avatar_url || user?.user_metadata?.avatar || "";
 
       setAvatarUrl(metaUrl || "");
       setEmail(user?.email || "");
@@ -283,7 +289,12 @@ function NotificationBell() {
       .channel("realtime:notifications")
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` },
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "notifications",
+          filter: `user_id=eq.${userId}`,
+        },
         (payload) => setItems((prev) => [payload.new, ...prev].slice(0, 10))
       )
       .subscribe();
@@ -314,14 +325,24 @@ function NotificationBell() {
     if (!userId) return;
     const ids = items.filter((i) => !i.read).map((i) => i.id);
     if (!ids.length) return;
-    await supabase.from("notifications").update({ read: true }).in("id", ids).eq("user_id", userId);
+    await supabase
+      .from("notifications")
+      .update({ read: true })
+      .in("id", ids)
+      .eq("user_id", userId);
     setItems((prev) => prev.map((i) => ({ ...i, read: true })));
   }
 
   async function handleItemClick(it) {
     if (userId && !it.read) {
-      await supabase.from("notifications").update({ read: true }).eq("id", it.id).eq("user_id", userId);
-      setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, read: true } : x)));
+      await supabase
+        .from("notifications")
+        .update({ read: true })
+        .eq("id", it.id)
+        .eq("user_id", userId);
+      setItems((prev) =>
+        prev.map((x) => (x.id === it.id ? { ...x, read: true } : x))
+      );
     }
     if (it.link) nav(it.link);
     setOpen(false);
@@ -359,7 +380,9 @@ function NotificationBell() {
                 className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-base)]"
                 title="Refresh"
               >
-                <RefreshCw className={cx("h-3.5 w-3.5", loading && "animate-spin")} />
+                <RefreshCw
+                  className={cx("h-3.5 w-3.5", loading && "animate-spin")}
+                />
                 Refresh
               </button>
               <button
@@ -404,7 +427,9 @@ function NotificationBell() {
                           {new Date(it.created_at).toLocaleString()}
                         </div>
                       </div>
-                      {!it.read && <span className="ml-auto mt-0.5 inline-block h-2 w-2 rounded-full bg-amber-500" />}
+                      {!it.read && (
+                        <span className="ml-auto mt-0.5 inline-block h-2 w-2 rounded-full bg-amber-500" />
+                      )}
                     </div>
                   </li>
                 ))}
@@ -431,23 +456,61 @@ export default function MainLayout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
 
+  // 👑 Super admin flag (for showing /super-admin in sidebar)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [checkedSuperAdmin, setCheckedSuperAdmin] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkSuperAdmin() {
+      try {
+        const { data, error } = await supabase.rpc("rpc_is_super_admin");
+
+        if (cancelled) return;
+
+        if (error) {
+          console.error("[MainLayout] rpc_is_super_admin error:", error);
+          setIsSuperAdmin(false);
+        } else {
+          setIsSuperAdmin(!!data);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error("[MainLayout] rpc_is_super_admin exception:", err);
+          setIsSuperAdmin(false);
+        }
+      } finally {
+        if (!cancelled) {
+          setCheckedSuperAdmin(true);
+        }
+      }
+    }
+
+    checkSuperAdmin();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Dipsy state management - accessible to all child pages
-  const [dipsyState, setDipsyState] = useState('idle');
-  
+  const [dipsyState, setDipsyState] = useState("idle");
+
   // AI Chat trigger - increment to open
   const [aiChatTrigger, setAiChatTrigger] = useState(0);
 
   // Auto-sleep after 2 minutes of being idle
   useEffect(() => {
     let sleepTimer;
-    
-    if (dipsyState === 'idle') {
+
+    if (dipsyState === "idle") {
       // Set timer to go to sleep after 2 minutes
       sleepTimer = setTimeout(() => {
-        setDipsyState('sleeping');
+        setDipsyState("sleeping");
       }, 120000); // 2 minutes
     }
-    
+
     return () => {
       if (sleepTimer) clearTimeout(sleepTimer);
     };
@@ -457,9 +520,16 @@ export default function MainLayout() {
   const activeGroupByPath = useMemo(() => {
     if (pathname.startsWith("/billing")) return "accounting";
     if (
-      ["/", "/loads", "/load-drafts", "/in-transit", "/delivered", "/drivers", "/trucks", "/customers"].some(
-        (p) => (p === "/" ? pathname === "/" : pathname.startsWith(p))
-      )
+      [
+        "/",
+        "/loads",
+        "/load-drafts",
+        "/in-transit",
+        "/delivered",
+        "/drivers",
+        "/trucks",
+        "/customers",
+      ].some((p) => (p === "/" ? pathname === "/" : pathname.startsWith(p)))
     )
       return "operations";
     if (
@@ -475,10 +545,16 @@ export default function MainLayout() {
         "/ai-proof",
         "/ai-lab-proof",
         "/customers",
+        "/trust-center", // Trust Center belongs to Admin group
+        "/super-admin", // Super Admin belongs to Admin group
       ].some((p) => pathname.startsWith(p))
     )
       return "admin";
-    if (pathname.startsWith("/ai") || pathname.startsWith("/ai-proof") || pathname.startsWith("/ai-lab-proof"))
+    if (
+      pathname.startsWith("/ai") ||
+      pathname.startsWith("/ai-proof") ||
+      pathname.startsWith("/ai-lab-proof")
+    )
       return "ai";
     return null;
   }, [pathname]);
@@ -496,7 +572,9 @@ export default function MainLayout() {
 
   const signOut = useCallback(async () => {
     try {
-      trackLogout().catch((err) => console.error("Failed to track logout:", err));
+      trackLogout().catch((err) =>
+        console.error("Failed to track logout:", err)
+      );
       await supabase.auth.signOut();
     } finally {
       navigate("/login", { replace: true });
@@ -504,18 +582,21 @@ export default function MainLayout() {
   }, [navigate]);
 
   // Dipsy context value
-  const dipsyContextValue = useMemo(() => ({
-    state: dipsyState,
-    setState: setDipsyState,
-    // Helper functions for common state changes
-    setThinking: () => setDipsyState('thinking'),
-    setConfident: () => setDipsyState('confident-victory'),
-    setLightbulb: () => setDipsyState('confident-lightbulb'),
-    setCelebrating: () => setDipsyState('celebrating'),
-    setLearning: () => setDipsyState('learning'),
-    setIdle: () => setDipsyState('idle'),
-    setSleeping: () => setDipsyState('sleeping'),
-  }), [dipsyState]);
+  const dipsyContextValue = useMemo(
+    () => ({
+      state: dipsyState,
+      setState: setDipsyState,
+      // Helper functions for common state changes
+      setThinking: () => setDipsyState("thinking"),
+      setConfident: () => setDipsyState("confident-victory"),
+      setLightbulb: () => setDipsyState("confident-lightbulb"),
+      setCelebrating: () => setDipsyState("celebrating"),
+      setLearning: () => setDipsyState("learning"),
+      setIdle: () => setDipsyState("idle"),
+      setSleeping: () => setDipsyState("sleeping"),
+    }),
+    [dipsyState]
+  );
 
   return (
     <DipsyContext.Provider value={dipsyContextValue}>
@@ -528,7 +609,9 @@ export default function MainLayout() {
               <div className="flex items-center justify-between px-2 py-3">
                 <div className="flex items-center gap-2">
                   <FolderKanban className="h-5 w-5 text-emerald-400" />
-                  <span className="font-semibold tracking-wide">Atlas Command</span>
+                  <span className="font-semibold tracking-wide">
+                    Atlas Command
+                  </span>
                 </div>
               </div>
 
@@ -604,12 +687,29 @@ export default function MainLayout() {
                   <SideLink to="/settings/security" icon={Shield}>
                     Security
                   </SideLink>
+                  {/* Trust & Security Center */}
+                  <SideLink to="/trust-center" icon={ShieldCheck}>
+                    Trust &amp; Security
+                  </SideLink>
+                  {/* Privacy Policy */}
+                  <SideLink to="/privacy" icon={ShieldCheck}>
+                    Privacy Policy
+                  </SideLink>
                   <SideLink to="/teammanagement" icon={UserRound}>
                     Team Management
                   </SideLink>
-                  <SideLink to="/admin/driver-learning-test" icon={GraduationCap}>
+                  <SideLink
+                    to="/admin/driver-learning-test"
+                    icon={GraduationCap}
+                  >
                     Driver Learning Test
                   </SideLink>
+                  {/* Super Admin Panel (platform-level) – only for real super admins */}
+                  {checkedSuperAdmin && isSuperAdmin && (
+                    <SideLink to="/super-admin" icon={Crown}>
+                      Super Admin
+                    </SideLink>
+                  )}
                 </SideGroup>
 
                 {/* AI Tools */}
@@ -684,32 +784,33 @@ export default function MainLayout() {
             {/* Routed content */}
             <div className="p-4 md:p-6">
               <Outlet />
-              <AIQuickLauncher 
-                openTrigger={aiChatTrigger} 
-              />
-              
+              <AIQuickLauncher openTrigger={aiChatTrigger} />
+
               {/* Dipsy Floating Widget - visible on all pages */}
-              <DipsyFloatingWidget 
+              <DipsyFloatingWidget
                 initialState={dipsyState}
-                defaultPosition={{ 
-                  x: typeof window !== 'undefined' ? window.innerWidth - 250 : 100, 
-                  y: 100 
+                defaultPosition={{
+                  x:
+                    typeof window !== "undefined"
+                      ? window.innerWidth - 250
+                      : 100,
+                  y: 100,
                 }}
                 onAskDipsy={() => {
-                  // 🎯 Wake Dipsy if sleeping, then show excitement
-                  if (dipsyState === 'sleeping') {
-                    setDipsyState('idle');
+                  // Wake Dipsy if sleeping, then show excitement
+                  if (dipsyState === "sleeping") {
+                    setDipsyState("idle");
                     setTimeout(() => {
-                      setDipsyState('confident-lightbulb');
-                      setTimeout(() => setDipsyState('idle'), 1500);
+                      setDipsyState("confident-lightbulb");
+                      setTimeout(() => setDipsyState("idle"), 1500);
                     }, 300);
                   } else {
-                    setDipsyState('confident-lightbulb');
-                    setTimeout(() => setDipsyState('idle'), 1500);
+                    setDipsyState("confident-lightbulb");
+                    setTimeout(() => setDipsyState("idle"), 1500);
                   }
-                  
+
                   // Trigger AI chat opening
-                  setAiChatTrigger(prev => prev + 1);
+                  setAiChatTrigger((prev) => prev + 1);
                 }}
               />
             </div>

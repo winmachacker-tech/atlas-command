@@ -17,9 +17,10 @@ import {
   FileText,
   Info,
   Bell,
-  PlaySquare, // NEW: for "Assign now"
+  PlaySquare, // for "Assign now"
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
+import AiFeatureGate from "../components/AiFeatureGate";
 
 /* ----------------------------- tiny utilities ---------------------------- */
 function cx(...a) {
@@ -127,12 +128,12 @@ function Chip({ children, tone = "default", title, className = "" }) {
   );
 }
 
-/* ------------------------------ main component --------------------------- */
-export default function AIRecommendations() {
+/* ----------------------- Inner gated page component ---------------------- */
+function AIRecommendationsInner() {
   const [items, setItems] = useState([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  const [okMsg, setOkMsg] = useState(null); // NEW: success banner
+  const [okMsg, setOkMsg] = useState(null); // success banner
 
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [search, setSearch] = useState("");
@@ -152,14 +153,14 @@ export default function AIRecommendations() {
     tags: "",
   });
 
-  /* ðŸ”” Live polling for new auto-recs */
+  // Live polling for new auto-recs
   const [liveEnabled, setLiveEnabled] = useState(true);
   const [newAutoCount, setNewAutoCount] = useState(0);
   const [lastFetchedAt, setLastFetchedAt] = useState(null);
   const pollRef = useRef(null);
   const POLL_MS = 30_000; // 30s
 
-  /* ðŸ”Œ Edge Functions env (for dispatch-intent) */
+  // Edge Functions env (for dispatch-intent)
   const [envs, setEnvs] = useState({ functionsUrl: "", anonPresent: false });
   useEffect(() => {
     const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
@@ -368,7 +369,9 @@ export default function AIRecommendations() {
     setOkMsg(null);
     try {
       if (!envs.functionsUrl) {
-        throw new Error("Missing FUNCTIONS URL (set VITE_SUPABASE_FUNCTIONS_URL or VITE_SUPABASE_URL).");
+        throw new Error(
+          "Missing FUNCTIONS URL (set VITE_SUPABASE_FUNCTIONS_URL or VITE_SUPABASE_URL)."
+        );
       }
       if (!rec || rec.status !== "NEW") {
         throw new Error("Only NEW recommendations can be assigned.");
@@ -378,7 +381,9 @@ export default function AIRecommendations() {
       }
       const driverId = rec?.meta?.recommended_driver_id || null;
       if (!driverId) {
-        throw new Error("No recommended driver found in meta. Generate new autos with the latest function.");
+        throw new Error(
+          "No recommended driver found in meta. Generate new autos with the latest function."
+        );
       }
 
       // POST to dispatch-intent with explicit IDs
@@ -389,7 +394,8 @@ export default function AIRecommendations() {
         dryRun: false,
       });
       if (!res.ok) {
-        const msg = data?.error || data?.message || `Edge error (${res.status})`;
+        const msg =
+          data?.error || data?.message || `Edge error (${res.status})`;
         throw new Error(msg);
       }
 
@@ -453,13 +459,14 @@ export default function AIRecommendations() {
         Central hub for AI-generated (and human-curated) dispatch recommendations.
       </p>
 
-      {/* ðŸ”” New auto recs banner */}
+      {/* New auto recs banner */}
       {newAutoCount > 0 && (
         <div className="mb-4 flex items-start gap-3 rounded-xl border border-emerald-900/40 bg-emerald-950/30 p-3 text-sm text-emerald-200">
           <Bell className="mt-0.5 h-4 w-4 shrink-0" />
           <div className="flex-1">
             <div className="font-medium">
-              {newAutoCount} new auto recommendation{newAutoCount > 1 ? "s" : ""} available
+              {newAutoCount} new auto recommendation
+              {newAutoCount > 1 ? "s" : ""} available
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
               <button
@@ -617,7 +624,9 @@ export default function AIRecommendations() {
                     <button
                       onClick={() => assignNow(r)}
                       className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
-                      title={`Assign ${r?.meta?.recommended_driver_name || "driver"} to this load`}
+                      title={`Assign ${
+                        r?.meta?.recommended_driver_name || "driver"
+                      } to this load`}
                     >
                       <PlaySquare className="h-4 w-4" />
                       Assign now
@@ -650,7 +659,6 @@ export default function AIRecommendations() {
                       title="Archive"
                     >
                       <Archive size={14} />
-                      Archive
                     </button>
                   )}
                   <button
@@ -810,7 +818,9 @@ export default function AIRecommendations() {
           </div>
 
           <div className="space-y-1 md:col-span-2">
-            <label className="text-xs text-zinc-400">Tags (comma-separated)</label>
+            <label className="text-xs text-zinc-400">
+              Tags (comma-separated)
+            </label>
             <input
               value={createForm.tags}
               onChange={(e) =>
@@ -826,3 +836,11 @@ export default function AIRecommendations() {
   );
 }
 
+/* --------------------------- Gated default export ------------------------ */
+export default function AIRecommendations() {
+  return (
+    <AiFeatureGate>
+      <AIRecommendationsInner />
+    </AiFeatureGate>
+  );
+}

@@ -2,7 +2,7 @@
 // Purpose: Manage org team members and invite new users directly from Atlas.
 //
 // Flow when you click "Send invite":
-//  1) RPC: rpc_inv_invite_existing_user_to_org(p_email, p_org_role)
+//  1) RPC: rpc_invite_existing_user_to_org(p_email, p_org_role)
 //     -> creates/updates a row in public.team_members for this org/email
 //  2) Edge Function: admin-invite-user
 //     -> sends Supabase Auth invite email using service role key
@@ -10,6 +10,18 @@
 // This works for:
 //  - Existing users (already in Auth → Users)   -> status "added"
 //  - Brand new emails (no account yet)          -> status "pending_user"
+//
+// Extended: Per-user feature toggles
+//  - Uses team_members.ai_recommendations_enabled boolean
+//  - Only ORG OWNER / ADMIN can see and change toggles
+//  - Nobody can flip their OWN toggle from this page
+//
+// NEW (Admin controls per member):
+//  - Role change dropdown (owner/admin/member) via RPC rpc_admin_set_member_role
+//  - Enable / disable user via RPC rpc_admin_set_member_status
+//  - Resend invite via Edge Function admin-invite-user
+//  - Remove from organization via RPC rpc_admin_delete_member
+//  - All permission checks and org-scoping are enforced INSIDE those RPCs / functions
 
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
@@ -21,19 +33,51 @@ import {
   Shield,
   CheckCircle2,
   AlertTriangle,
+  Bot,
+  Trash2,
 } from "lucide-react";
 
 export default function TeamManagementPage() {
   const [members, setMembers] = useState([]);
   const [loadingMembers, setLoadingMembers] = useState(true);
+
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("member");
   const [inviteLoading, setInviteLoading] = useState(false);
+
   const [message, setMessage] = useState(null);
 
-  // Load team members on mount
+  // Track which member row is being updated for AI toggle
+  const [featureUpdatingId, setFeatureUpdatingId] = useState(null);
+
+  // Track which member is being updated for role / status / resend invite / delete
+  const [roleUpdatingId, setRoleUpdatingId] = useState(null);
+  const [statusUpdatingId, setStatusUpdatingId] = useState(null);
+  const [resendInviteId, setResendInviteId] = useState(null);
+  const [deleteMemberId, setDeleteMemberId] = useState(null);
+
+  // Current logged-in user (Supabase auth user_id)
+  const [currentUserId, setCurrentUserId] = useState(null);
+
+  // Load current user + team members on mount
   useEffect(() => {
-    fetchMembers();
+    async function init() {
+      try {
+        const { data, error } = await supabase.auth.getUser();
+        if (error) {
+          console.error("[TeamManagement] getUser error:", error);
+        } else {
+          setCurrentUserId(data?.user?.id || null);
+        }
+      } catch (e) {
+        console.error("[TeamManagement] getUser unexpected error:", e);
+      } finally {
+        // Regardless of auth user fetch result, load members
+        fetchMembers();
+      }
+    }
+    init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function fetchMembers() {
@@ -52,7 +96,8 @@ export default function TeamManagementPage() {
             invited_by,
             created_at,
             updated_at,
-            user_id
+            user_id,
+            ai_recommendations_enabled
           `
         )
         .order("created_at", { ascending: true });
@@ -225,10 +270,301 @@ export default function TeamManagementPage() {
     );
   }
 
+  // Find the current member row for this user (in this org)
+  const currentMember = members.find(
+    (m) => m.user_id && currentUserId && m.user_id === currentUserId
+  );
+  const currentRole = (currentMember?.role || "").toLowerCase();
+
+  // Only org OWNER or ADMIN can manage feature flags and member controls
+  const canManageFeatures =
+    currentRole === "owner" || currentRole === "admin";
+
+  // Toggle AI Recommendations feature for a member
+  async function handleToggleAiRecommendations(member, nextValue) {
+    const { id, email } = member;
+
+    // Guard: only allow if we already decided this row is toggle-able
+    if (!canManageFeatures) return;
+    if (member.user_id && currentUserId && member.user_id === currentUserId) {
+      // No self-toggling from this page
+      return;
+    }
+
+    try {
+      setFeatureUpdatingId(id);
+
+      const { error } = await supabase
+        .from("team_members")
+        .update({ ai_recommendations_enabled: nextValue })
+        .eq("id", id);
+
+      if (error) {
+        console.error(
+          "[TeamManagement] toggle ai_recommendations_enabled error:",
+          error
+        );
+        setMessage({
+          type: "error",
+          text:
+            error.message ||
+            `Could not update AI recommendations for ${email}. Please try again.`,
+        });
+        return;
+      }
+
+      // On success, just refresh members (keeps UI honest with DB)
+      await fetchMembers();
+    } catch (e) {
+      console.error(
+        "[TeamManagement] handleToggleAiRecommendations unexpected error:",
+        e,
+        "for",
+        email
+      );
+      setMessage({
+        type: "error",
+        text:
+          e?.message ||
+          `Unexpected error while updating AI recommendations for ${email}.`,
+      });
+    } finally {
+      setFeatureUpdatingId(null);
+    }
+  }
+
+  // Change a member's role via secure RPC
+  async function handleChangeRole(member, nextRole) {
+    if (!canManageFeatures) return;
+    if (!nextRole || nextRole === member.role) return;
+
+    // Never allow changing your own role from this page
+    if (member.user_id && currentUserId && member.user_id === currentUserId) {
+      return;
+    }
+
+    const { id, email } = member;
+
+    try {
+      setRoleUpdatingId(id);
+
+      const { error } = await supabase.rpc("rpc_admin_set_member_role", {
+        p_member_id: id,
+        p_role: nextRole,
+      });
+
+      if (error) {
+        console.error("[TeamManagement] rpc_admin_set_member_role error:", error);
+        setMessage({
+          type: "error",
+          text:
+            error.message ||
+            `Could not change role for ${email}. Please try again.`,
+        });
+        return;
+      }
+
+      await fetchMembers();
+      setMessage({
+        type: "success",
+        text: `Updated role for ${email} to ${nextRole}.`,
+      });
+    } catch (e) {
+      console.error(
+        "[TeamManagement] handleChangeRole unexpected error:",
+        e,
+        "for",
+        email
+      );
+      setMessage({
+        type: "error",
+        text:
+          e?.message ||
+          `Unexpected error while changing role for ${email}.`,
+      });
+    } finally {
+      setRoleUpdatingId(null);
+    }
+  }
+
+  // Enable / disable a member via secure RPC
+  async function handleToggleMemberStatus(member) {
+    if (!canManageFeatures) return;
+
+    // Never allow disabling your own account from this page
+    if (member.user_id && currentUserId && member.user_id === currentUserId) {
+      return;
+    }
+
+    const { id, email } = member;
+    const statusNorm = (member.status || "").toLowerCase();
+    const nextStatus = statusNorm === "disabled" ? "active" : "disabled";
+
+    try {
+      setStatusUpdatingId(id);
+
+      const { error } = await supabase.rpc("rpc_admin_set_member_status", {
+        p_member_id: id,
+        p_status: nextStatus,
+      });
+
+      if (error) {
+        console.error("[TeamManagement] rpc_admin_set_member_status error:", error);
+        setMessage({
+          type: "error",
+          text:
+            error.message ||
+            `Could not update status for ${email}. Please try again.`,
+        });
+        return;
+      }
+
+      await fetchMembers();
+      setMessage({
+        type: "success",
+        text:
+          nextStatus === "disabled"
+            ? `Disabled access for ${email}.`
+            : `Re-enabled access for ${email}.`,
+      });
+    } catch (e) {
+      console.error(
+        "[TeamManagement] handleToggleMemberStatus unexpected error:",
+        e,
+        "for",
+        email
+      );
+      setMessage({
+        type: "error",
+        text:
+          e?.message ||
+          `Unexpected error while updating status for ${email}.`,
+      });
+    } finally {
+      setStatusUpdatingId(null);
+    }
+  }
+
+  // Resend invite email via existing Edge Function
+  async function handleResendInvite(member) {
+    if (!canManageFeatures) return;
+
+    const { id, email } = member;
+
+    try {
+      setResendInviteId(id);
+
+      const { data: fnData, error: fnError } = await supabase.functions.invoke(
+        "admin-invite-user",
+        {
+          body: { email },
+        }
+      );
+
+      if (fnError) {
+        console.error(
+          "[TeamManagement] admin-invite-user (resend) error:",
+          fnError
+        );
+        setMessage({
+          type: "error",
+          text:
+            fnError.message ||
+            `Failed to resend invite email to ${email}. Please try again.`,
+        });
+        return;
+      }
+
+      console.log(
+        "[TeamManagement] admin-invite-user (resend) result:",
+        fnData
+      );
+
+      setMessage({
+        type: "success",
+        text: `Invite email resent to ${email}.`,
+      });
+    } catch (e) {
+      console.error(
+        "[TeamManagement] handleResendInvite unexpected error:",
+        e,
+        "for",
+        email
+      );
+      setMessage({
+        type: "error",
+        text:
+          e?.message ||
+          `Unexpected error while resending invite to ${email}.`,
+      });
+    } finally {
+      setResendInviteId(null);
+    }
+  }
+
+  // Remove member from organization via secure RPC
+  async function handleRemoveFromOrganization(member) {
+    if (!canManageFeatures) return;
+
+    // Never allow removing your own membership from this page
+    if (member.user_id && currentUserId && member.user_id === currentUserId) {
+      return;
+    }
+
+    const { id, email } = member;
+
+    const confirmed = window.confirm(
+      `Remove ${email} from this organization?\n\nThey will lose access to this org, but their Atlas account will remain.`
+    );
+    if (!confirmed) return;
+
+    try {
+      setDeleteMemberId(id);
+
+      const { error } = await supabase.rpc("rpc_admin_delete_member", {
+        p_member_id: id,
+      });
+
+      if (error) {
+        console.error(
+          "[TeamManagement] rpc_admin_delete_member error:",
+          error
+        );
+        setMessage({
+          type: "error",
+          text:
+            error.message ||
+            `Could not remove ${email} from this organization. Please try again.`,
+        });
+        return;
+      }
+
+      await fetchMembers();
+      setMessage({
+        type: "success",
+        text: `Removed ${email} from this organization.`,
+      });
+    } catch (e) {
+      console.error(
+        "[TeamManagement] handleRemoveFromOrganization unexpected error:",
+        e,
+        "for",
+        email
+      );
+      setMessage({
+        type: "error",
+        text:
+          e?.message ||
+          `Unexpected error while removing ${email} from this organization.`,
+      });
+    } finally {
+      setDeleteMemberId(null);
+    }
+  }
+
   return (
     <div className="p-4 md:p-6 lg:p-8">
       <div className="max-w-5xl mx-auto space-y-6">
-
         {/* Header */}
         <div className="flex items-center justify-between gap-4">
           <div>
@@ -239,8 +575,8 @@ export default function TeamManagementPage() {
               </h1>
             </div>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Manage who has access to this Atlas organization and send invites
-              directly from here.
+              Manage who has access to this Atlas organization, control feature
+              access, and send invites directly from here.
             </p>
           </div>
           <div className="hidden md:flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
@@ -372,24 +708,190 @@ export default function TeamManagementPage() {
                     <th className="pb-2 pr-4">Email</th>
                     <th className="pb-2 pr-4">Role</th>
                     <th className="pb-2 pr-4">Status</th>
+                    {canManageFeatures && (
+                      <th className="pb-2 pr-4 whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1">
+                          <Bot className="w-3 h-3 text-sky-500" />
+                          AI Recs
+                        </span>
+                      </th>
+                    )}
+                    {canManageFeatures && (
+                      <th className="pb-2 pr-4 whitespace-nowrap">Actions</th>
+                    )}
                     <th className="pb-2 pr-4">Added</th>
                   </tr>
                 </thead>
 
                 <tbody>
-                  {members.map((m) => (
-                    <tr
-                      key={m.id}
-                      className="border-b border-slate-200 dark:border-slate-800"
-                    >
-                      <td className="py-2 pr-4">{m.email}</td>
-                      <td className="py-2 pr-4 capitalize">{m.role}</td>
-                      <td className="py-2 pr-4">{renderStatusPill(m.status)}</td>
-                      <td className="py-2 pr-4">
-                        {new Date(m.created_at).toLocaleDateString()}
-                      </td>
-                    </tr>
-                  ))}
+                  {members.map((m) => {
+                    const aiEnabled = !!m.ai_recommendations_enabled;
+                    const isUpdatingFeature = featureUpdatingId === m.id;
+                    const isUpdatingRole = roleUpdatingId === m.id;
+                    const isUpdatingStatus = statusUpdatingId === m.id;
+                    const isResendingInvite = resendInviteId === m.id;
+                    const isDeleting = deleteMemberId === m.id;
+
+                    const isSelf =
+                      m.user_id && currentUserId && m.user_id === currentUserId;
+
+                    // OWNER / ADMIN can manage others, but not themselves
+                    const canToggleThisRow =
+                      canManageFeatures && !isSelf;
+
+                    const statusNorm = (m.status || "").toLowerCase();
+                    const isInvited =
+                      statusNorm === "invited" ||
+                      statusNorm === "pending_user";
+                    const isDisabled = statusNorm === "disabled";
+
+                    return (
+                      <tr
+                        key={m.id}
+                        className="border-b border-slate-200 dark:border-slate-800"
+                      >
+                        <td className="py-2 pr-4">{m.email}</td>
+
+                        {/* Role cell */}
+                        <td className="py-2 pr-4 capitalize">
+                          {canToggleThisRow ? (
+                            <div className="inline-flex items-center gap-2">
+                              <select
+                                value={m.role}
+                                disabled={isUpdatingRole}
+                                onChange={(e) =>
+                                  handleChangeRole(m, e.target.value)
+                                }
+                                className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                              >
+                                <option value="member">Member</option>
+                                <option value="admin">Admin</option>
+                                <option value="owner">Owner</option>
+                              </select>
+                              {isUpdatingRole && (
+                                <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
+                              )}
+                            </div>
+                          ) : (
+                            <span>{m.role}</span>
+                          )}
+                        </td>
+
+                        {/* Status pill */}
+                        <td className="py-2 pr-4">
+                          {renderStatusPill(m.status)}
+                        </td>
+
+                        {/* AI Recs toggle */}
+                        {canManageFeatures && (
+                          <td className="py-2 pr-4">
+                            {canToggleThisRow ? (
+                              <button
+                                type="button"
+                                disabled={isUpdatingFeature}
+                                onClick={() =>
+                                  handleToggleAiRecommendations(m, !aiEnabled)
+                                }
+                                className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border transition ${
+                                  aiEnabled
+                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700/60"
+                                    : "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
+                                } ${
+                                  isUpdatingFeature
+                                    ? "opacity-60 cursor-wait"
+                                    : ""
+                                }`}
+                              >
+                                {isUpdatingFeature ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Bot className="w-3 h-3" />
+                                )}
+                                <span>{aiEnabled ? "On" : "Off"}</span>
+                              </button>
+                            ) : (
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border opacity-70 cursor-not-allowed ${
+                                  aiEnabled
+                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700/60"
+                                    : "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
+                                }`}
+                              >
+                                <Bot className="w-3 h-3" />
+                                <span>{aiEnabled ? "On" : "Off"}</span>
+                              </span>
+                            )}
+                          </td>
+                        )}
+
+                        {/* Admin actions */}
+                        {canManageFeatures && (
+                          <td className="py-2 pr-4">
+                            {canToggleThisRow ? (
+                              <div className="flex flex-wrap gap-2">
+                                {/* Enable / Disable */}
+                                <button
+                                  type="button"
+                                  disabled={isUpdatingStatus || isDeleting}
+                                  onClick={() =>
+                                    handleToggleMemberStatus(m)
+                                  }
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                  {isUpdatingStatus ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : null}
+                                  <span>
+                                    {isDisabled ? "Enable" : "Disable"}
+                                  </span>
+                                </button>
+
+                                {/* Resend invite */}
+                                {isInvited && (
+                                  <button
+                                    type="button"
+                                    disabled={isResendingInvite || isDeleting}
+                                    onClick={() => handleResendInvite(m)}
+                                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-sky-300 text-xs text-sky-700 dark:border-sky-700 dark:text-sky-300 hover:bg-sky-50 dark:hover:bg-sky-950 disabled:opacity-60 disabled:cursor-not-allowed"
+                                  >
+                                    {isResendingInvite ? (
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                    ) : null}
+                                    <span>Resend invite</span>
+                                  </button>
+                                )}
+
+                                {/* Remove from organization */}
+                                <button
+                                  type="button"
+                                  disabled={isDeleting}
+                                  onClick={() =>
+                                    handleRemoveFromOrganization(m)
+                                  }
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-rose-300 text-xs text-rose-700 dark:border-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950 disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                  {isDeleting ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="w-3 h-3" />
+                                  )}
+                                  <span>Remove from organization</span>
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-slate-400">—</span>
+                            )}
+                          </td>
+                        )}
+
+                        <td className="py-2 pr-4">
+                          {m.created_at
+                            ? new Date(m.created_at).toLocaleDateString()
+                            : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
