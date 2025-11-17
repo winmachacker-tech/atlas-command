@@ -1,6 +1,22 @@
 ﻿// src/components/DriverPreferences.jsx
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { Loader2, ThumbsUp, ThumbsDown, Save, MapPin, Truck, Home, FileText } from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+  memo,
+} from "react";
+import {
+  Loader2,
+  ThumbsUp,
+  ThumbsDown,
+  Save,
+  MapPin,
+  Truck,
+  Home,
+  FileText,
+} from "lucide-react";
 import { supabase } from "../lib/supabase";
 
 /**
@@ -10,7 +26,7 @@ import { supabase } from "../lib/supabase";
  * - All queries & realtime scoped by driverId
  * - Single subscription with proper cleanup
  */
-export default function DriverPreferences({ driverId }) {
+function DriverPreferences({ driverId }) {
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState([]);
   const [preferences, setPreferences] = useState(null);
@@ -31,11 +47,20 @@ export default function DriverPreferences({ driverId }) {
   });
 
   // Safely read vote value from either column name
-  const getVoteVal = (row) => (row?.vote ?? row?.thumb ?? row?.rating ?? null);
+  const getVoteVal = (row) => row?.vote ?? row?.thumb ?? row?.rating ?? null;
 
-  const up = useMemo(() => feedback.filter((f) => getVoteVal(f) === "up").length, [feedback]);
-  const down = useMemo(() => feedback.filter((f) => getVoteVal(f) === "down").length, [feedback]);
-  const rate = useMemo(() => (up + down ? Math.round((up / (up + down)) * 100) : 0), [up, down]);
+  const up = useMemo(
+    () => feedback.filter((f) => getVoteVal(f) === "up").length,
+    [feedback]
+  );
+  const down = useMemo(
+    () => feedback.filter((f) => getVoteVal(f) === "down").length,
+    [feedback]
+  );
+  const rate = useMemo(
+    () => (up + down ? Math.round((up / (up + down)) * 100) : 0),
+    [up, down]
+  );
 
   // Load feedback
   const loadFeedback = useCallback(async () => {
@@ -63,9 +88,9 @@ export default function DriverPreferences({ driverId }) {
         .select("*")
         .eq("driver_id", driverId)
         .maybeSingle();
-      
+
       if (error) throw error;
-      
+
       setPreferences(data);
       if (data) {
         setFormData({
@@ -77,17 +102,31 @@ export default function DriverPreferences({ driverId }) {
           max_distance_mi: data.max_distance_mi || data.max_distance || "",
           notes: data.notes || "",
         });
+      } else {
+        // If no row yet, reset to clean defaults
+        setFormData({
+          home_base: "",
+          preferred_regions: [],
+          avoid_states: [],
+          equipment: "",
+          trailer_type: "",
+          max_distance_mi: "",
+          notes: "",
+        });
       }
     } catch (e) {
       console.error("loadPreferences error:", e);
     }
   }, [driverId]);
 
-  // Initial load
+  // Initial load when driverId changes
   useEffect(() => {
+    if (!driverId) return;
     setLoading(true);
-    Promise.all([loadFeedback(), loadPreferences()]).finally(() => setLoading(false));
-  }, [loadFeedback, loadPreferences]);
+    Promise.all([loadFeedback(), loadPreferences()]).finally(() =>
+      setLoading(false)
+    );
+  }, [driverId, loadFeedback, loadPreferences]);
 
   // Realtime subscription for feedback
   useEffect(() => {
@@ -161,13 +200,24 @@ export default function DriverPreferences({ driverId }) {
       const payload = {
         driver_id: driverId,
         home_base: formData.home_base || null,
-        preferred_regions: formData.preferred_regions.length > 0 ? formData.preferred_regions : null,
-        regions: formData.preferred_regions.length > 0 ? formData.preferred_regions : null, // duplicate for compatibility
-        avoid_states: formData.avoid_states.length > 0 ? formData.avoid_states : null,
+        preferred_regions:
+          formData.preferred_regions.length > 0
+            ? formData.preferred_regions
+            : null,
+        regions:
+          formData.preferred_regions.length > 0
+            ? formData.preferred_regions
+            : null, // duplicate for compatibility
+        avoid_states:
+          formData.avoid_states.length > 0 ? formData.avoid_states : null,
         equipment: formData.equipment || null,
         trailer_type: formData.trailer_type || null,
-        max_distance_mi: formData.max_distance_mi ? parseInt(formData.max_distance_mi) : null,
-        max_distance: formData.max_distance_mi ? parseInt(formData.max_distance_mi) : null, // duplicate for compatibility
+        max_distance_mi: formData.max_distance_mi
+          ? parseInt(formData.max_distance_mi)
+          : null,
+        max_distance: formData.max_distance_mi
+          ? parseInt(formData.max_distance_mi)
+          : null, // duplicate for compatibility
         notes: formData.notes || null,
       };
 
@@ -196,7 +246,7 @@ export default function DriverPreferences({ driverId }) {
     }
   }
 
-  // Handle array inputs (comma-separated) - NOW MEMOIZED WITH useCallback
+  // Handle array inputs (comma-separated)
   const handleArrayInput = useCallback((field, value) => {
     const arr = value
       .split(",")
@@ -205,7 +255,7 @@ export default function DriverPreferences({ driverId }) {
     setFormData((prev) => ({ ...prev, [field]: arr }));
   }, []);
 
-  // Handle simple text inputs - STABLE HANDLER WITH useCallback
+  // Handle simple text inputs
   const handleTextInput = useCallback((field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   }, []);
@@ -220,12 +270,24 @@ export default function DriverPreferences({ driverId }) {
 
   return (
     <div className="space-y-6">
-      {/* ============= FEEDBACK STATS (existing) ============= */}
+      {/* ============= FEEDBACK STATS ============= */}
       <div>
-        <div className="text-sm font-medium text-zinc-200 mb-3">Feedback & Learning</div>
+        <div className="text-sm font-medium text-zinc-200 mb-3">
+          Feedback &amp; Learning
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-          <Stat title="Thumbs Up" value={up} tone="emerald" icon={<ThumbsUp className="w-4 h-4" />} />
-          <Stat title="Thumbs Down" value={down} tone="rose" icon={<ThumbsDown className="w-4 h-4" />} />
+          <Stat
+            title="Thumbs Up"
+            value={up}
+            tone="emerald"
+            icon={<ThumbsUp className="w-4 h-4" />}
+          />
+          <Stat
+            title="Thumbs Down"
+            value={down}
+            tone="rose"
+            icon={<ThumbsDown className="w-4 h-4" />}
+          />
           <Stat title="Acceptance Rate" value={`${rate}%`} tone="sky" />
         </div>
 
@@ -236,7 +298,11 @@ export default function DriverPreferences({ driverId }) {
             disabled={busy || !driverId}
             className="inline-flex items-center gap-2 h-10 px-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-200 disabled:opacity-60"
           >
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ThumbsUp className="w-4 h-4" />}
+            {busy ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <ThumbsUp className="w-4 h-4" />
+            )}
             Up
           </button>
           <button
@@ -244,12 +310,16 @@ export default function DriverPreferences({ driverId }) {
             disabled={busy || !driverId}
             className="inline-flex items-center gap-2 h-10 px-4 rounded-xl border border-rose-500/40 bg-rose-500/10 hover:bg-rose-500/20 text-rose-200 disabled:opacity-60"
           >
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ThumbsDown className="w-4 h-4" />}
+            {busy ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <ThumbsDown className="w-4 h-4" />
+            )}
             Down
           </button>
         </div>
 
-        {/* Live feed (collapsed by default to save space) */}
+        {/* Live feed */}
         <details className="rounded-2xl border border-zinc-800/70 overflow-hidden">
           <summary className="px-4 py-3 bg-zinc-900/60 text-sm font-semibold cursor-pointer hover:bg-zinc-900/80">
             Live Activity ({feedback.length})
@@ -259,14 +329,19 @@ export default function DriverPreferences({ driverId }) {
           ) : (
             <ul className="divide-y divide-zinc-800/70 max-h-64 overflow-y-auto">
               {feedback.slice(0, 20).map((f) => (
-                <li key={f.id} className="px-4 py-3 text-sm flex items-center justify-between">
+                <li
+                  key={f.id}
+                  className="px-4 py-3 text-sm flex items-center justify-between"
+                >
                   <div className="flex items-center gap-2">
                     {getVoteVal(f) === "up" ? (
                       <ThumbsUp className="w-4 h-4 text-emerald-300" />
                     ) : (
                       <ThumbsDown className="w-4 h-4 text-rose-300" />
                     )}
-                    <span className="capitalize text-zinc-300">{getVoteVal(f)}</span>
+                    <span className="capitalize text-zinc-300">
+                      {getVoteVal(f)}
+                    </span>
                   </div>
                   <span className="text-xs text-zinc-500">
                     {new Date(f.created_at).toLocaleString()}
@@ -278,10 +353,12 @@ export default function DriverPreferences({ driverId }) {
         </details>
       </div>
 
-      {/* ============= ACTUAL PREFERENCES (new) ============= */}
+      {/* ============= ACTUAL PREFERENCES ============= */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <div className="text-sm font-medium text-zinc-200">Driver Preferences</div>
+          <div className="text-sm font-medium text-zinc-200">
+            Driver Preferences
+          </div>
           {!editing && (
             <button
               onClick={() => setEditing(true)}
@@ -319,7 +396,9 @@ export default function DriverPreferences({ driverId }) {
               <input
                 type="text"
                 value={formData.preferred_regions.join(", ")}
-                onChange={(e) => handleArrayInput("preferred_regions", e.target.value)}
+                onChange={(e) =>
+                  handleArrayInput("preferred_regions", e.target.value)
+                }
                 placeholder="e.g. Southwest, West Coast, Midwest"
                 className="w-full px-3 py-2 rounded-lg border border-zinc-700/60 bg-zinc-800/40 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
               />
@@ -334,7 +413,9 @@ export default function DriverPreferences({ driverId }) {
               <input
                 type="text"
                 value={formData.avoid_states.join(", ")}
-                onChange={(e) => handleArrayInput("avoid_states", e.target.value)}
+                onChange={(e) =>
+                  handleArrayInput("avoid_states", e.target.value)
+                }
                 placeholder="e.g. NY, CA, IL"
                 className="w-full px-3 py-2 rounded-lg border border-zinc-700/60 bg-zinc-800/40 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
               />
@@ -348,7 +429,9 @@ export default function DriverPreferences({ driverId }) {
               </label>
               <select
                 value={formData.equipment}
-                onChange={(e) => handleTextInput("equipment", e.target.value)}
+                onChange={(e) =>
+                  handleTextInput("equipment", e.target.value)
+                }
                 className="w-full px-3 py-2 rounded-lg border border-zinc-700/60 bg-zinc-800/40 text-zinc-200 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
               >
                 <option value="">-- Select --</option>
@@ -370,7 +453,9 @@ export default function DriverPreferences({ driverId }) {
               <input
                 type="text"
                 value={formData.trailer_type}
-                onChange={(e) => handleTextInput("trailer_type", e.target.value)}
+                onChange={(e) =>
+                  handleTextInput("trailer_type", e.target.value)
+                }
                 placeholder="e.g. 53ft dry van"
                 className="w-full px-3 py-2 rounded-lg border border-zinc-700/60 bg-zinc-800/40 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
               />
@@ -385,7 +470,9 @@ export default function DriverPreferences({ driverId }) {
               <input
                 type="number"
                 value={formData.max_distance_mi}
-                onChange={(e) => handleTextInput("max_distance_mi", e.target.value)}
+                onChange={(e) =>
+                  handleTextInput("max_distance_mi", e.target.value)
+                }
                 placeholder="e.g. 500"
                 className="w-full px-3 py-2 rounded-lg border border-zinc-700/60 bg-zinc-800/40 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
               />
@@ -413,7 +500,11 @@ export default function DriverPreferences({ driverId }) {
                 disabled={saving}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/20 text-sky-200 disabled:opacity-60"
               >
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                {saving ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4" />
+                )}
                 Save
               </button>
               <button
@@ -423,12 +514,31 @@ export default function DriverPreferences({ driverId }) {
                   if (preferences) {
                     setFormData({
                       home_base: preferences.home_base || "",
-                      preferred_regions: preferences.preferred_regions || preferences.regions || [],
+                      preferred_regions:
+                        preferences.preferred_regions ||
+                        preferences.regions ||
+                        [],
                       avoid_states: preferences.avoid_states || [],
-                      equipment: preferences.equipment || preferences.preferred_equipment?.[0] || "",
+                      equipment:
+                        preferences.equipment ||
+                        preferences.preferred_equipment?.[0] ||
+                        "",
                       trailer_type: preferences.trailer_type || "",
-                      max_distance_mi: preferences.max_distance_mi || preferences.max_distance || "",
+                      max_distance_mi:
+                        preferences.max_distance_mi ||
+                        preferences.max_distance ||
+                        "",
                       notes: preferences.notes || "",
+                    });
+                  } else {
+                    setFormData({
+                      home_base: "",
+                      preferred_regions: [],
+                      avoid_states: [],
+                      equipment: "",
+                      trailer_type: "",
+                      max_distance_mi: "",
+                      notes: "",
                     });
                   }
                 }}
@@ -445,14 +555,21 @@ export default function DriverPreferences({ driverId }) {
             {!preferences ? (
               <div className="text-sm text-zinc-400 italic">
                 No preferences set yet.{" "}
-                <button onClick={() => setEditing(true)} className="text-sky-400 hover:text-sky-300">
+                <button
+                  onClick={() => setEditing(true)}
+                  className="text-sky-400 hover:text-sky-300"
+                >
                   Add preferences
                 </button>
               </div>
             ) : (
               <>
                 {formData.home_base && (
-                  <PreferenceRow icon={<Home className="w-4 h-4" />} label="Home Base" value={formData.home_base} />
+                  <PreferenceRow
+                    icon={<Home className="w-4 h-4" />}
+                    label="Home Base"
+                    value={formData.home_base}
+                  />
                 )}
                 {formData.preferred_regions.length > 0 && (
                   <PreferenceRow
@@ -469,10 +586,18 @@ export default function DriverPreferences({ driverId }) {
                   />
                 )}
                 {formData.equipment && (
-                  <PreferenceRow icon={<Truck className="w-4 h-4" />} label="Equipment" value={formData.equipment} />
+                  <PreferenceRow
+                    icon={<Truck className="w-4 h-4" />}
+                    label="Equipment"
+                    value={formData.equipment}
+                  />
                 )}
                 {formData.trailer_type && (
-                  <PreferenceRow icon={<Truck className="w-4 h-4" />} label="Trailer Type" value={formData.trailer_type} />
+                  <PreferenceRow
+                    icon={<Truck className="w-4 h-4" />}
+                    label="Trailer Type"
+                    value={formData.trailer_type}
+                  />
                 )}
                 {formData.max_distance_mi && (
                   <PreferenceRow
@@ -482,7 +607,11 @@ export default function DriverPreferences({ driverId }) {
                   />
                 )}
                 {formData.notes && (
-                  <PreferenceRow icon={<FileText className="w-4 h-4" />} label="Notes" value={formData.notes} />
+                  <PreferenceRow
+                    icon={<FileText className="w-4 h-4" />}
+                    label="Notes"
+                    value={formData.notes}
+                  />
                 )}
               </>
             )}
@@ -524,3 +653,9 @@ function PreferenceRow({ icon, label, value }) {
     </div>
   );
 }
+
+// 🔒 Memoized export: only re-render if driverId actually changes
+export default memo(
+  DriverPreferences,
+  (prevProps, nextProps) => prevProps.driverId === nextProps.driverId
+);

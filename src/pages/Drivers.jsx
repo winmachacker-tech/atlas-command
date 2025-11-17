@@ -1,8 +1,8 @@
 ﻿// FILE: src/pages/Drivers.jsx
-// Purpose: Editable Drivers page with inline editing + slide-over "Preferences" editor per driver.
-// - Auto-detects columns for the table (truck_id vs truck, etc.).
-// - Preferences are stored in drivers.preferences (JSON/JSONB). If column is missing, shows a banner with SQL.
-// - No route changes required. A "Prefs" button on each row opens the drawer.
+// Purpose: Drivers page with org-aware RLS-safe CRUD.
+// - Loads drivers for the current user's active org (from team_members).
+// - Creates drivers with org_id + created_by so RLS "WITH CHECK" passes.
+// - Simple inline table UI (you can enhance styling/columns as needed).
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { supabase } from "../lib/supabase";
@@ -15,8 +15,6 @@ import {
   RefreshCw,
   Search as SearchIcon,
   Loader2,
-  SlidersHorizontal,
-  Save,
   AlertTriangle,
 } from "lucide-react";
 
@@ -32,1110 +30,825 @@ function isBlank(v) {
 }
 function toast(setToast, tone, msg) {
   setToast({ tone, msg });
-  setTimeout(() => setToast(null), 2400);
+  setTimeout(() => {
+    setToast(null);
+  }, 3500);
 }
 
-// Choose the first column name that exists in the table
-function firstExisting(cols, candidates) {
-  for (const name of candidates) if (cols.includes(name)) return name;
-  return null;
-}
+/* ============================== PAGE ============================== */
 
-// Small coercers for preferences
-const asArray = (v) =>
-  Array.isArray(v)
-    ? v
-    : typeof v === "string" && v.trim()
-    ? v
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : [];
-const asString = (arr) => (Array.isArray(arr) ? arr.join(", ") : arr ?? "");
-const toInt = (v) => {
-  const n = parseInt(String(v ?? "").replace(/[^\d-]/g, ""), 10);
-  return Number.isFinite(n) ? n : null;
-};
-
-/**
- * Fallback columns for an empty drivers table.
- * This fixes the "Add Driver" button not working when there are zero rows,
- * because we still know the expected schema even if no data has been inserted yet.
- */
-const FALLBACK_DRIVER_COLS = [
-  "id",
-  "org_id",
-  "full_name",
-  "phone",
-  "email",
-  "status",
-  "truck_id",
-  "notes",
-  "active",
-  "preferences",
-];
-
-/* ------------------------- tiny toast UI ------------------------- */
-function Toast({ tone = "zinc", msg = "" }) {
-  if (!msg) return null;
-  const t =
-    tone === "red"
-      ? "bg-red-600 text-white"
-      : tone === "green"
-      ? "bg-emerald-600 text-white"
-      : "bg-zinc-800 text-zinc-100";
-  return (
-    <div
-      className={cx(
-        "fixed bottom-5 right-5 px-4 py-2 rounded-lg shadow-lg z-50",
-        t
-      )}
-    >
-      {msg}
-    </div>
-  );
-}
-
-/* ------------------------- Input cell ---------------------------- */
-function EditableCell({
-  value,
-  onChange,
-  onCommit,
-  onCancel,
-  type = "text",
-  disabled,
-}) {
-  const [v, setV] = useState(value ?? "");
-  useEffect(() => setV(value ?? ""), [value]);
-
-  return (
-    <div className="flex items-center gap-2">
-      <input
-        disabled={disabled}
-        type={type}
-        className={cx(
-          "w-full bg-zinc-900/40 border border-zinc-700 rounded-md px-2 py-1 text-sm",
-          disabled && "opacity-60 cursor-not-allowed"
-        )}
-        value={v ?? ""}
-        onChange={(e) => {
-          setV(e.target.value);
-          onChange?.(e.target.value);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") onCommit?.();
-          if (e.key === "Escape") onCancel?.();
-        }}
-      />
-      <button
-        className="p-1 rounded-md hover:bg-emerald-600/10 border border-emerald-700/40"
-        onClick={onCommit}
-        title="Save"
-      >
-        <Check className="w-4 h-4 text-emerald-500" />
-      </button>
-      <button
-        className="p-1 rounded-md hover:bg-red-600/10 border border-red-700/40"
-        onClick={onCancel}
-        title="Cancel"
-      >
-        <X className="w-4 h-4 text-red-500" />
-      </button>
-    </div>
-  );
-}
-
-/* ------------------------- Row component ------------------------- */
-function DriverRow({
-  row,
-  onSave,
-  onDelete,
-  onOpenPrefs,
-  savingId,
-  setToast,
-  colKeys, // { nameKey, phoneKey, emailKey, statusKey, notesKey, truckKey, activeKey, idKey }
-}) {
-  const [edit, setEdit] = useState(false);
-  const [draft, setDraft] = useState(row);
-  useEffect(() => {
-    if (!edit) setDraft(row);
-  }, [row, edit]);
-
-  const saving = savingId === row[colKeys.idKey];
-
-  const commit = async () => {
-    if (colKeys.nameKey && isBlank(draft[colKeys.nameKey])) {
-      toast(setToast, "red", "Full name is required.");
-      return;
-    }
-    await onSave(row[colKeys.idKey], draft);
-    setEdit(false);
-  };
-
-  const cancel = () => {
-    setDraft(row);
-    setEdit(false);
-  };
-
-  return (
-    <tr className="border-b border-zinc-800 hover:bg-zinc-900/40">
-      <td className="px-3 py-2 text-zinc-400 text-xs">
-        {String(row[colKeys.idKey] ?? "—").slice(0, 8)}
-      </td>
-
-      {/* Name */}
-      <td className="px-3 py-2">
-        {edit ? (
-          <EditableCell
-            value={draft[colKeys.nameKey]}
-            onChange={(v) =>
-              setDraft((d) => ({ ...d, [colKeys.nameKey]: v }))
-            }
-            onCommit={commit}
-            onCancel={cancel}
-          />
-        ) : (
-          <span className="text-zinc-100">{row[colKeys.nameKey] || "—"}</span>
-        )}
-      </td>
-
-      {/* Phone (optional) */}
-      {colKeys.phoneKey && (
-        <td className="px-3 py-2">
-          {edit ? (
-            <EditableCell
-              type="tel"
-              value={draft[colKeys.phoneKey]}
-              onChange={(v) =>
-                setDraft((d) => ({ ...d, [colKeys.phoneKey]: v }))
-              }
-              onCommit={commit}
-              onCancel={cancel}
-            />
-          ) : (
-            <span className="text-zinc-200">
-              {row[colKeys.phoneKey] || "—"}
-            </span>
-          )}
-        </td>
-      )}
-
-      {/* Email (optional) */}
-      {colKeys.emailKey && (
-        <td className="px-3 py-2">
-          {edit ? (
-            <EditableCell
-              type="email"
-              value={draft[colKeys.emailKey]}
-              onChange={(v) =>
-                setDraft((d) => ({ ...d, [colKeys.emailKey]: v }))
-              }
-              onCommit={commit}
-              onCancel={cancel}
-            />
-          ) : (
-            <span className="text-zinc-200">
-              {row[colKeys.emailKey] || "—"}
-            </span>
-          )}
-        </td>
-      )}
-
-      {/* Status (optional) */}
-      {colKeys.statusKey && (
-        <td className="px-3 py-2">
-          {edit ? (
-            <EditableCell
-              value={draft[colKeys.statusKey]}
-              onChange={(v) =>
-                setDraft((d) => ({ ...d, [colKeys.statusKey]: v }))
-              }
-              onCommit={commit}
-              onCancel={cancel}
-            />
-          ) : (
-            <span
-              className={cx(
-                "px-2 py-0.5 rounded text-xs border",
-                row[colKeys.statusKey] === "available" &&
-                  "bg-emerald-600/15 text-emerald-400 border-emerald-700/40",
-                row[colKeys.statusKey] === "on_load" &&
-                  "bg-sky-600/15 text-sky-400 border-sky-700/40",
-                !row[colKeys.statusKey] &&
-                  "text-zinc-400 border-zinc-700/40"
-              )}
-            >
-              {row[colKeys.statusKey] || "—"}
-            </span>
-          )}
-        </td>
-      )}
-
-      {/* Truck (optional; supports truck_id OR truck) */}
-      {colKeys.truckKey && (
-        <td className="px-3 py-2">
-          {edit ? (
-            <EditableCell
-              value={draft[colKeys.truckKey]}
-              onChange={(v) =>
-                setDraft((d) => ({ ...d, [colKeys.truckKey]: v }))
-              }
-              onCommit={commit}
-              onCancel={cancel}
-            />
-          ) : (
-            <span className="text-zinc-200">
-              {row[colKeys.truckKey] || "—"}
-            </span>
-          )}
-        </td>
-      )}
-
-      {/* Notes (optional) */}
-      {colKeys.notesKey && (
-        <td className="px-3 py-2">
-          {edit ? (
-            <EditableCell
-              value={draft[colKeys.notesKey]}
-              onChange={(v) =>
-                setDraft((d) => ({ ...d, [colKeys.notesKey]: v }))
-              }
-              onCommit={commit}
-              onCancel={cancel}
-            />
-          ) : (
-            <span className="text-zinc-300 line-clamp-2">
-              {row[colKeys.notesKey] || "—"}
-            </span>
-          )}
-        </td>
-      )}
-
-      <td className="px-3 py-2 text-center">
-        {edit ? (
-          <div className="text-xs text-zinc-300">Editing…</div>
-        ) : saving ? (
-          <Loader2 className="w-4 h-4 animate-spin text-zinc-300 inline-block" />
-        ) : (
-          <div className="flex items-center justify-center gap-2">
-            <button
-              className="p-1 rounded hover:bg-zinc-800"
-              onClick={() => setEdit(true)}
-              title="Edit"
-            >
-              <Pencil className="w-4 h-4 text-zinc-300" />
-            </button>
-            <button
-              className="p-1 rounded hover:bg-zinc-800"
-              onClick={() => onOpenPrefs(row)}
-              title="Preferences"
-            >
-              <SlidersHorizontal className="w-4 h-4 text-sky-300" />
-            </button>
-            <button
-              className="p-1 rounded hover:bg-red-600/10"
-              onClick={() => onDelete(row[colKeys.idKey])}
-              title="Delete"
-            >
-              <Trash2 className="w-4 h-4 text-red-400" />
-            </button>
-          </div>
-        )}
-      </td>
-    </tr>
-  );
-}
-
-/* --------------------------- main page --------------------------- */
 export default function Drivers() {
-  const [rows, setRows] = useState([]);
-  const [knownCols, setKnownCols] = useState([]); // inferred from select('*')
-  const [loading, setLoading] = useState(true);
-  const [savingId, setSavingId] = useState(null);
-  const [query, setQuery] = useState("");
-  const [toastState, setToast] = useState(null);
-  const [creating, setCreating] = useState(false);
-  const [newDraft, setNewDraft] = useState({}); // created based on existing columns
+  /* --------- base state --------- */
+  const [userId, setUserId] = useState(null);
+  const [orgId, setOrgId] = useState(null);
 
-  // Preferences drawer state
-  const [prefsOpen, setPrefsOpen] = useState(false);
-  const [prefsSaving, setPrefsSaving] = useState(false);
-  const [selectedDriver, setSelectedDriver] = useState(null);
-  const [prefsColsKnown, setPrefsColsKnown] = useState(false);
-  const [prefsDraft, setPrefsDraft] = useState({
-    equipment_types: [],
-    lane_whitelist: [],
-    lane_blacklist: [],
-    home_days: [],
-    shift: "either",
-    max_weight_lbs: null,
-    distance_radius_miles: null,
-    avoid_customers: [],
-    certifications: { twic: false, tsa: false, dod_clearance: false },
-    languages: [],
+  const [drivers, setDrivers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const [search, setSearch] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editDraft, setEditDraft] = useState({});
+  const [newDraft, setNewDraft] = useState({
+    first_name: "",
+    last_name: "",
+    email: "",
+    phone: "",
+    license_number: "",
+    license_class: "",
+    status: "ACTIVE",
     notes: "",
   });
 
-  // STABLE HANDLERS FOR PREFERENCES - FIXES THE FOCUS LOSS BUG
-  const handlePrefsArrayChange = useCallback((field, value) => {
-    setPrefsDraft((d) => ({ ...d, [field]: asArray(value) }));
-  }, []);
+  const [savingId, setSavingId] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
 
-  const handlePrefsTextChange = useCallback((field, value) => {
-    setPrefsDraft((d) => ({ ...d, [field]: value }));
-  }, []);
+  const [toastState, setToast] = useState(null);
+  const [fatalError, setFatalError] = useState("");
 
-  const handlePrefsNumberChange = useCallback((field, value) => {
-    setPrefsDraft((d) => ({ ...d, [field]: toInt(value) }));
-  }, []);
+  /* --------- derive visible rows --------- */
+  const visibleDrivers = useMemo(() => {
+    const term = cleanStr(search).toLowerCase();
+    if (!term) return drivers;
+    return drivers.filter((d) => {
+      const fields = [
+        d.first_name,
+        d.last_name,
+        d.email,
+        d.phone,
+        d.license_number,
+        d.status,
+      ];
+      return fields.some((v) => cleanStr(v).toLowerCase().includes(term));
+    });
+  }, [drivers, search]);
 
-  const handlePrefsCertChange = useCallback((cert, checked) => {
-    setPrefsDraft((d) => ({
-      ...d,
-      certifications: { ...d.certifications, [cert]: checked },
-    }));
-  }, []);
-
-  // Derived column keys (decide after we know columns)
-  const colKeys = useMemo(() => {
-    const cols = knownCols;
-    const idKey = firstExisting(cols, ["id", "driver_id", "uuid"]);
-    const nameKey = firstExisting(cols, ["full_name", "name", "driver_name"]);
-    const phoneKey = firstExisting(cols, ["phone", "phone_number"]);
-    const emailKey = firstExisting(cols, ["email"]);
-    const statusKey = firstExisting(cols, ["status", "state"]);
-    const notesKey = firstExisting(cols, ["notes", "note"]);
-    const truckKey = firstExisting(cols, ["truck_id", "truck", "vehicle_id"]);
-    const activeKey = firstExisting(cols, ["active", "is_active"]);
-
-    return {
-      idKey,
-      nameKey,
-      phoneKey,
-      emailKey,
-      statusKey,
-      notesKey,
-      truckKey,
-      activeKey,
-    };
-  }, [knownCols]);
-
-  const hasPreferencesCol = useMemo(
-    () => knownCols.includes("preferences"),
-    [knownCols]
-  );
-
-  const buildEmptyNewDraft = (cols) => {
-    const nameKey = firstExisting(cols, ["full_name", "name", "driver_name"]);
-    const statusKey = firstExisting(cols, ["status", "state"]);
-    const activeKey = firstExisting(cols, ["active", "is_active"]);
-    const defaults = {
-      [nameKey ?? "full_name"]: "",
-      [statusKey ?? "status"]: "available",
-    };
-    if (firstExisting(cols, ["phone", "phone_number"]))
-      defaults[firstExisting(cols, ["phone", "phone_number"])] = "";
-    if (firstExisting(cols, ["email"])) defaults["email"] = "";
-    if (firstExisting(cols, ["notes", "note"]))
-      defaults[firstExisting(cols, ["notes", "note"])] = "";
-    if (firstExisting(cols, ["truck_id", "truck", "vehicle_id"]))
-      defaults[firstExisting(cols, ["truck_id", "truck", "vehicle_id"])] = "";
-    if (activeKey) defaults[activeKey] = true;
-    return defaults;
-  };
-
-  const fetchDrivers = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from("drivers")
-      .select("*")
-      .order("id", { ascending: true });
-    if (error) {
-      console.error("fetch drivers error:", error);
-      toast(setToast, "red", `Load failed: ${error.message}`);
-      setRows([]);
-      setKnownCols([]);
-    } else {
-      // IMPORTANT FIX:
-      // If there are no rows yet, fall back to a known schema so the "Add Driver"
-      // quick-add section still works and the button is enabled.
-      let cols;
-      if (data && data.length > 0) {
-        cols = Array.from(
-          data.reduce((set, row) => {
-            Object.keys(row || {}).forEach((k) => set.add(k));
-            return set;
-          }, new Set())
-        );
-      } else {
-        cols = [...FALLBACK_DRIVER_COLS];
-      }
-      setKnownCols(cols);
-      setRows(data || []);
-      setNewDraft(buildEmptyNewDraft(cols));
-    }
-    setLoading(false);
-  };
+  /* ================== INITIAL LOAD: USER + ORG ================== */
 
   useEffect(() => {
-    fetchDrivers();
+    let cancelled = false;
+
+    async function init() {
+      try {
+        setLoading(true);
+
+        // 1) Get current user
+        const {
+          data: { user },
+          error: userErr,
+        } = await supabase.auth.getUser();
+
+        if (userErr) throw userErr;
+        if (!user) {
+          setFatalError("No authenticated user. Please log in again.");
+          setLoading(false);
+          return;
+        }
+
+        if (cancelled) return;
+
+        setUserId(user.id);
+
+        // 2) Get user's active/default org from team_members
+        const { data: member, error: memberErr } = await supabase
+          .from("team_members")
+          .select("org_id, status, is_default")
+          .eq("user_id", user.id)
+          .eq("status", "active")
+          .order("is_default", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (memberErr) throw memberErr;
+        if (!member) {
+          setFatalError(
+            "You do not belong to an active organization. Ask your admin to add you to an org."
+          );
+          setLoading(false);
+          return;
+        }
+
+        if (cancelled) return;
+
+        setOrgId(member.org_id);
+
+        // 3) Load drivers for this org
+        await loadDrivers(member.org_id);
+      } catch (err) {
+        console.error("[Drivers] init error:", err);
+        setFatalError(
+          err?.message ||
+          "Something went wrong while loading drivers. Please try again."
+        );
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    init();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const filtered = useMemo(() => {
-    const q = cleanStr(query).toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) =>
-      cleanStr(JSON.stringify(r)).toLowerCase().includes(q)
-    );
-  }, [rows, query]);
+  /* ====================== LOAD DRIVERS ====================== */
 
-  const onSave = async (idValue, fullDraft) => {
-    try {
-      setSavingId(idValue);
-      const payload = {};
-      // Only include keys that are in knownCols and are not the id column
-      for (const k of Object.keys(fullDraft)) {
-        if (k !== colKeys.idKey && knownCols.includes(k)) payload[k] = fullDraft[k];
+  const loadDrivers = useCallback(
+    async (orgIdParam) => {
+      const oid = orgIdParam || orgId;
+      if (!oid) return;
+
+      try {
+        if (!orgIdParam) setRefreshing(true);
+
+        const { data, error } = await supabase
+          .from("drivers")
+          .select(
+            `
+              id,
+              org_id,
+              first_name,
+              last_name,
+              email,
+              phone,
+              license_number,
+              license_class,
+              license_expiry,
+              med_card_expiry,
+              status,
+              notes,
+              created_by,
+              created_at,
+              updated_at
+            `
+          )
+          .eq("org_id", oid)
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+
+        setDrivers(data || []);
+      } catch (err) {
+        console.error("[Drivers] load error:", err);
+        toast(
+          setToast,
+          "error",
+          err?.message || "Failed to load drivers for this organization."
+        );
+      } finally {
+        if (!orgIdParam) setRefreshing(false);
       }
-      if (Object.keys(payload).length === 0) {
-        toast(setToast, "zinc", "Nothing to update.");
-        return;
-      }
-      const { error } = await supabase
-        .from("drivers")
-        .update(payload)
-        .eq(colKeys.idKey, idValue)
-        .select()
-        .single();
-      if (error) throw error;
-      toast(setToast, "green", "Driver updated.");
-      await fetchDrivers();
-    } catch (e) {
-      console.error("save driver error:", e);
-      toast(setToast, "red", `Update failed: ${e.message}`);
-    } finally {
-      setSavingId(null);
-    }
-  };
+    },
+    [orgId]
+  );
 
-  const onDelete = async (idValue) => {
-    const sure = window.confirm("Delete this driver? This cannot be undone.");
-    if (!sure) return;
-    try {
-      setSavingId(idValue);
-      const { error } = await supabase
-        .from("drivers")
-        .delete()
-        .eq(colKeys.idKey, idValue);
-      if (error) throw error;
-      toast(setToast, "green", "Driver deleted.");
-      setRows((r) => r.filter((x) => x[colKeys.idKey] !== idValue));
-    } catch (e) {
-      console.error("delete driver error:", e);
-      toast(setToast, "red", `Delete failed: ${e.message}`);
-    } finally {
-      setSavingId(null);
-    }
-  };
+  /* ====================== CREATE DRIVER ====================== */
 
-  const onCreate = async () => {
-    const nameKey = colKeys.nameKey;
-    if (!nameKey) {
-      toast(setToast, "red", "No name column found (e.g., full_name or name).");
-      return;
-    }
-    if (isBlank(newDraft[nameKey])) {
-      toast(setToast, "red", "Full name is required.");
-      return;
-    }
+  async function createDriver() {
     try {
       setCreating(true);
-      const payload = {};
-      // Only insert fields that exist
-      for (const k of Object.keys(newDraft)) {
-        if (knownCols.includes(k)) payload[k] = newDraft[k];
+      setFatalError("");
+
+      if (!userId || !orgId) {
+        toast(
+          setToast,
+          "error",
+          "Missing user/org context. Try refreshing the page or logging in again."
+        );
+        return;
       }
+
+      // Validate required fields (match your NOT NULL constraints)
+      if (isBlank(newDraft.last_name)) {
+        toast(setToast, "error", "Last name is required.");
+        return;
+      }
+
+      // Build row that matches RLS expectations:
+      // - org_id = current org
+      // - created_by = auth.uid() (if your policy checks this)
+      const payload = {
+        org_id: orgId,
+        created_by: userId,
+        first_name: cleanStr(newDraft.first_name) || null,
+        last_name: cleanStr(newDraft.last_name),
+        email: cleanStr(newDraft.email) || null,
+        phone: cleanStr(newDraft.phone) || null,
+        license_number: cleanStr(newDraft.license_number) || null,
+        license_class: cleanStr(newDraft.license_class) || null,
+        status: cleanStr(newDraft.status) || "ACTIVE",
+        notes: cleanStr(newDraft.notes) || null,
+      };
+
+      console.log("[Drivers] create payload:", payload);
+
       const { data, error } = await supabase
         .from("drivers")
-        .insert(payload)
-        .select()
+        .insert([payload])
+        .select(
+          `
+            id,
+            org_id,
+            first_name,
+            last_name,
+            email,
+            phone,
+            license_number,
+            license_class,
+            license_expiry,
+            med_card_expiry,
+            status,
+            notes,
+            created_by,
+            created_at,
+            updated_at
+          `
+        )
         .single();
-      if (error) throw error;
-      toast(setToast, "green", "Driver created.");
-      setRows((r) => [...r, data]);
-      setNewDraft(buildEmptyNewDraft(knownCols));
-    } catch (e) {
-      console.error("create driver error:", e);
-      toast(setToast, "red", `Create failed: ${e.message}`);
+
+      if (error) {
+        console.error("[Drivers] create driver error:", error);
+        // If you still hit RLS, you'll see it here with full message.
+        toast(
+          setToast,
+          "error",
+          error.message ||
+            "Create failed. RLS rejected this row. Check org_id/created_by policy."
+        );
+        return;
+      }
+
+      setDrivers((prev) => [data, ...prev]);
+
+      // Reset form
+      setNewDraft({
+        first_name: "",
+        last_name: "",
+        email: "",
+        phone: "",
+        license_number: "",
+        license_class: "",
+        status: "ACTIVE",
+        notes: "",
+      });
+
+      toast(setToast, "success", "Driver created.");
+    } catch (err) {
+      console.error("[Drivers] create driver exception:", err);
+      toast(
+        setToast,
+        "error",
+        err?.message || "Unexpected error while creating driver."
+      );
     } finally {
       setCreating(false);
     }
-  };
+  }
 
-  // Build table columns dynamically (show what exists, in a sensible order)
-  const idHeader = colKeys.idKey ?? "ID";
-  const colsToShow = [
-    { key: colKeys.nameKey, label: "Full Name", required: true },
-    colKeys.phoneKey ? { key: colKeys.phoneKey, label: "Phone" } : null,
-    colKeys.emailKey ? { key: colKeys.emailKey, label: "Email" } : null,
-    colKeys.statusKey ? { key: colKeys.statusKey, label: "Status" } : null,
-    colKeys.truckKey ? { key: colKeys.truckKey, label: "Truck" } : null,
-    colKeys.notesKey ? { key: colKeys.notesKey, label: "Notes" } : null,
-  ].filter(Boolean);
+  /* ======================= UPDATE DRIVER ======================= */
 
-  /* ---------------------- Preferences Drawer --------------------- */
-  const openPrefs = async (row) => {
-    setSelectedDriver(row);
-    // Known columns for prefs rely on table-level cols:
-    setPrefsColsKnown(hasPreferencesCol);
-    // Merge defaults with existing
-    const incoming =
-      row?.preferences && typeof row.preferences === "object"
-        ? row.preferences
-        : {};
-    setPrefsDraft({
-      equipment_types: asArray(incoming.equipment_types),
-      lane_whitelist: asArray(incoming.lane_whitelist),
-      lane_blacklist: asArray(incoming.lane_blacklist),
-      home_days: asArray(incoming.home_days),
-      shift: incoming.shift ?? "either",
-      max_weight_lbs: incoming.max_weight_lbs ?? null,
-      distance_radius_miles: incoming.distance_radius_miles ?? null,
-      avoid_customers: asArray(incoming.avoid_customers),
-      certifications: {
-        twic: Boolean(incoming?.certifications?.twic),
-        tsa: Boolean(incoming?.certifications?.tsa),
-        dod_clearance: Boolean(incoming?.certifications?.dod_clearance),
-      },
-      languages: asArray(incoming.languages),
-      notes: incoming.notes ?? "",
-    });
-    setPrefsOpen(true);
-  };
-
-  const savePrefs = async () => {
-    if (!prefsColsKnown) {
-      toast(
-        setToast,
-        "red",
-        "No preferences column on drivers. Add it first (see banner)."
-      );
-      return;
-    }
-    if (!selectedDriver) return;
+  async function saveEdit(id) {
     try {
-      setPrefsSaving(true);
+      if (!id) return;
+      setSavingId(id);
+
+      const original = drivers.find((d) => d.id === id);
+      if (!original) return;
+
       const payload = {
-        preferences: {
-          ...prefsDraft,
-          equipment_types: asArray(prefsDraft.equipment_types),
-          lane_whitelist: asArray(prefsDraft.lane_whitelist),
-          lane_blacklist: asArray(prefsDraft.lane_blacklist),
-          home_days: asArray(prefsDraft.home_days),
-          languages: asArray(prefsDraft.languages),
-          avoid_customers: asArray(prefsDraft.avoid_customers),
-          shift: prefsDraft.shift ?? "either",
-          max_weight_lbs: prefsDraft.max_weight_lbs ?? null,
-          distance_radius_miles: prefsDraft.distance_radius_miles ?? null,
-          certifications: {
-            twic: Boolean(prefsDraft?.certifications?.twic),
-            tsa: Boolean(prefsDraft?.certifications?.tsa),
-            dod_clearance: Boolean(
-              prefsDraft?.certifications?.dod_clearance
-            ),
-          },
-          notes: prefsDraft.notes ?? "",
-        },
+        first_name:
+          cleanStr(editDraft.first_name ?? original.first_name) || null,
+        last_name:
+          cleanStr(editDraft.last_name ?? original.last_name) || null,
+        email: cleanStr(editDraft.email ?? original.email) || null,
+        phone: cleanStr(editDraft.phone ?? original.phone) || null,
+        license_number:
+          cleanStr(editDraft.license_number ?? original.license_number) ||
+          null,
+        license_class:
+          cleanStr(editDraft.license_class ?? original.license_class) ||
+          null,
+        status: cleanStr(editDraft.status ?? original.status) || "ACTIVE",
+        notes: cleanStr(editDraft.notes ?? original.notes) || null,
       };
 
-      const idKey = colKeys.idKey;
-      const idVal = selectedDriver?.[idKey];
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("drivers")
         .update(payload)
-        .eq(idKey, idVal)
-        .select()
+        .eq("id", id)
+        .eq("org_id", orgId)
+        .select(
+          `
+            id,
+            org_id,
+            first_name,
+            last_name,
+            email,
+            phone,
+            license_number,
+            license_class,
+            license_expiry,
+            med_card_expiry,
+            status,
+            notes,
+            created_by,
+            created_at,
+            updated_at
+          `
+        )
         .single();
-      if (error) throw error;
 
-      toast(setToast, "green", "Preferences saved.");
-      setPrefsOpen(false);
-      setSelectedDriver(null);
-      await fetchDrivers(); // refresh list
-    } catch (e) {
-      console.error("save preferences error:", e);
-      toast(setToast, "red", `Save failed: ${e.message}`);
+      if (error) {
+        console.error("[Drivers] update error:", error);
+        toast(
+          setToast,
+          "error",
+          error.message || "Update failed. Check RLS / required fields."
+        );
+        return;
+      }
+
+      setDrivers((prev) =>
+        prev.map((d) => (d.id === id ? { ...d, ...data } : d))
+      );
+      setEditingId(null);
+      setEditDraft({});
+      toast(setToast, "success", "Driver updated.");
+    } catch (err) {
+      console.error("[Drivers] saveEdit exception:", err);
+      toast(
+        setToast,
+        "error",
+        err?.message || "Unexpected error while saving changes."
+      );
     } finally {
-      setPrefsSaving(false);
+      setSavingId(null);
     }
-  };
+  }
 
-  const PrefsBanner = () =>
-    !prefsColsKnown ? (
-      <div className="mb-3 p-3 rounded-lg border border-amber-700/40 bg-amber-600/10 text-amber-200 flex items-start gap-2">
-        <AlertTriangle className="w-4 h-4 mt-0.5" />
-        <div className="text-xs">
-          <div className="font-medium">Preferences column not found.</div>
-          <div className="opacity-90">
-            Run this once, then reopen this drawer:
-            <pre className="mt-2 p-2 rounded bg-zinc-900/60 border border-zinc-700 text-[11px] overflow-auto">
-              {`alter table public.drivers
-add column if not exists preferences jsonb not null default '{}';`}
-            </pre>
+  function startEdit(row) {
+    setEditingId(row.id);
+    setEditDraft({
+      first_name: row.first_name ?? "",
+      last_name: row.last_name ?? "",
+      email: row.email ?? "",
+      phone: row.phone ?? "",
+      license_number: row.license_number ?? "",
+      license_class: row.license_class ?? "",
+      status: row.status ?? "ACTIVE",
+      notes: row.notes ?? "",
+    });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditDraft({});
+  }
+
+  /* ======================= DELETE DRIVER ======================= */
+
+  async function deleteDriver(id) {
+    if (!id) return;
+    if (!window.confirm("Delete this driver? This cannot be undone.")) return;
+
+    try {
+      setDeletingId(id);
+      const { error } = await supabase
+        .from("drivers")
+        .delete()
+        .eq("id", id)
+        .eq("org_id", orgId);
+
+      if (error) {
+        console.error("[Drivers] delete error:", error);
+        toast(
+          setToast,
+          "error",
+          error.message || "Delete failed. Check RLS / permissions."
+        );
+        return;
+      }
+
+      setDrivers((prev) => prev.filter((d) => d.id !== id));
+      toast(setToast, "success", "Driver deleted.");
+    } catch (err) {
+      console.error("[Drivers] delete exception:", err);
+      toast(
+        setToast,
+        "error",
+        err?.message || "Unexpected error while deleting driver."
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  /* =========================== RENDER =========================== */
+
+  if (loading) {
+    return (
+      <div className="p-6 flex items-center justify-center">
+        <div className="flex items-center gap-3 text-slate-300">
+          <Loader2 className="w-5 h-5 animate-spin" />
+          <span>Loading drivers…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (fatalError) {
+    return (
+      <div className="p-6">
+        <div className="rounded-xl border border-red-500/40 bg-red-500/5 p-4 flex items-start gap-3 text-sm text-red-100">
+          <AlertTriangle className="w-5 h-5 mt-0.5" />
+          <div>
+            <div className="font-semibold mb-1">Cannot load drivers</div>
+            <div>{fatalError}</div>
           </div>
         </div>
       </div>
-    ) : null;
+    );
+  }
 
-  const PrefsInput = ({ label, children, help }) => (
-    <div className="mb-3">
-      <div className="text-xs text-zinc-300 mb-1">{label}</div>
-      {children}
-      {help && (
-        <div className="text-[11px] text-zinc-400 mt-1">{help}</div>
-      )}
-    </div>
-  );
-
-  const PrefsText = (props) => (
-    <input
-      {...props}
-      className={cx(
-        "w-full px-2 py-2 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm",
-        props.className
-      )}
-    />
-  );
-
-  const PrefsArea = (props) => (
-    <textarea
-      {...props}
-      rows={4}
-      className={cx(
-        "w-full px-2 py-2 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm",
-        props.className
-      )}
-    />
-  );
-
-  /* --------------------------- render ---------------------------- */
   return (
-    <div className="p-6">
-      <Toast {...(toastState || {})} />
-
+    <div className="p-6 space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-zinc-100">Drivers</h1>
-          <p className="text-zinc-400 text-sm">
-            Manage, edit, and create drivers.
+          <h1 className="text-lg font-semibold text-slate-100">
+            Drivers
+          </h1>
+          <p className="text-xs text-slate-400">
+            Org-scoped list of drivers. All actions respect Row Level
+            Security.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex items-center gap-3">
           <button
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-zinc-700 hover:bg-zinc-800"
-            onClick={fetchDrivers}
-            title="Refresh"
+            onClick={() => loadDrivers()}
+            disabled={refreshing}
+            className={cx(
+              "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium",
+              "border-slate-700 bg-slate-900/60 hover:bg-slate-800/80",
+              refreshing && "opacity-70 cursor-not-allowed"
+            )}
           >
-            <RefreshCw className="w-4 h-4" />
-            Refresh
+            <RefreshCw
+              className={cx(
+                "w-3.5 h-3.5",
+                refreshing && "animate-spin"
+              )}
+            />
+            <span>Refresh</span>
+          </button>
+
+          <button
+            onClick={createDriver}
+            disabled={creating || !orgId}
+            className={cx(
+              "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium",
+              "border-emerald-500/50 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20",
+              (creating || !orgId) && "opacity-60 cursor-not-allowed"
+            )}
+          >
+            {creating ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Plus className="w-3.5 h-3.5" />
+            )}
+            <span>New driver</span>
           </button>
         </div>
       </div>
 
-      {/* Toolbar */}
-      <div className="flex flex-col lg:flex-row gap-3 mb-5">
-        {/* Search */}
-        <div className="flex-1">
-          <div className="relative">
-            <SearchIcon className="w-4 h-4 absolute left-2 top-2.5 text-zinc-400" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search anything…"
-              className="w-full pl-8 pr-3 py-2 rounded-lg bg-zinc-900/50 border border-zinc-700 text-sm"
-            />
-          </div>
-        </div>
+      {/* New driver quick form */}
+      <div className="rounded-xl border border-slate-700/80 bg-slate-950/60 p-3 flex flex-wrap gap-2 items-center text-xs">
+        <span className="text-slate-400 mr-2">New driver:</span>
+        <input
+          className="min-w-[120px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+          placeholder="First name"
+          value={newDraft.first_name}
+          onChange={(e) =>
+            setNewDraft((d) => ({ ...d, first_name: e.target.value }))
+          }
+        />
+        <input
+          className="min-w-[120px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+          placeholder="Last name (required)"
+          value={newDraft.last_name}
+          onChange={(e) =>
+            setNewDraft((d) => ({ ...d, last_name: e.target.value }))
+          }
+        />
+        <input
+          className="min-w-[160px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+          placeholder="Email"
+          value={newDraft.email}
+          onChange={(e) =>
+            setNewDraft((d) => ({ ...d, email: e.target.value }))
+          }
+        />
+        <input
+          className="min-w-[120px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+          placeholder="Phone"
+          value={newDraft.phone}
+          onChange={(e) =>
+            setNewDraft((d) => ({ ...d, phone: e.target.value }))
+          }
+        />
+        <input
+          className="min-w-[120px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+          placeholder="License #"
+          value={newDraft.license_number}
+          onChange={(e) =>
+            setNewDraft((d) => ({
+              ...d,
+              license_number: e.target.value,
+            }))
+          }
+        />
+        <input
+          className="min-w-[80px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+          placeholder="Class"
+          value={newDraft.license_class}
+          onChange={(e) =>
+            setNewDraft((d) => ({
+              ...d,
+              license_class: e.target.value,
+            }))
+          }
+        />
+      </div>
 
-        {/* Quick-create block (built from existing columns) */}
-        <div className="w-full lg:w-[640px] border border-zinc-700 rounded-lg p-3 bg-zinc-900/40">
-          <div className="text-xs text-zinc-400 mb-2">Quick add</div>
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
-            {colKeys.nameKey && (
-              <input
-                className="px-2 py-1 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm"
-                placeholder="Full name *"
-                value={newDraft[colKeys.nameKey] ?? ""}
-                onChange={(e) =>
-                  setNewDraft((d) => ({
-                    ...d,
-                    [colKeys.nameKey]: e.target.value,
-                  }))
-                }
-              />
-            )}
-            {colKeys.phoneKey && (
-              <input
-                className="px-2 py-1 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm"
-                placeholder="Phone"
-                value={newDraft[colKeys.phoneKey] ?? ""}
-                onChange={(e) =>
-                  setNewDraft((d) => ({
-                    ...d,
-                    [colKeys.phoneKey]: e.target.value,
-                  }))
-                }
-              />
-            )}
-            {colKeys.emailKey && (
-              <input
-                className="px-2 py-1 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm"
-                placeholder="Email"
-                value={newDraft[colKeys.emailKey] ?? ""}
-                onChange={(e) =>
-                  setNewDraft((d) => ({
-                    ...d,
-                    [colKeys.emailKey]: e.target.value,
-                  }))
-                }
-              />
-            )}
-            {colKeys.statusKey && (
-              <input
-                className="px-2 py-1 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm"
-                placeholder="Status (e.g., available/on_load)"
-                value={newDraft[colKeys.statusKey] ?? ""}
-                onChange={(e) =>
-                  setNewDraft((d) => ({
-                    ...d,
-                    [colKeys.statusKey]: e.target.value,
-                  }))
-                }
-              />
-            )}
-            {colKeys.truckKey && (
-              <input
-                className="px-2 py-1 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm"
-                placeholder="Truck"
-                value={newDraft[colKeys.truckKey] ?? ""}
-                onChange={(e) =>
-                  setNewDraft((d) => ({
-                    ...d,
-                    [colKeys.truckKey]: e.target.value,
-                  }))
-                }
-              />
-            )}
-            {colKeys.notesKey && (
-              <input
-                className="px-2 py-1 rounded-md bg-zinc-900/60 border border-zinc-700 text-sm md:col-span-2"
-                placeholder="Notes"
-                value={newDraft[colKeys.notesKey] ?? ""}
-                onChange={(e) =>
-                  setNewDraft((d) => ({
-                    ...d,
-                    [colKeys.notesKey]: e.target.value,
-                  }))
-                }
-              />
-            )}
-          </div>
-          <div className="flex items-center justify-end mt-2">
-            <button
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-emerald-700 bg-emerald-600/20 hover:bg-emerald-600/30"
-              onClick={onCreate}
-              disabled={creating || !colKeys.nameKey}
-            >
-              {creating ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Plus className="w-4 h-4" />
-              )}
-              Add Driver
-            </button>
-          </div>
+      {/* Search */}
+      <div className="flex items-center gap-2">
+        <div className="relative w-full max-w-xs">
+          <SearchIcon className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+          <input
+            className="w-full rounded-lg border border-slate-700 bg-slate-950/70 pl-7 pr-3 py-1.5 text-xs text-slate-100 placeholder-slate-500"
+            placeholder="Search drivers…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
+        <span className="text-[11px] text-slate-500">
+          {visibleDrivers.length} of {drivers.length} drivers
+        </span>
       </div>
 
       {/* Table */}
-      <div className="rounded-xl border border-zinc-800 overflow-hidden">
-        <table className="min-w-full text-sm">
-          <thead className="bg-zinc-900/60 border-b border-zinc-800 text-zinc-300">
-            <tr>
-              <th className="text-left px-3 py-2 font-medium">
-                {idHeader.toUpperCase()}
-              </th>
-              {colsToShow.map((c) => (
-                <th
-                  key={c.key}
-                  className="text-left px-3 py-2 font-medium"
-                >
-                  {c.label}
-                </th>
-              ))}
-              <th className="text-center px-3 py-2 font-medium">Actions</th>
+      <div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/70">
+        <table className="min-w-full text-xs">
+          <thead className="bg-slate-950/90 border-b border-slate-800/80">
+            <tr className="text-[11px] text-slate-400">
+              <th className="px-3 py-2 text-left">Name</th>
+              <th className="px-3 py-2 text-left">Email</th>
+              <th className="px-3 py-2 text-left">Phone</th>
+              <th className="px-3 py-2 text-left">License</th>
+              <th className="px-3 py-2 text-left">Status</th>
+              <th className="px-3 py-2 text-left w-12"></th>
             </tr>
           </thead>
-
-          <tbody className="divide-y divide-zinc-800">
-            {loading ? (
+          <tbody>
+            {visibleDrivers.length === 0 ? (
               <tr>
                 <td
-                  colSpan={1 + colsToShow.length + 1}
-                  className="px-3 py-8 text-center text-zinc-400"
-                >
-                  <Loader2 className="w-5 h-5 animate-spin inline-block mr-2" />
-                  Loading drivers…
-                </td>
-              </tr>
-            ) : filtered.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={1 + colsToShow.length + 1}
-                  className="px-3 py-10 text-center text-zinc-400"
+                  colSpan={6}
+                  className="px-3 py-4 text-center text-slate-500"
                 >
                   No drivers found.
                 </td>
               </tr>
             ) : (
-              filtered.map((row) => (
-                <DriverRow
-                  key={row[colKeys.idKey]}
-                  row={row}
-                  onSave={onSave}
-                  onDelete={onDelete}
-                  onOpenPrefs={openPrefs}
-                  savingId={savingId}
-                  setToast={setToast}
-                  colKeys={colKeys}
-                />
-              ))
+              visibleDrivers.map((row) => {
+                const isEditing = editingId === row.id;
+                return (
+                  <tr
+                    key={row.id}
+                    className="border-t border-slate-800/80 hover:bg-slate-900/40"
+                  >
+                    {/* NAME */}
+                    <td className="px-3 py-1.5">
+                      {isEditing ? (
+                        <div className="flex gap-1">
+                          <input
+                            className="w-24 rounded-md border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[11px] text-slate-100"
+                            value={editDraft.first_name}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({
+                                ...d,
+                                first_name: e.target.value,
+                              }))
+                            }
+                          />
+                          <input
+                            className="w-28 rounded-md border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[11px] text-slate-100"
+                            value={editDraft.last_name}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({
+                                ...d,
+                                last_name: e.target.value,
+                              }))
+                            }
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex flex-col">
+                          <span className="text-slate-100">
+                            {row.first_name} {row.last_name}
+                          </span>
+                          <span className="text-[10px] text-slate-500">
+                            ID: {row.id?.slice(0, 8)}
+                          </span>
+                        </div>
+                      )}
+                    </td>
+
+                    {/* EMAIL */}
+                    <td className="px-3 py-1.5">
+                      {isEditing ? (
+                        <input
+                          className="w-full max-w-[190px] rounded-md border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[11px] text-slate-100"
+                          value={editDraft.email}
+                          onChange={(e) =>
+                            setEditDraft((d) => ({
+                              ...d,
+                              email: e.target.value,
+                            }))
+                          }
+                        />
+                      ) : (
+                        <span className="text-slate-200">
+                          {row.email || "—"}
+                        </span>
+                      )}
+                    </td>
+
+                    {/* PHONE */}
+                    <td className="px-3 py-1.5">
+                      {isEditing ? (
+                        <input
+                          className="w-full max-w-[140px] rounded-md border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[11px] text-slate-100"
+                          value={editDraft.phone}
+                          onChange={(e) =>
+                            setEditDraft((d) => ({
+                              ...d,
+                              phone: e.target.value,
+                            }))
+                          }
+                        />
+                      ) : (
+                        <span className="text-slate-200">
+                          {row.phone || "—"}
+                        </span>
+                      )}
+                    </td>
+
+                    {/* LICENSE */}
+                    <td className="px-3 py-1.5">
+                      {isEditing ? (
+                        <div className="flex gap-1">
+                          <input
+                            className="w-24 rounded-md border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[11px] text-slate-100"
+                            placeholder="#"
+                            value={editDraft.license_number}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({
+                                ...d,
+                                license_number: e.target.value,
+                              }))
+                            }
+                          />
+                          <input
+                            className="w-14 rounded-md border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[11px] text-slate-100"
+                            placeholder="Class"
+                            value={editDraft.license_class}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({
+                                ...d,
+                                license_class: e.target.value,
+                              }))
+                            }
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex flex-col">
+                          <span className="text-slate-200">
+                            {row.license_number || "—"}
+                          </span>
+                          <span className="text-[10px] text-slate-500">
+                            {row.license_class || ""}
+                          </span>
+                        </div>
+                      )}
+                    </td>
+
+                    {/* STATUS */}
+                    <td className="px-3 py-1.5">
+                      {isEditing ? (
+                        <input
+                          className="w-20 rounded-md border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[11px] text-slate-100"
+                          value={editDraft.status}
+                          onChange={(e) =>
+                            setEditDraft((d) => ({
+                              ...d,
+                              status: e.target.value,
+                            }))
+                          }
+                        />
+                      ) : (
+                        <span
+                          className={cx(
+                            "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium",
+                            row.status === "ACTIVE"
+                              ? "bg-emerald-500/10 text-emerald-200 border border-emerald-500/40"
+                              : "bg-slate-700/40 text-slate-200 border border-slate-500/40"
+                          )}
+                        >
+                          {row.status || "—"}
+                        </span>
+                      )}
+                    </td>
+
+                    {/* ACTIONS */}
+                    <td className="px-3 py-1.5 text-right">
+                      {isEditing ? (
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => saveEdit(row.id)}
+                            disabled={savingId === row.id}
+                            className={cx(
+                              "inline-flex items-center justify-center rounded-md border px-1.5 py-0.5",
+                              "border-emerald-500/60 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20",
+                              savingId === row.id &&
+                                "opacity-60 cursor-not-allowed"
+                            )}
+                          >
+                            {savingId === row.id ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Check className="w-3 h-3" />
+                            )}
+                          </button>
+                          <button
+                            onClick={cancelEdit}
+                            className="inline-flex items-center justify-center rounded-md border border-slate-600 bg-slate-900/80 px-1.5 py-0.5 text-slate-200 hover:bg-slate-800"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => startEdit(row)}
+                            className="inline-flex items-center justify-center rounded-md border border-slate-600 bg-slate-900/80 px-1.5 py-0.5 text-slate-200 hover:bg-slate-800"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => deleteDriver(row.id)}
+                            disabled={deletingId === row.id}
+                            className={cx(
+                              "inline-flex items-center justify-center rounded-md border px-1.5 py-0.5",
+                              "border-red-500/60 bg-red-500/10 text-red-100 hover:bg-red-500/20",
+                              deletingId === row.id &&
+                                "opacity-60 cursor-not-allowed"
+                            )}
+                          >
+                            {deletingId === row.id ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-3 h-3" />
+                            )}
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
       </div>
 
-      {/* Preferences Drawer */}
-      {prefsOpen && (
-        <>
+      {/* Toast */}
+      {toastState && (
+        <div className="fixed bottom-4 right-4 z-40">
           <div
-            className="fixed inset-0 bg-black/50 z-40"
-            onClick={() => setPrefsOpen(false)}
-          />
-          <div className="fixed inset-y-0 right-0 w-full sm:max-w-xl bg-zinc-950 border-l border-zinc-800 z-50 shadow-2xl flex flex-col">
-            <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
-              <div>
-                <div className="text-zinc-100 font-semibold text-lg">
-                  Driver Preferences
-                </div>
-                <div className="text-zinc-400 text-xs">
-                  {selectedDriver?.[colKeys.nameKey] || "Driver"} · ID{" "}
-                  {String(selectedDriver?.[colKeys.idKey]).slice(0, 8)}
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-zinc-700 hover:bg-zinc-800"
-                  onClick={() => setPrefsOpen(false)}
-                >
-                  Close
-                </button>
-                <button
-                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-emerald-700 bg-emerald-600/20 hover:bg-emerald-600/30"
-                  onClick={savePrefs}
-                  disabled={prefsSaving || !prefsColsKnown}
-                  title={
-                    !prefsColsKnown
-                      ? "Add preferences column first"
-                      : "Save preferences"
-                  }
-                >
-                  {prefsSaving ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Save className="w-4 h-4" />
-                  )}
-                  Save
-                </button>
-              </div>
-            </div>
-
-            <div className="p-4 overflow-y-auto">
-              <PrefsBanner />
-
-              <div className="grid grid-cols-1 gap-3">
-                <PrefsInput
-                  label="Equipment types"
-                  help="Comma-separated (e.g., dry van, flatbed, stepdeck, rgn, reefer)"
-                >
-                  <PrefsText
-                    placeholder="dry van, flatbed, stepdeck…"
-                    value={asString(prefsDraft.equipment_types)}
-                    onChange={(e) =>
-                      handlePrefsArrayChange(
-                        "equipment_types",
-                        e.target.value
-                      )
-                    }
-                  />
-                </PrefsInput>
-
-                <PrefsInput
-                  label="Preferred lanes"
-                  help="Comma-separated. Free text or City, ST → City, ST"
-                >
-                  <PrefsText
-                    placeholder="Sacramento, CA → Phoenix, AZ"
-                    value={asString(prefsDraft.lane_whitelist)}
-                    onChange={(e) =>
-                      handlePrefsArrayChange(
-                        "lane_whitelist",
-                        e.target.value
-                      )
-                    }
-                  />
-                </PrefsInput>
-
-                <PrefsInput
-                  label="Avoid lanes/regions"
-                  help="Comma-separated"
-                >
-                  <PrefsText
-                    placeholder="Portland, OR, NYC metro"
-                    value={asString(prefsDraft.lane_blacklist)}
-                    onChange={(e) =>
-                      handlePrefsArrayChange(
-                        "lane_blacklist",
-                        e.target.value
-                      )
-                    }
-                  />
-                </PrefsInput>
-
-                <PrefsInput
-                  label="Home days"
-                  help="Comma-separated: Mon, Tue, Wed, Thu, Fri, Sat, Sun"
-                >
-                  <PrefsText
-                    placeholder="Fri, Sat"
-                    value={asString(prefsDraft.home_days)}
-                    onChange={(e) =>
-                      handlePrefsArrayChange("home_days", e.target.value)
-                    }
-                  />
-                </PrefsInput>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <PrefsInput label="Max weight (lbs)">
-                    <PrefsText
-                      inputMode="numeric"
-                      placeholder="e.g., 45000"
-                      value={prefsDraft.max_weight_lbs ?? ""}
-                      onChange={(e) =>
-                        handlePrefsNumberChange(
-                          "max_weight_lbs",
-                          e.target.value
-                        )
-                      }
-                    />
-                  </PrefsInput>
-                  <PrefsInput
-                    label="Home radius (miles)"
-                    help="Preferred dispatch radius around home base"
-                  >
-                    <PrefsText
-                      inputMode="numeric"
-                      placeholder="e.g., 100"
-                      value={prefsDraft.distance_radius_miles ?? ""}
-                      onChange={(e) =>
-                        handlePrefsNumberChange(
-                          "distance_radius_miles",
-                          e.target.value
-                        )
-                      }
-                    />
-                  </PrefsInput>
-                </div>
-
-                <PrefsInput
-                  label="Avoid customers"
-                  help="Comma-separated customer names"
-                >
-                  <PrefsText
-                    placeholder="Shipper A, Consignee B"
-                    value={asString(prefsDraft.avoid_customers)}
-                    onChange={(e) =>
-                      handlePrefsArrayChange(
-                        "avoid_customers",
-                        e.target.value
-                      )
-                    }
-                  />
-                </PrefsInput>
-
-                <div className="grid grid-cols-3 gap-2">
-                  <label className="inline-flex items-center gap-2 text-sm text-zinc-200">
-                    <input
-                      type="checkbox"
-                      checked={!!prefsDraft?.certifications?.twic}
-                      onChange={(e) =>
-                        handlePrefsCertChange("twic", e.target.checked)
-                      }
-                    />
-                    TWIC
-                  </label>
-                  <label className="inline-flex items-center gap-2 text-sm text-zinc-200">
-                    <input
-                      type="checkbox"
-                      checked={!!prefsDraft?.certifications?.tsa}
-                      onChange={(e) =>
-                        handlePrefsCertChange("tsa", e.target.checked)
-                      }
-                    />
-                    TSA
-                  </label>
-                  <label className="inline-flex items-center gap-2 text-sm text-zinc-200">
-                    <input
-                      type="checkbox"
-                      checked={!!prefsDraft?.certifications?.dod_clearance}
-                      onChange={(e) =>
-                        handlePrefsCertChange(
-                          "dod_clearance",
-                          e.target.checked
-                        )
-                      }
-                    />
-                    DOD Clearance
-                  </label>
-                </div>
-
-                <PrefsInput
-                  label="Languages"
-                  help="Comma-separated. Example: English, Russian, Ukrainian"
-                >
-                  <PrefsText
-                    placeholder="English, Russian, Ukrainian"
-                    value={asString(prefsDraft.languages)}
-                    onChange={(e) =>
-                      handlePrefsArrayChange("languages", e.target.value)
-                    }
-                  />
-                </PrefsInput>
-
-                <PrefsInput label="Notes">
-                  <PrefsArea
-                    placeholder="Any extra constraints or preferences…"
-                    value={prefsDraft.notes ?? ""}
-                    onChange={(e) =>
-                      handlePrefsTextChange("notes", e.target.value)
-                    }
-                  />
-                </PrefsInput>
-              </div>
-            </div>
+            className={cx(
+              "rounded-lg px-3 py-2 text-xs shadow-lg border backdrop-blur bg-slate-950/90",
+              toastState.tone === "error"
+                ? "border-red-500/60 text-red-100"
+                : "border-emerald-500/60 text-emerald-100"
+            )}
+          >
+            {toastState.msg}
           </div>
-        </>
+        </div>
       )}
     </div>
   );

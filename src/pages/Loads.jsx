@@ -36,7 +36,7 @@ import AutoAssignDriverButtonCompact from "../components/AutoAssignDriverButtonC
 import PredictBestDriversButtonCompact from "../components/PredictBestDriversButtonCompact";
 import LearnedSuggestions from "../components/LearnedSuggestions.jsx";
 import AiRecommendationsForLoad from "../components/AiRecommendationsForLoad.jsx";
-import RCUploader from '../components/RCUploader';
+import RCUploader from "../components/RCUploader";
 
 /** MUST match DB enum/check */
 const STATUS_CHOICES = [
@@ -220,30 +220,26 @@ export default function Loads() {
   }
 
   // Filtering
-const visibleRows = useMemo(() => {
-  let rows = loads;
+  const visibleRows = useMemo(() => {
+    let rows = loads;
 
-  // 🔐 HARD SAFETY NET:
-  // Only show loads that belong to the logged-in user.
-  // Even if the backend accidentally returns more rows,
-  // the UI will only render rows for me.id.
-  if (me?.id) {
-    rows = rows.filter((r) => r.created_by === me.id);
-  }
+    // NOTE:
+    // We now rely on database RLS to enforce org isolation.
+    // The backend only returns loads for orgs the user is a member of.
+    // So we do NOT filter by created_by here anymore, so that
+    // teammates in the same org can see each other's loads.
 
-  if (priorityFilter !== "ALL") {
-    rows = rows.filter(
-      (r) =>
-        r.status === "PROBLEM" &&
-        (r.problem_priority || "") === priorityFilter
-    );
-  } else if (showProblemsOnly) {
-    rows = rows.filter((r) => r.status === "PROBLEM");
-  }
+    if (priorityFilter !== "ALL") {
+      rows = rows.filter(
+        (r) =>
+          r.status === "PROBLEM" && (r.problem_priority || "") === priorityFilter
+      );
+    } else if (showProblemsOnly) {
+      rows = rows.filter((r) => r.status === "PROBLEM");
+    }
 
-  return rows;
-}, [loads, showProblemsOnly, priorityFilter, me?.id]);
-
+    return rows;
+  }, [loads, showProblemsOnly, priorityFilter]);
 
   /* --------------------------- CRUD helpers --------------------------- */
   async function deleteLoad(id) {
@@ -441,8 +437,8 @@ const visibleRows = useMemo(() => {
   return (
     <div className="p-3 sm:p-6 space-y-4 sm:space-y-6 max-w-full overflow-x-hidden">
       <div className="text-xs text-white/40 mb-2">
-  Signed in as: {me.email || "unknown"}
-</div>
+        Signed in as: {me.email || "unknown"}
+      </div>
 
       {/* AI dispatch input */}
       <AiRecommendationsForLoad
@@ -453,14 +449,14 @@ const visibleRows = useMemo(() => {
         destState={assigningDriverLoad?.dest_state}
       />
       <div className="mb-6">
-      <h2 className="text-xl font-bold mb-4">Quick Load Creation</h2>
-      <RCUploader onLoadCreated={(data) => {
-      console.log('Load data ready:', data);
-    // We'll implement actual load creation in next phase
-    }} />
-    </div>
-
-
+        <h2 className="text-xl font-bold mb-4">Quick Load Creation</h2>
+        <RCUploader
+          onLoadCreated={(data) => {
+            console.log("Load data ready:", data);
+            // We'll implement actual load creation in next phase
+          }}
+        />
+      </div>
 
       {/* Learned AI lane memory suggestions (shows only when a load is selected for assigning) */}
       {loadIdForAI && <LearnedSuggestions loadId={loadIdForAI} />}
