@@ -7,15 +7,15 @@
 // - "Train AI" button that runs backfill + retrain RPCs
 // - "Load Documents" buttons (Upload/Refresh/Open/Delete)
 // - "Best-Fit → View" opens the top driver's detail page
+// - NEW: "Send Instructions" modal to text/email load info to drivers / O/O via Twilio (SMS) + Resend (Email)
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { ArrowLeft, RefreshCw, Trash2, Upload, Eye, PlayCircle } from "lucide-react";
+import { ArrowLeft, RefreshCw, Trash2, Upload, Eye, PlayCircle, Send } from "lucide-react";
 import useBestDrivers from "../hooks/useBestDrivers";
 import AIThumbs from "../components/AIThumbs.jsx";
 import AiRecommendationsForLoad from "../components/AiRecommendationsForLoad.jsx";
-
 
 /* ------------------------- config ------------------------- */
 const DOC_BUCKET = "load_docs";
@@ -160,7 +160,14 @@ export default function LoadDetails() {
 
   /* ----------------- Map your fields ------------------ */
   const status = firstKey(load, ["status"]) ?? "ACTIVE";
-  const reference = firstKey(load, ["ref_no", "reference_no", "ref", "load_ref", "customer_ref", "customer_ref_no"]);
+  const reference = firstKey(load, [
+    "ref_no",
+    "reference_no",
+    "ref",
+    "load_ref",
+    "customer_ref",
+    "customer_ref_no",
+  ]);
   const equipment = firstKey(load, ["equipment_type", "equipment", "equip", "equip_type"]);
 
   const puCity = firstKey(load, ["origin_city", "pickup_city", "pu_city", "origin"]);
@@ -181,6 +188,16 @@ export default function LoadDetails() {
 
   const miles = firstKey(load, ["miles", "distance", "est_miles"]);
   const totalRate = firstKey(load, ["total_rate", "rate", "amount"]);
+
+  const bolNumber = firstKey(load, ["bol_number", "bol_no", "bol"]);
+  const loadNumber = firstKey(load, ["load_number", "load_no", "tms_load_id"]);
+
+  // Assigned driver (for autofill phone)
+  const assignedDriverId = useMemo(() => {
+    if (!load) return null;
+    const v = firstKey(load, ["assigned_driver_id", "driver_id"]);
+    return v || null;
+  }, [load]);
 
   // Build laneKey EXACTLY like your Customers page expects.
   const laneKey = useMemo(() => {
@@ -246,12 +263,16 @@ export default function LoadDetails() {
     fetchFallbackDrivers();
   }, [laneKey, bestDrivers, fetchFallbackDrivers]);
 
-  // Fetch driver names/phones for display
+  // Fetch driver names/phones for display (includes assigned driver if present)
   const allShownDriverIds = useMemo(() => {
+    const ids = [];
+    if (assignedDriverId) ids.push(assignedDriverId);
     const laneIds = (bestDrivers || []).map((r) => r.driver_id).filter(Boolean);
     const fbIds = (fallbackDrivers || []).map((r) => r.driver_id).filter(Boolean);
-    return Array.from(new Set([...laneIds, ...fbIds]));
-  }, [bestDrivers, fallbackDrivers]);
+    for (const v of laneIds) ids.push(v);
+    for (const v of fbIds) ids.push(v);
+    return Array.from(new Set(ids));
+  }, [assignedDriverId, bestDrivers, fallbackDrivers]);
 
   useEffect(() => {
     const missing = allShownDriverIds.filter((did) => !driverMeta[did]);
@@ -273,6 +294,11 @@ export default function LoadDetails() {
     })();
   }, [allShownDriverIds, driverMeta]);
 
+  const assignedDriverPhone =
+    assignedDriverId && driverMeta[assignedDriverId]?.phone
+      ? driverMeta[assignedDriverId].phone
+      : "";
+
   // Helper: try a list of RPC names until one succeeds (for backfill only)
   const callAnyRpc = useCallback(async (candidates, args = {}) => {
     let lastErr;
@@ -290,34 +316,42 @@ export default function LoadDetails() {
 
   // Train AI: backfill then retrain (with your real retrain func)
   const [training, setTraining] = useState(false);
-  const trainAI = useCallback(async () => {
-    setTraining(true);
-    try {
-      // 1) Backfill (optional)
-      const backfill = await callAnyRpc(
-        ["rpc_ai_backfill_examples_from_raw", "ai_backfill_examples_from_raw", "rpc_ai_backfill", "ai_backfill"],
-        { lane_key: laneKey ?? null }
-      );
-      if (!backfill.ok && backfill.error) {
-        console.warn("Backfill RPC not available:", backfill.error?.message || backfill.error);
+  const trainAI = useCallback(
+    async () => {
+      setTraining(true);
+      try {
+        // 1) Backfill (optional)
+        const backfill = await callAnyRpc(
+          [
+            "rpc_ai_backfill_examples_from_raw",
+            "ai_backfill_examples_from_raw",
+            "rpc_ai_backfill",
+            "ai_backfill",
+          ],
+          { lane_key: laneKey ?? null }
+        );
+        if (!backfill.ok && backfill.error) {
+          console.warn("Backfill RPC not available:", backfill.error?.message || backfill.error);
+        }
+
+        // 2) Retrain using your actual function rpc_ai_retrain_model('v1')
+        const { error: retrainErr } = await supabase.rpc("rpc_ai_retrain_model", {
+          p_model_version: "v1",
+        });
+        if (retrainErr) throw retrainErr;
+
+        show("AI retrained successfully.");
+        await refetchAI();
+        await fetchFallbackDrivers();
+      } catch (err) {
+        console.error(err);
+        show(`Train failed: ${err.message}`, "err");
+      } finally {
+        setTraining(false);
       }
-
-      // 2) Retrain using your actual function rpc_ai_retrain_model('v1')
-      const { error: retrainErr } = await supabase.rpc("rpc_ai_retrain_model", {
-        p_model_version: "v1",
-      });
-      if (retrainErr) throw retrainErr;
-
-      show("AI retrained successfully.");
-      await refetchAI();
-      await fetchFallbackDrivers();
-    } catch (err) {
-      console.error(err);
-      show(`Train failed: ${err.message}`, "err");
-    } finally {
-      setTraining(false);
-    }
-  }, [laneKey, callAnyRpc, show, refetchAI, fetchFallbackDrivers]);
+    },
+    [laneKey, callAnyRpc, show, refetchAI, fetchFallbackDrivers]
+  );
 
   // Assign handler (no more status changes, to avoid loads_status_check)
   const assignDriver = useCallback(
@@ -405,124 +439,307 @@ export default function LoadDetails() {
     fileInputRef.current?.click();
   }, []);
 
-  const onChooseFile = useCallback(async (e) => {
-    if (!id) return;
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setDocsBusy(true);
-    try {
-      const path = `${id}/${file.name}`;
-      const { error } = await supabase.storage.from(DOC_BUCKET).upload(path, file, { upsert: true });
-      if (error) throw error;
-      show("Upload complete.");
-      await listDocs();
-    } catch (err) {
-      console.error(err);
-      show(`Upload failed: ${err.message}`, "err");
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      setDocsBusy(false);
-    }
-  }, [id, show, listDocs]);
-
-  const handleOpen = useCallback(async () => {
-    console.log("handleOpen called, selectedDoc:", selectedDoc);
-    if (!selectedDoc) {
-      show("Select a document first.", "info");
-      return;
-    }
-    try {
-      const { data, error } = await supabase.storage.from(DOC_BUCKET).createSignedUrl(selectedDoc.path, 60);
-      if (error) throw error;
-      if (data?.signedUrl) {
-        window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  const onChooseFile = useCallback(
+    async (e) => {
+      if (!id) return;
+      const file = e.target.files?.[0];
+      if (!file) return;
+      setDocsBusy(true);
+      try {
+        const path = `${id}/${file.name}`;
+        const { error } = await supabase.storage.from(DOC_BUCKET).upload(path, file, { upsert: true });
+        if (error) throw error;
+        show("Upload complete.");
+        await listDocs();
+      } catch (err) {
+        console.error(err);
+        show(`Upload failed: ${err.message}`, "err");
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        setDocsBusy(false);
       }
-    } catch (err) {
-      console.error(err);
-      show(`Open failed: ${err.message}`, "err");
-    }
-  }, [selectedDoc, show]);
+    },
+    [id, show, listDocs]
+  );
 
-  const handleDelete = useCallback(async () => {
-    console.log("handleDelete called, selectedDoc:", selectedDoc);
-    if (!selectedDoc) {
-      show("Select a document first.", "info");
-      return;
-    }
-    setDocsBusy(true);
-    try {
-      const { error } = await supabase.storage.from(DOC_BUCKET).remove([selectedDoc.path]);
-      if (error) throw error;
-      show("Deleted.");
-      setSelectedDoc(null);
-      await listDocs();
-    } catch (err) {
-      console.error(err);
-      show(`Delete failed: ${err.message}`, "err");
-    } finally {
-      setDocsBusy(false);
-    }
-  }, [selectedDoc, show, listDocs]);
+  const handleOpen = useCallback(
+    async () => {
+      console.log("handleOpen called, selectedDoc:", selectedDoc);
+      if (!selectedDoc) {
+        show("Select a document first.", "info");
+        return;
+      }
+      try {
+        const { data, error } = await supabase.storage
+          .from(DOC_BUCKET)
+          .createSignedUrl(selectedDoc.path, 60);
+        if (error) throw error;
+        if (data?.signedUrl) {
+          window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+        }
+      } catch (err) {
+        console.error(err);
+        show(`Open failed: ${err.message}`, "err");
+      }
+    },
+    [selectedDoc, show]
+  );
+
+  const handleDelete = useCallback(
+    async () => {
+      console.log("handleDelete called, selectedDoc:", selectedDoc);
+      if (!selectedDoc) {
+        show("Select a document first.", "info");
+        return;
+      }
+      setDocsBusy(true);
+      try {
+        const { error } = await supabase.storage.from(DOC_BUCKET).remove([selectedDoc.path]);
+        if (error) throw error;
+        show("Deleted.");
+        setSelectedDoc(null);
+        await listDocs();
+      } catch (err) {
+        console.error(err);
+        show(`Delete failed: ${err.message}`, "err");
+      } finally {
+        setDocsBusy(false);
+      }
+    },
+    [selectedDoc, show, listDocs]
+  );
 
   // Extraction state
   const [extracting, setExtracting] = useState(false);
   const [extractionResult, setExtractionResult] = useState(null);
   const [showExtractionModal, setShowExtractionModal] = useState(false);
 
-  const handleExtract = useCallback(async () => {
-    console.log("handleExtract called, selectedDoc:", selectedDoc);
-    if (!selectedDoc) {
-      show("Select a document first.", "info");
-      return;
-    }
-    
-    setExtracting(true);
-    try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || supabase.supabaseUrl;
-      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || supabase.supabaseKey;
-      
-      const response = await fetch(`${supabaseUrl}/functions/v1/extract-document`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${anonKey}`,
-        },
-        body: JSON.stringify({
-          filePath: selectedDoc.path,
-          loadId: id,
-          extractionType: "auto",
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Extraction failed");
+  const handleExtract = useCallback(
+    async () => {
+      console.log("handleExtract called, selectedDoc:", selectedDoc);
+      if (!selectedDoc) {
+        show("Select a document first.", "info");
+        return;
       }
 
-      const result = await response.json();
-      
-      if (result.success) {
-        setExtractionResult(result.data);
-        setShowExtractionModal(true);
-        show(`Extracted ${result.data.documentType} with ${result.data.confidence}% confidence.`);
-        
-        // Refresh load data to show auto-populated fields
-        await refresh();
-      } else {
-        throw new Error(result.error || "Extraction failed");
+      setExtracting(true);
+      try {
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || supabase.supabaseUrl;
+        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || supabase.supabaseKey;
+
+        const response = await fetch(`${supabaseUrl}/functions/v1/extract-document`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${anonKey}`,
+          },
+          body: JSON.stringify({
+            filePath: selectedDoc.path,
+            loadId: id,
+            extractionType: "auto",
+          }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || "Extraction failed");
+        }
+
+        const result = await response.json();
+
+        if (result.success) {
+          setExtractionResult(result.data);
+          setShowExtractionModal(true);
+          show(`Extracted ${result.data.documentType} with ${result.data.confidence}% confidence.`);
+
+          // Refresh load data to show auto-populated fields
+          await refresh();
+        } else {
+          throw new Error(result.error || "Extraction failed");
+        }
+      } catch (err) {
+        console.error("Extraction error:", err);
+        show(`Extraction failed: ${err.message}`, "err");
+      } finally {
+        setExtracting(false);
       }
-    } catch (err) {
-      console.error("Extraction error:", err);
-      show(`Extraction failed: ${err.message}`, "err");
-    } finally {
-      setExtracting(false);
-    }
-  }, [selectedDoc, show, id, refresh]);
+    },
+    [selectedDoc, show, id, refresh]
+  );
 
   // Auto-load doc list when page mounts/changes id
   useEffect(() => {
     listDocs();
   }, [listDocs]);
+
+  /* ---------------------- Instructions text builder ---------------------- */
+  const buildInstructionsText = useCallback(
+    (includeRate) => {
+      if (!load) return "";
+      const parts = [];
+
+      // Header
+      const header = `LOAD INSTRUCTIONS${
+        loadNumber ? ` - ${loadNumber}` : ""
+      }${reference ? ` (Ref: ${reference})` : ""}`;
+      parts.push(header);
+
+      // Pickup
+      const puLine = [`PICKUP: ${puCity || "—"}, ${puState || "—"}`];
+      if (puAt) puLine.push(`@ ${fmtDateTime(puAt)}`);
+      parts.push(puLine.join(" "));
+
+      // Delivery
+      const delLine = [`DELIVERY: ${delCity || "—"}, ${delState || "—"}`];
+      if (delAt) delLine.push(`@ ${fmtDateTime(delAt)}`);
+      parts.push(delLine.join(" "));
+
+      // BOL / refs
+      if (bolNumber) parts.push(`BOL: ${bolNumber}`);
+      if (reference) parts.push(`Customer Ref: ${reference}`);
+      if (id) parts.push(`Internal Load ID: ${smallId(id)}`);
+
+      // Miles / equipment
+      if (equipment) parts.push(`Equipment: ${equipment}`);
+      if (miles) parts.push(`Miles: ${miles}`);
+
+      // Rate only for O/O
+      if (includeRate && totalRate != null && totalRate !== "") {
+        parts.push(`Rate: ${toUSD(totalRate)} (to truck)`);
+      }
+
+      parts.push("");
+      parts.push('Reply with ETA and "ON SITE" at pickup/delivery.');
+
+      return parts.join("\n");
+    },
+    [
+      load,
+      loadNumber,
+      reference,
+      puCity,
+      puState,
+      puAt,
+      delCity,
+      delState,
+      delAt,
+      bolNumber,
+      id,
+      equipment,
+      miles,
+      totalRate,
+    ]
+  );
+
+  /* ---------------------- Send Instructions modal state ---------------------- */
+  const [showInstrModal, setShowInstrModal] = useState(false);
+  const [instrChannel, setInstrChannel] = useState("sms"); // "sms" | "email"
+  const [instrMode, setInstrMode] = useState("driver"); // "driver" | "owner"
+  const [instrTo, setInstrTo] = useState("");
+  const [instrBody, setInstrBody] = useState("");
+  const [instrSending, setInstrSending] = useState(false);
+
+  const openInstrModal = useCallback(() => {
+    setInstrChannel("sms");
+    setInstrMode("driver");
+    const initialTo = assignedDriverPhone || "";
+    setInstrTo(initialTo);
+    const text = buildInstructionsText(false);
+    setInstrBody(text);
+    setShowInstrModal(true);
+  }, [assignedDriverPhone, buildInstructionsText]);
+
+  // Regenerate body when recipient mode changes while modal is open
+  useEffect(() => {
+    if (!showInstrModal) return;
+    const text = buildInstructionsText(instrMode === "owner");
+    setInstrBody(text);
+  }, [showInstrModal, instrMode, buildInstructionsText]);
+
+  const handleSendInstructions = useCallback(
+    async () => {
+      const to = (instrTo || "").trim();
+      const body = (instrBody || "").trim();
+
+      if (!to) {
+        show(instrChannel === "sms" ? "Enter a phone number." : "Enter an email address.", "err");
+        return;
+      }
+      if (!body) {
+        show("Message is empty.", "err");
+        return;
+      }
+
+      setInstrSending(true);
+      try {
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || supabase.supabaseUrl;
+        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || supabase.supabaseKey;
+
+        // Subject for email (not used for SMS)
+        const subject = `Load Instructions${
+          loadNumber ? ` - ${loadNumber}` : ""
+        }${reference ? ` (Ref: ${reference})` : ""}`;
+
+        const endpoint =
+          instrChannel === "sms"
+            ? "send-load-instructions-sms"
+            : "send-load-instructions-email";
+
+        const payload =
+          instrChannel === "sms"
+            ? {
+                to,
+                body,
+                loadId: id,
+                mode: instrMode,
+              }
+            : {
+                to,
+                subject,
+                body,
+                loadId: id,
+                mode: instrMode,
+              };
+
+        const resp = await fetch(`${supabaseUrl}/functions/v1/${endpoint}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${anonKey}`,
+          },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await resp.json().catch(() => null);
+
+        if (!resp.ok || !data || data.success !== true) {
+          const msg = (data && data.error) || `status ${resp.status}`;
+          show(
+            `${instrChannel === "sms" ? "SMS" : "Email"} failed: ${msg}`,
+            "err"
+          );
+          return;
+        }
+
+        show(
+          instrChannel === "sms"
+            ? "Text sent (queued with SMS provider)."
+            : "Email sent (queued with provider).",
+          "ok"
+        );
+        setShowInstrModal(false);
+      } catch (err) {
+        console.error("Send instructions error:", err);
+        show(
+          `${instrChannel === "sms" ? "SMS" : "Email"} failed: ${err.message}`,
+          "err"
+        );
+      } finally {
+        setInstrSending(false);
+      }
+    },
+    [instrTo, instrBody, instrChannel, instrMode, id, loadNumber, reference, show]
+  );
 
   /* --------------------------- render --------------------------- */
   const combinedList = bestDrivers && bestDrivers.length > 0 ? bestDrivers : fallbackDrivers;
@@ -553,6 +770,15 @@ export default function LoadDetails() {
         </button>
 
         <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={openInstrModal}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/10"
+            title="Send load instructions via SMS or Email"
+          >
+            <Send className="w-4 h-4" />
+            Send Instructions
+          </button>
+
           <button
             onClick={trainAI}
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-pink-500/40 text-pink-200 hover:bg-pink-500/10"
@@ -793,8 +1019,7 @@ export default function LoadDetails() {
                 </button>
                 <button
                   onClick={() => {
-                    const top =
-                      combinedList && combinedList[0] ? combinedList[0].driver_id : null;
+                    const top = combinedList && combinedList[0] ? combinedList[0].driver_id : null;
                     if (!top) return show("No best-fit driver yet.", "info");
                     navigate(`/drivers/${top}`);
                   }}
@@ -868,9 +1093,7 @@ export default function LoadDetails() {
                   disabled={docsBusy}
                   title="Refresh document list"
                 >
-                  <RefreshCw
-                    className={cx("w-4 h-4", docsBusy && "animate-spin")}
-                  />
+                  <RefreshCw className={cx("w-4 h-4", docsBusy && "animate-spin")} />
                   Refresh
                 </button>
               </div>
@@ -896,14 +1119,10 @@ export default function LoadDetails() {
                           <div
                             className={cx(
                               "w-4 h-4 rounded-full border-2 flex items-center justify-center",
-                              isSelected
-                                ? "border-pink-400 bg-pink-400"
-                                : "border-zinc-600"
+                              isSelected ? "border-pink-400 bg-pink-400" : "border-zinc-600"
                             )}
                           >
-                            {isSelected && (
-                              <div className="w-2 h-2 rounded-full bg-zinc-900" />
-                            )}
+                            {isSelected && <div className="w-2 h-2 rounded-full bg-zinc-900" />}
                           </div>
                         </div>
                       );
@@ -943,9 +1162,163 @@ export default function LoadDetails() {
         </div>
       </div>
 
+      {/* Send Instructions Modal (SMS + Email) */}
+      {showInstrModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-zinc-900 rounded-2xl border border-zinc-700/60 w-full max-w-xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="px-6 py-4 border-b border-zinc-700/60 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-zinc-100">Send Load Instructions</h2>
+                <p className="text-xs text-zinc-400 mt-1">
+                  Send concise pickup / delivery instructions directly to the driver or owner-operator
+                  via SMS or Email.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {/* Channel toggle: SMS vs Email */}
+              <div>
+                <div className="text-xs font-medium text-zinc-400 mb-1.5">Channel</div>
+                <div className="inline-flex rounded-xl border border-zinc-700/70 bg-zinc-900/80 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setInstrChannel("sms")}
+                    className={cx(
+                      "px-3 py-1.5 text-xs font-medium",
+                      instrChannel === "sms"
+                        ? "bg-emerald-500/20 text-emerald-200"
+                        : "text-zinc-400 hover:bg-zinc-800/80"
+                    )}
+                  >
+                    SMS
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInstrChannel("email")}
+                    className={cx(
+                      "px-3 py-1.5 text-xs font-medium",
+                      instrChannel === "email"
+                        ? "bg-sky-500/20 text-sky-200"
+                        : "text-zinc-400 hover:bg-zinc-800/80"
+                    )}
+                  >
+                    Email
+                  </button>
+                </div>
+              </div>
+
+              {/* Recipient type: driver vs owner-O/O */}
+              <div>
+                <div className="text-xs font-medium text-zinc-400 mb-1.5">Recipient Type</div>
+                <div className="inline-flex rounded-xl border border-zinc-700/70 bg-zinc-900/80 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setInstrMode("driver")}
+                    className={cx(
+                      "px-3 py-1.5 text-xs font-medium",
+                      instrMode === "driver"
+                        ? "bg-emerald-500/20 text-emerald-200"
+                        : "text-zinc-400 hover:bg-zinc-800/80"
+                    )}
+                  >
+                    Company Driver (no rate)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInstrMode("owner")}
+                    className={cx(
+                      "px-3 py-1.5 text-xs font-medium",
+                      instrMode === "owner"
+                        ? "bg-sky-500/20 text-sky-200"
+                        : "text-zinc-400 hover:bg-zinc-800/80"
+                    )}
+                  >
+                    Owner-Operator (show rate)
+                  </button>
+                </div>
+              </div>
+
+              {/* To: phone or email */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs font-medium text-zinc-400">
+                    {instrChannel === "sms" ? "Phone number" : "Email address"}
+                  </span>
+                  {instrChannel === "sms" && assignedDriverPhone && (
+                    <button
+                      type="button"
+                      onClick={() => setInstrTo(assignedDriverPhone)}
+                      className="text-[11px] text-emerald-300 hover:text-emerald-200"
+                    >
+                      Use assigned driver phone
+                    </button>
+                  )}
+                </div>
+                <input
+                  type={instrChannel === "sms" ? "tel" : "email"}
+                  className="w-full rounded-lg border border-zinc-700/70 bg-zinc-900/80 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                  placeholder={instrChannel === "sms" ? "+1 555 555 5555" : "driver@example.com"}
+                  value={instrTo}
+                  onChange={(e) => setInstrTo(e.target.value)}
+                />
+                <p className="text-[11px] text-zinc-500 mt-1">
+                  {instrChannel === "sms"
+                    ? "Use full number with country code for best results (e.g. +1 555 555 5555)."
+                    : "Use a valid email address. The rate is only included for Owner-Operators."}
+                </p>
+              </div>
+
+              {/* Message body */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs font-medium text-zinc-400">Message</span>
+                  <span className="text-[11px] text-zinc-500">{instrBody.length} chars</span>
+                </div>
+                <textarea
+                  className="w-full min-h-[160px] rounded-lg border border-zinc-700/70 bg-zinc-900/80 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                  value={instrBody}
+                  onChange={(e) => setInstrBody(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-zinc-700/60 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowInstrModal(false)}
+                className="px-4 py-2 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60 text-sm"
+                disabled={instrSending}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSendInstructions}
+                className={cx(
+                  "inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm",
+                  "border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/10",
+                  instrSending && "opacity-60 cursor-not-allowed"
+                )}
+                disabled={instrSending}
+              >
+                <Send className={cx("w-4 h-4", instrSending && "animate-spin")} />
+                {instrSending
+                  ? instrChannel === "sms"
+                    ? "Sending SMS…"
+                    : "Sending Email…"
+                  : instrChannel === "sms"
+                  ? "Send Text"
+                  : "Send Email"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Extraction Results Modal */}
       {showExtractionModal && extractionResult && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-zinc-900 rounded-2xl border border-zinc-700/60 w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
             {/* Modal Header */}
             <div className="px-6 py-4 border-b border-zinc-700/60 flex items-center justify-between">
@@ -953,15 +1326,33 @@ export default function LoadDetails() {
                 <h2 className="text-xl font-semibold text-zinc-100">AI Document Extraction</h2>
                 <div className="mt-1 flex items-center gap-3 text-sm">
                   <span className="text-zinc-400">
-                    Type: <span className="text-zinc-200 font-medium">{extractionResult.documentType}</span>
+                    Type:{" "}
+                    <span className="text-zinc-200 font-medium">
+                      {extractionResult.documentType}
+                    </span>
                   </span>
                   <span className="text-zinc-500">•</span>
                   <span className="text-zinc-400">
-                    Confidence: <span className={cx("font-medium", extractionResult.confidence >= 80 ? "text-emerald-400" : extractionResult.confidence >= 60 ? "text-amber-400" : "text-rose-400")}>{extractionResult.confidence}%</span>
+                    Confidence:{" "}
+                    <span
+                      className={cx(
+                        "font-medium",
+                        extractionResult.confidence >= 80
+                          ? "text-emerald-400"
+                          : extractionResult.confidence >= 60
+                          ? "text-amber-400"
+                          : "text-rose-400"
+                      )}
+                    >
+                      {extractionResult.confidence}%
+                    </span>
                   </span>
                   <span className="text-zinc-500">•</span>
                   <span className="text-zinc-400">
-                    Quality: <span className="text-zinc-200 font-medium">{extractionResult.aiInsights.qualityScore}%</span>
+                    Quality:{" "}
+                    <span className="text-zinc-200 font-medium">
+                      {extractionResult.aiInsights.qualityScore}%
+                    </span>
                   </span>
                 </div>
               </div>
@@ -970,7 +1361,12 @@ export default function LoadDetails() {
                 className="text-zinc-400 hover:text-zinc-200"
               >
                 <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
                 </svg>
               </button>
             </div>
@@ -981,185 +1377,286 @@ export default function LoadDetails() {
               {extractionResult.aiInsights && (
                 <div className="rounded-xl border border-pink-500/30 bg-pink-500/5 p-4">
                   <h3 className="text-sm font-semibold text-pink-200 mb-3">AI Insights</h3>
-                  
+
                   <div className="grid grid-cols-2 gap-3 mb-3">
                     <div>
                       <div className="text-xs text-zinc-400">Completeness</div>
-                      <div className="text-lg font-semibold text-zinc-100">{extractionResult.aiInsights.completeness}%</div>
+                      <div className="text-lg font-semibold text-zinc-100">
+                        {extractionResult.aiInsights.completeness}%
+                      </div>
                     </div>
                     <div>
                       <div className="text-xs text-zinc-400">Processing Time</div>
-                      <div className="text-lg font-semibold text-zinc-100">{extractionResult.processingTime}ms</div>
+                      <div className="text-lg font-semibold text-zinc-100">
+                        {extractionResult.processingTime}ms
+                      </div>
                     </div>
                   </div>
 
-                  {extractionResult.aiInsights.riskFlags && extractionResult.aiInsights.riskFlags.length > 0 && (
-                    <div className="mb-3">
-                      <div className="text-xs font-semibold text-rose-300 mb-1">⚠️ Risk Flags</div>
-                      <div className="space-y-1">
-                        {extractionResult.aiInsights.riskFlags.map((flag, i) => (
-                          <div key={i} className="text-xs text-rose-200 bg-rose-500/10 px-2 py-1 rounded">{flag}</div>
-                        ))}
+                  {extractionResult.aiInsights.riskFlags &&
+                    extractionResult.aiInsights.riskFlags.length > 0 && (
+                      <div className="mb-3">
+                        <div className="text-xs font-semibold text-rose-300 mb-1">
+                          ⚠️ Risk Flags
+                        </div>
+                        <div className="space-y-1">
+                          {extractionResult.aiInsights.riskFlags.map((flag, i) => (
+                            <div
+                              key={i}
+                              className="text-xs text-rose-200 bg-rose-500/10 px-2 py-1 rounded"
+                            >
+                              {flag}
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {extractionResult.aiInsights.recommendations && extractionResult.aiInsights.recommendations.length > 0 && (
-                    <div>
-                      <div className="text-xs font-semibold text-sky-300 mb-1">💡 Recommendations</div>
-                      <div className="space-y-1">
-                        {extractionResult.aiInsights.recommendations.map((rec, i) => (
-                          <div key={i} className="text-xs text-sky-200 bg-sky-500/10 px-2 py-1 rounded">{rec}</div>
-                        ))}
+                  {extractionResult.aiInsights.recommendations &&
+                    extractionResult.aiInsights.recommendations.length > 0 && (
+                      <div>
+                        <div className="text-xs font-semibold text-sky-300 mb-1">
+                          💡 Recommendations
+                        </div>
+                        <div className="space-y-1">
+                          {extractionResult.aiInsights.recommendations.map((rec, i) => (
+                            <div
+                              key={i}
+                              className="text-xs text-sky-200 bg-sky-500/10 px-2 py-1 rounded"
+                            >
+                              {rec}
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
                 </div>
               )}
 
               {/* Load Details */}
-              {extractionResult.loadDetails && Object.values(extractionResult.loadDetails).some(v => v) && (
-                <div>
-                  <h3 className="text-sm font-semibold text-zinc-100 mb-3">Load Details</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    {Object.entries(extractionResult.loadDetails).map(([key, value]) => value && (
-                      <div key={key} className="rounded-lg border border-zinc-800/70 p-2">
-                        <div className="text-xs text-zinc-400">{key.replace(/([A-Z])/g, ' $1').trim()}</div>
-                        <div className="text-sm text-zinc-100 font-medium">{value}</div>
-                      </div>
-                    ))}
+              {extractionResult.loadDetails &&
+                Object.values(extractionResult.loadDetails).some((v) => v) && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-zinc-100 mb-3">Load Details</h3>
+                    <div className="grid grid-cols-2 gap-3">
+                      {Object.entries(extractionResult.loadDetails).map(
+                        ([key, value]) =>
+                          value && (
+                            <div
+                              key={key}
+                              className="rounded-lg border border-zinc-800/70 p-2"
+                            >
+                              <div className="text-xs text-zinc-400">
+                                {key.replace(/([A-Z])/g, " $1").trim()}
+                              </div>
+                              <div className="text-sm text-zinc-100 font-medium">{value}</div>
+                            </div>
+                          )
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
               {/* Origin & Destination */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {extractionResult.pickup && Object.values(extractionResult.pickup).some(v => v) && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-emerald-300 mb-3">📍 Pickup</h3>
-                    <div className="space-y-2">
-                      {Object.entries(extractionResult.pickup).map(([key, value]) => value && (
-                        <div key={key} className="rounded-lg border border-zinc-800/70 p-2">
-                          <div className="text-xs text-zinc-400">{key.replace(/([A-Z])/g, ' $1').trim()}</div>
-                          <div className="text-sm text-zinc-100">{value}</div>
-                        </div>
-                      ))}
+                {extractionResult.pickup &&
+                  Object.values(extractionResult.pickup).some((v) => v) && (
+                    <div>
+                      <h3 className="text-sm font-semibold text-emerald-300 mb-3">📍 Pickup</h3>
+                      <div className="space-y-2">
+                        {Object.entries(extractionResult.pickup).map(
+                          ([key, value]) =>
+                            value && (
+                              <div
+                                key={key}
+                                className="rounded-lg border border-zinc-800/70 p-2"
+                              >
+                                <div className="text-xs text-zinc-400">
+                                  {key.replace(/([A-Z])/g, " $1").trim()}
+                                </div>
+                                <div className="text-sm text-zinc-100">{value}</div>
+                              </div>
+                            )
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {extractionResult.delivery && Object.values(extractionResult.delivery).some(v => v) && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-sky-300 mb-3">📍 Delivery</h3>
-                    <div className="space-y-2">
-                      {Object.entries(extractionResult.delivery).map(([key, value]) => value && (
-                        <div key={key} className="rounded-lg border border-zinc-800/70 p-2">
-                          <div className="text-xs text-zinc-400">{key.replace(/([A-Z])/g, ' $1').trim()}</div>
-                          <div className="text-sm text-zinc-100">{value}</div>
-                        </div>
-                      ))}
+                {extractionResult.delivery &&
+                  Object.values(extractionResult.delivery).some((v) => v) && (
+                    <div>
+                      <h3 className="text-sm font-semibold text-sky-300 mb-3">📍 Delivery</h3>
+                      <div className="space-y-2">
+                        {Object.entries(extractionResult.delivery).map(
+                          ([key, value]) =>
+                            value && (
+                              <div
+                                key={key}
+                                className="rounded-lg border border-zinc-800/70 p-2"
+                              >
+                                <div className="text-xs text-zinc-400">
+                                  {key.replace(/([A-Z])/g, " $1").trim()}
+                                </div>
+                                <div className="text-sm text-zinc-100">{value}</div>
+                              </div>
+                            )
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
               </div>
 
               {/* Shipment Details */}
-              {extractionResult.shipment && Object.values(extractionResult.shipment).some(v => v) && (
-                <div>
-                  <h3 className="text-sm font-semibold text-zinc-100 mb-3">📦 Shipment Details</h3>
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                    {Object.entries(extractionResult.shipment).map(([key, value]) => value !== null && value !== undefined && (
-                      <div key={key} className="rounded-lg border border-zinc-800/70 p-2">
-                        <div className="text-xs text-zinc-400">{key.replace(/([A-Z])/g, ' $1').trim()}</div>
-                        <div className="text-sm text-zinc-100 font-medium">{typeof value === 'boolean' ? (value ? 'Yes' : 'No') : value}</div>
-                      </div>
-                    ))}
+              {extractionResult.shipment &&
+                Object.values(extractionResult.shipment).some(
+                  (v) => v !== null && v !== undefined
+                ) && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-zinc-100 mb-3">
+                      📦 Shipment Details
+                    </h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                      {Object.entries(extractionResult.shipment).map(([key, value]) => (
+                        <div
+                          key={key}
+                          className="rounded-lg border border-zinc-800/70 p-2"
+                        >
+                          <div className="text-xs text-zinc-400">
+                            {key.replace(/([A-Z])/g, " $1").trim()}
+                          </div>
+                          <div className="text-sm text-zinc-100 font-medium">
+                            {typeof value === "boolean" ? (value ? "Yes" : "No") : value}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
               {/* Financial Information */}
-              {extractionResult.charges && Object.values(extractionResult.charges).some(v => v) && (
-                <div>
-                  <h3 className="text-sm font-semibold text-zinc-100 mb-3">💰 Charges</h3>
-                  <div className="rounded-xl border border-zinc-800/70 p-3 space-y-2">
-                    {extractionResult.charges.linehaul && (
-                      <div className="flex justify-between">
-                        <span className="text-zinc-400">Linehaul</span>
-                        <span className="text-zinc-100 font-medium">{toUSD(extractionResult.charges.linehaul)}</span>
-                      </div>
-                    )}
-                    {extractionResult.charges.fuelSurcharge && (
-                      <div className="flex justify-between">
-                        <span className="text-zinc-400">Fuel Surcharge</span>
-                        <span className="text-zinc-100 font-medium">{toUSD(extractionResult.charges.fuelSurcharge)}</span>
-                      </div>
-                    )}
-                    {extractionResult.charges.accessorials && extractionResult.charges.accessorials.length > 0 && (
-                      <div className="border-t border-zinc-800/50 pt-2 mt-2">
-                        <div className="text-xs text-zinc-400 mb-1">Accessorials</div>
-                        {extractionResult.charges.accessorials.map((acc, i) => (
-                          <div key={i} className="flex justify-between text-sm">
-                            <span className="text-zinc-300">{acc.description}</span>
-                            <span className="text-zinc-100">{toUSD(acc.amount)}</span>
+              {extractionResult.charges &&
+                Object.values(extractionResult.charges).some((v) => v) && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-zinc-100 mb-3">💰 Charges</h3>
+                    <div className="rounded-xl border border-zinc-800/70 p-3 space-y-2">
+                      {extractionResult.charges.linehaul && (
+                        <div className="flex justify-between">
+                          <span className="text-zinc-400">Linehaul</span>
+                          <span className="text-zinc-100 font-medium">
+                            {toUSD(extractionResult.charges.linehaul)}
+                          </span>
+                        </div>
+                      )}
+                      {extractionResult.charges.fuelSurcharge && (
+                        <div className="flex justify-between">
+                          <span className="text-zinc-400">Fuel Surcharge</span>
+                          <span className="text-zinc-100 font-medium">
+                            {toUSD(extractionResult.charges.fuelSurcharge)}
+                          </span>
+                        </div>
+                      )}
+                      {extractionResult.charges.accessorials &&
+                        extractionResult.charges.accessorials.length > 0 && (
+                          <div className="border-t border-zinc-800/50 pt-2 mt-2">
+                            <div className="text-xs text-zinc-400 mb-1">Accessorials</div>
+                            {extractionResult.charges.accessorials.map((acc, i) => (
+                              <div key={i} className="flex justify-between text-sm">
+                                <span className="text-zinc-300">{acc.description}</span>
+                                <span className="text-zinc-100">{toUSD(acc.amount)}</span>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
-                    )}
-                    {extractionResult.charges.totalCharges && (
-                      <div className="flex justify-between border-t border-zinc-700/50 pt-2 mt-2">
-                        <span className="text-zinc-100 font-semibold">Total</span>
-                        <span className="text-emerald-400 font-bold text-lg">{toUSD(extractionResult.charges.totalCharges)}</span>
-                      </div>
-                    )}
+                        )}
+                      {extractionResult.charges.totalCharges && (
+                        <div className="flex justify-between border-t border-zinc-700/50 pt-2 mt-2">
+                          <span className="text-zinc-100 font-semibold">Total</span>
+                          <span className="text-emerald-400 font-bold text-lg">
+                            {toUSD(extractionResult.charges.totalCharges)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
               {/* Parties, Driver, Equipment */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {extractionResult.parties && Object.values(extractionResult.parties).some(v => v) && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-zinc-100 mb-3">👥 Parties</h3>
-                    <div className="space-y-2 text-sm">
-                      {Object.entries(extractionResult.parties).map(([key, value]) => value && value.name && (
-                        <div key={key} className="rounded-lg border border-zinc-800/70 p-2">
-                          <div className="text-xs text-zinc-400">{key}</div>
-                          <div className="text-zinc-100 font-medium">{value.name}</div>
-                          {value.mcNumber && <div className="text-xs text-zinc-400">MC: {value.mcNumber}</div>}
-                        </div>
-                      ))}
+                {extractionResult.parties &&
+                  Object.values(extractionResult.parties).some((v) => v) && (
+                    <div>
+                      <h3 className="text-sm font-semibold text-zinc-100 mb-3">👥 Parties</h3>
+                      <div className="space-y-2 text-sm">
+                        {Object.entries(extractionResult.parties).map(
+                          ([key, value]) =>
+                            value &&
+                            value.name && (
+                              <div
+                                key={key}
+                                className="rounded-lg border border-zinc-800/70 p-2"
+                              >
+                                <div className="text-xs text-zinc-400">{key}</div>
+                                <div className="text-zinc-100 font-medium">
+                                  {value.name}
+                                </div>
+                                {value.mcNumber && (
+                                  <div className="text-xs text-zinc-400">
+                                    MC: {value.mcNumber}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {extractionResult.driver && Object.values(extractionResult.driver).some(v => v) && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-zinc-100 mb-3">🚚 Driver</h3>
-                    <div className="space-y-2 text-sm">
-                      {Object.entries(extractionResult.driver).map(([key, value]) => value && (
-                        <div key={key} className="rounded-lg border border-zinc-800/70 p-2">
-                          <div className="text-xs text-zinc-400">{key.replace(/([A-Z])/g, ' $1').trim()}</div>
-                          <div className="text-zinc-100">{value}</div>
-                        </div>
-                      ))}
+                {extractionResult.driver &&
+                  Object.values(extractionResult.driver).some((v) => v) && (
+                    <div>
+                      <h3 className="text-sm font-semibold text-zinc-100 mb-3">🚚 Driver</h3>
+                      <div className="space-y-2 text-sm">
+                        {Object.entries(extractionResult.driver).map(
+                          ([key, value]) =>
+                            value && (
+                              <div
+                                key={key}
+                                className="rounded-lg border border-zinc-800/70 p-2"
+                              >
+                                <div className="text-xs text-zinc-400">
+                                  {key.replace(/([A-Z])/g, " $1").trim()}
+                                </div>
+                                <div className="text-zinc-100">{value}</div>
+                              </div>
+                            )
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {extractionResult.equipment && Object.values(extractionResult.equipment).some(v => v) && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-zinc-100 mb-3">🚛 Equipment</h3>
-                    <div className="space-y-2 text-sm">
-                      {Object.entries(extractionResult.equipment).map(([key, value]) => value && (
-                        <div key={key} className="rounded-lg border border-zinc-800/70 p-2">
-                          <div className="text-xs text-zinc-400">{key.replace(/([A-Z])/g, ' $1').trim()}</div>
-                          <div className="text-zinc-100">{value}</div>
-                        </div>
-                      ))}
+                {extractionResult.equipment &&
+                  Object.values(extractionResult.equipment).some((v) => v) && (
+                    <div>
+                      <h3 className="text-sm font-semibold text-zinc-100 mb-3">
+                        🚛 Equipment
+                      </h3>
+                      <div className="space-y-2 text-sm">
+                        {Object.entries(extractionResult.equipment).map(
+                          ([key, value]) =>
+                            value && (
+                              <div
+                                key={key}
+                                className="rounded-lg border border-zinc-800/70 p-2"
+                              >
+                                <div className="text-xs text-zinc-400">
+                                  {key.replace(/([A-Z])/g, " $1").trim()}
+                                </div>
+                                <div className="text-zinc-100">{value}</div>
+                              </div>
+                            )
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
               </div>
             </div>
 
@@ -1174,7 +1671,9 @@ export default function LoadDetails() {
               <button
                 onClick={async () => {
                   // Copy extracted data to clipboard
-                  await navigator.clipboard.writeText(JSON.stringify(extractionResult, null, 2));
+                  await navigator.clipboard.writeText(
+                    JSON.stringify(extractionResult, null, 2)
+                  );
                   show("Copied to clipboard!");
                 }}
                 className="px-4 py-2 rounded-lg border border-pink-500/40 text-pink-200 hover:bg-pink-500/10"
