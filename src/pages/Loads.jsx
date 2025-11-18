@@ -31,9 +31,8 @@ import { Link } from "react-router-dom";
 import { fitLoadForDriver } from "../lib/driverFit";
 import DriverFitPill from "../components/DriverFitPill.jsx";
 import AutoAssignDriverButton from "../components/AutoAssignDriverButton";
-import PredictBestDriversButton from "../components/PredictBestDriversButton";
 import AutoAssignDriverButtonCompact from "../components/AutoAssignDriverButtonCompact";
-import PredictBestDriversButtonCompact from "../components/PredictBestDriversButtonCompact";
+import LoadPredictCell from "../components/LoadPredictCell";
 import LearnedSuggestions from "../components/LearnedSuggestions.jsx";
 import AiRecommendationsForLoad from "../components/AiRecommendationsForLoad.jsx";
 import RCUploader from "../components/RCUploader";
@@ -127,18 +126,22 @@ export default function Loads() {
         alert("Load or driver missing for feedback.");
         return;
       }
+
       const payload = {
         load_id: load.id,
         driver_id: load.driver.id,
-        accepted,
         rating: accepted ? "up" : "down",
-        note,
+        note: note || null,
+        // do NOT send is_interactive; let defaults & DB handle the rest
       };
+
       const { error } = await supabase
         .from("dispatch_feedback_events")
         .insert(payload);
+
       if (error) throw error;
     } catch (e) {
+      console.error("[leaveFeedback] error:", e);
       alert(e?.message || "Failed to save feedback.");
     }
   }
@@ -223,11 +226,7 @@ export default function Loads() {
   const visibleRows = useMemo(() => {
     let rows = loads;
 
-    // NOTE:
-    // We now rely on database RLS to enforce org isolation.
-    // The backend only returns loads for orgs the user is a member of.
-    // So we do NOT filter by created_by here anymore, so that
-    // teammates in the same org can see each other's loads.
+    // RLS handles org isolation
 
     if (priorityFilter !== "ALL") {
       rows = rows.filter(
@@ -265,9 +264,57 @@ export default function Loads() {
         `)
         .single();
       if (error) throw error;
+
       setLoads((prev) => prev.map((l) => (l.id === id ? data : l)));
+
+      // When a load is marked DELIVERED, set the assigned driver back to AVAILABLE
+      if (next === "DELIVERED" && data?.driver_id) {
+        try {
+          const { error: driverErr } = await supabase
+            .from("drivers")
+            .update({ status: "AVAILABLE" })
+            .eq("id", data.driver_id);
+
+          if (driverErr) {
+            console.warn(
+              "[Loads] failed to update driver status to AVAILABLE after delivery:",
+              driverErr
+            );
+          }
+        } catch (e2) {
+          console.warn(
+            "[Loads] unexpected error when updating driver after delivery:",
+            e2
+          );
+        }
+      }
     } catch (e) {
       alert(e?.message || "Failed to update status.");
+    }
+  }
+
+  // NEW: Unassign driver from a load (set driver_id to null)
+  async function unassignDriver(loadId) {
+    try {
+      const { data, error } = await supabase
+        .from("loads")
+        .update({
+          driver_id: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", loadId)
+        .select(`
+          *,
+          driver:drivers!loads_driver_id_fkey(id, first_name, last_name)
+        `)
+        .single();
+
+      if (error) throw error;
+
+      setLoads((prev) => prev.map((l) => (l.id === loadId ? data : l)));
+    } catch (e) {
+      console.warn("[Loads] unassignDriver error:", e);
+      alert(e?.message || "Failed to unassign driver from load.");
     }
   }
 
@@ -635,9 +682,7 @@ export default function Loads() {
                             <div className="text-xs">
                               <div className="text-white/60">Pickup:</div>
                               <div className="font-medium">
-                                {new Date(
-                                  l.pickup_date
-                                ).toLocaleDateString()}
+                                {new Date(l.pickup_date).toLocaleDateString()}
                               </div>
                             </div>
                           ) : null}
@@ -645,9 +690,7 @@ export default function Loads() {
                             <div className="text-xs">
                               <div className="text-white/60">Delivery:</div>
                               <div className="font-medium">
-                                {new Date(
-                                  l.delivery_date
-                                ).toLocaleDateString()}
+                                {new Date(l.delivery_date).toLocaleDateString()}
                               </div>
                             </div>
                           ) : null}
@@ -678,9 +721,7 @@ export default function Loads() {
                             <PriorityBadge value={l.problem_priority} />
                             <span className="inline-flex items-center gap-1 text-xs text-white/70 whitespace-nowrap">
                               <Ico as={Clock} />
-                              {since(
-                                l.problem_flagged_at || l.updated_at
-                              )}
+                              {since(l.problem_flagged_at || l.updated_at)}
                             </span>
                           </div>
                         )}
@@ -705,10 +746,11 @@ export default function Loads() {
                             />
                           )}
 
-                          <PredictBestDriversButtonCompact
-                            load={l}
+                          <LoadPredictCell
+                            loadId={l.id}
                             origin={l.origin}
                             destination={l.destination}
+                            size="sm"
                           />
 
                           {l.status === "PROBLEM" ? (
@@ -769,6 +811,7 @@ export default function Loads() {
                             onSetTransit={() => updateStatus(l.id, "IN_TRANSIT")}
                             onDelete={() => deleteLoad(l.id)}
                             onEditLoad={() => setEditingLoad(l)}
+                            onUnassign={() => unassignDriver(l.id)}
                           />
                         </div>
                       </Td>
@@ -853,9 +896,7 @@ export default function Loads() {
                       {l.pickup_date ? (
                         <div>
                           <div className="font-medium">
-                            {new Date(
-                              l.pickup_date
-                            ).toLocaleDateString()}
+                            {new Date(l.pickup_date).toLocaleDateString()}
                           </div>
                           {l.pickup_time && (
                             <div className="text-white/60">
@@ -872,9 +913,7 @@ export default function Loads() {
                       {l.delivery_date ? (
                         <div>
                           <div className="font-medium">
-                            {new Date(
-                              l.delivery_date
-                            ).toLocaleDateString()}
+                            {new Date(l.delivery_date).toLocaleDateString()}
                           </div>
                           {l.delivery_time && (
                             <div className="text-white/60">
@@ -908,9 +947,7 @@ export default function Loads() {
                         <PriorityBadge value={l.problem_priority} />
                         <span className="inline-flex items-center gap-1 text-white/70 whitespace-nowrap">
                           <Ico as={Clock} />
-                          {since(
-                            l.problem_flagged_at || l.updated_at
-                          )}
+                          {since(l.problem_flagged_at || l.updated_at)}
                         </span>
                       </div>
                     )}
@@ -936,7 +973,8 @@ export default function Loads() {
                           }}
                         />
                       )}
-                      <PredictBestDriversButton
+                      <LoadPredictCell
+                        loadId={l.id}
                         origin={l.origin}
                         destination={l.destination}
                         size="sm"
@@ -1005,6 +1043,7 @@ export default function Loads() {
                       onSetTransit={() => updateStatus(l.id, "IN_TRANSIT")}
                       onDelete={() => deleteLoad(l.id)}
                       onEditLoad={() => setEditingLoad(l)}
+                      onUnassign={() => unassignDriver(l.id)}
                     />
                   </div>
                 </div>
@@ -1209,7 +1248,14 @@ function PriorityBadge({ value }) {
 }
 
 /* --------------------------- More Actions Dropdown --------------------------- */
-function MoreActionsMenu({ load, onViewProblem, onSetTransit, onDelete, onEditLoad }) {
+function MoreActionsMenu({
+  load,
+  onViewProblem,
+  onSetTransit,
+  onDelete,
+  onEditLoad,
+  onUnassign,
+}) {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
@@ -1239,6 +1285,20 @@ function MoreActionsMenu({ load, onViewProblem, onSetTransit, onDelete, onEditLo
               <Ico as={Pencil} />
               Edit Load
             </button>
+
+            {load.driver_id && (
+              <button
+                onClick={() => {
+                  onUnassign && onUnassign();
+                  setIsOpen(false);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-white/80 hover:bg-white/5"
+              >
+                <Ico as={UserCheck} />
+                Unassign Driver
+              </button>
+            )}
+
             {load.status === "PROBLEM" && (
               <button
                 onClick={() => {
@@ -1257,7 +1317,7 @@ function MoreActionsMenu({ load, onViewProblem, onSetTransit, onDelete, onEditLo
                   onSetTransit();
                   setIsOpen(false);
                 }}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-white/80 hover:bg:white/5"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-white/80 hover:bg-white/5"
               >
                 <Ico as={Save} />
                 Mark In Transit
@@ -1493,7 +1553,7 @@ function ViewProblemModal({ load, onClose, onResolve, onSave }) {
                 options={PRIORITY_CHOICES}
               />
             </div>
-            <div className="rounded-xl border border:white/10 p-3 sm:col-span-1">
+            <div className="rounded-xl border border-white/10 p-3 sm:col-span-1">
               <div className="text-xs text-white/60 mb-1">Owner</div>
               <input
                 value={owner}
@@ -1605,7 +1665,7 @@ function NotesModal({ load, onClose, onSave }) {
         <div className="mt-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2">
           <button
             onClick={onClose}
-            className="rounded-xl border border-white/10 px-3 py-2 text-sm hover:bg:white/5"
+            className="rounded-xl border border-white/10 px-3 py-2 text-sm hover:bg-white/5"
           >
             Cancel
           </button>

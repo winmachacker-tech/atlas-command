@@ -1,6 +1,7 @@
 // FILE: src/components/CustomerThumbsBar.jsx
 // Purpose: Record thumbs (👍/👎) as training signals with conflict-safe UPSERT.
-// - Writes BOTH `label` (boolean) for AI and legacy `vote` (boolean).
+// - Writes canonical `rating` ("up" | "down") for AI training.
+// - Also writes BOTH `label` (boolean) for AI and legacy `vote` (boolean).
 // - Uses a stable `click_key` to avoid duplicate key errors.
 
 import React, { useState } from "react";
@@ -60,20 +61,25 @@ export default function CustomerThumbsBar({
       created_by,
     });
 
-    // Payload: both label (AI) and vote (legacy boolean); update feedback_at on change
+    // Canonical string rating: "up" | "down"
+    const rating = isUp ? "up" : "down";
+
+    // Payload: rating is the canonical truth.
+    // label/vote remain as boolean helpers, kept in sync with rating.
     const payload = {
       driver_id: dId,
       customer_id: customerId || null,
       lane_key: laneKey,
-      label: isUp, // boolean
-      vote: isUp, // boolean – this matches your table type
+      rating, // <-- canonical text field used by AI + audits
+      label: isUp, // boolean, derived from rating
+      vote: isUp, // boolean, legacy
       feedback_at: nowIso,
       created_by: created_by || null,
       click_key, // stable unique scope
       created_at: nowIso,
     };
 
-    // Single UPSERT target: click_key (we'll make sure DB has a UNIQUE index on this)
+    // UPSERT on click_key so repeated clicks update same row, not create duplicates
     const { error } = await supabase
       .from("driver_feedback")
       .upsert(payload, { onConflict: "click_key" });

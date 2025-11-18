@@ -239,7 +239,7 @@ function LaneInlineTrainer({ laneKey, customerId = null, shipper = "Unknown", li
       <div className="grid gap-2">
         {rows.map((r, idx) => (
           <div
-            key={r.driver_id}
+            key={`${laneKey}-${r.driver_id}-${idx}`}
             className="flex items-center justify-between rounded-xl border border-zinc-800/70 bg-zinc-900/40 px-3 py-2"
           >
             <div className="flex items-center gap-3 min-w-0">
@@ -350,10 +350,9 @@ export default function Customers() {
 
       setTrainStep("retraining");
 
-// Call retrain with NO arguments – matches rpc_ai_retrain() in Postgres
-const { error: retrainError } = await supabase.rpc("rpc_ai_retrain");
-if (retrainError) throw retrainError;
-
+      // Call retrain with NO arguments – matches rpc_ai_retrain() in Postgres
+      const { error: retrainError } = await supabase.rpc("rpc_ai_retrain");
+      if (retrainError) throw retrainError;
 
       // Refresh both grids and signal totals after train
       await fetchRows();

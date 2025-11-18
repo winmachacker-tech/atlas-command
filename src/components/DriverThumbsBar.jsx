@@ -1,50 +1,50 @@
-﻿// src/components/DriverThumbsBar.jsx
-import React, { useState } from "react";
-import { ThumbsUp, ThumbsDown, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
-import { recordThumb } from "../lib/driverPreferences.js";
-import { getStableClickKey } from "../lib/thumbKeyBus.js";
+﻿// FILE: src/components/DriverThumbsBar.jsx
+// Purpose:
+// Thin wrapper around AIThumbs so ALL thumbs:
+//   - Train the AI via ai_training_examples
+//   - Log human feedback via driver_feedback
+//   - Optionally tie feedback to a lane_key and/or load_id
+//
+// Usage examples:
+//
+// 1) Generic driver-level feedback (current behavior):
+//    <DriverThumbsBar driverId={driver.id} onChange={refetch} />
+//
+// 2) Lane-level + load-level feedback (for AI audit alignment):
+//    <DriverThumbsBar
+//       driverId={driver.id}
+//       laneKey={laneKey}           // e.g. "LANE Mesa, AZ → Tulsa, OK"
+//       loadId={load.id}            // UUID of the load
+//       onChange={refetch}
+//    />
+//
+// SECURITY:
+// - This component does not touch RLS, auth, or service keys.
+// - All inserts (ai_training_examples, driver_feedback) go through AIThumbs,
+//   which uses the normal Supabase client and respects existing policies.
 
-export default function DriverThumbsBar({ driverId, onChange }) {
-  const [busy, setBusy] = useState(false);
-  const [ok, setOk] = useState("");
-  const [err, setErr] = useState("");
+import React from "react";
+import AIThumbs from "./AIThumbs";
 
-  async function handle(rate, e) {
-    e?.stopPropagation?.();
-    if (busy) return;
-    setBusy(true);
-    setOk(""); setErr("");
-
-    try {
-      const clickKey = getStableClickKey(rate);
-      await recordThumb(driverId, rate, clickKey); // writes exactly one row
-      setOk(rate === "up" ? "Up recorded" : "Down recorded");
-
-      // ⬇️ IMPORTANT: do NOT do any local "+1" here.
-      // If you want the badge to refresh immediately:
-      onChange && onChange(); // parent can call badge.reload() once
-    } catch (e2) {
-      setErr(e2?.message || "Failed to record feedback");
-      console.error(e2);
-    } finally {
-      setBusy(false);
-      setTimeout(() => { setOk(""); setErr(""); }, 1200);
-    }
-  }
+export default function DriverThumbsBar({
+  driverId,
+  laneKey = null,
+  loadId = null,
+  size = "md",       // "sm" | "md" | "lg" — forwarded to AIThumbs
+  className = "",
+  onChange,          // called after a successful thumb
+}) {
+  // If we somehow don't have a driver, don't render anything.
+  if (!driverId) return null;
 
   return (
-    <div className="flex items-center gap-2">
-      <button type="button" onClick={(e)=>handle("up",e)} disabled={busy} className="inline-flex items-center gap-2 rounded-lg border border-zinc-700/60 px-3 py-2 hover:bg-zinc-800/60 disabled:opacity-50">
-        {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ThumbsUp className="w-4 h-4" />}
-        <span className="text-xs sm:text-sm">Up</span>
-      </button>
-      <button type="button" onClick={(e)=>handle("down",e)} disabled={busy} className="inline-flex items-center gap-2 rounded-lg border border-zinc-700/60 px-3 py-2 hover:bg-zinc-800/60 disabled:opacity-50">
-        {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ThumbsDown className="w-4 h-4" />}
-        <span className="text-xs sm:text-sm">Down</span>
-      </button>
-
-      {ok && <span className="ml-2 inline-flex items-center gap-1 text-emerald-400 text-xs"><CheckCircle2 className="w-4 h-4" />{ok}</span>}
-      {err && <span className="ml-2 inline-flex items-center gap-1 text-rose-400 text-xs"><AlertCircle className="w-4 h-4" />{err}</span>}
-    </div>
+    <AIThumbs
+      driverId={driverId}
+      laneKey={laneKey}
+      loadId={loadId}
+      size={size}
+      className={className}
+      onAfterChange={onChange}
+    />
   );
 }

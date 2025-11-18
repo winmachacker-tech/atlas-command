@@ -1,6 +1,11 @@
 ﻿// FILE: src/pages/DispatchAI.jsx
 // Purpose: Chat-based dispatch page with AI gating.
 // - Uses AiFeatureGate to control who can access AI dispatch features.
+// - Uses DispatchAIBox for natural-language commands (assign/unassign).
+// - Quick Suggestions section now includes DriverThumbsBar so thumbs:
+//     • Train the AI via ai_training_examples
+//     • Log human feedback via driver_feedback
+//     • Tie feedback to a (synthetic) lane_key + load_id
 // - Does NOT change any RLS, auth, or backend security — UI layer only.
 
 import { useEffect, useMemo, useState } from "react";
@@ -18,6 +23,7 @@ import { Link } from "react-router-dom";
 import DispatchAIBox from "../components/DispatchAIBox";
 import { supabase } from "../lib/supabase";
 import AiFeatureGate from "../components/AiFeatureGate";
+import DriverThumbsBar from "../components/DriverThumbsBar";
 
 function cx(...a) {
   return a.filter(Boolean).join(" ");
@@ -41,7 +47,7 @@ export default function DispatchAI() {
 
   const [actionMsg, setActionMsg] = useState(null);
   const [actionErr, setActionErr] = useState(null);
-  const [actionRecId, setActionRecId] = useState(null); // new: created ai_recommendations.id (if any)
+  const [actionRecId, setActionRecId] = useState(null); // created ai_recommendations.id (if any)
 
   useEffect(() => {
     const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
@@ -93,7 +99,7 @@ export default function DispatchAI() {
     fetchData();
   }, []);
 
-  // basic 1:1 suggestions
+  // basic 1:1 suggestions (first 8 available loads ↔ first 8 active drivers)
   const suggestions = useMemo(() => {
     const pairs = [];
     const n = Math.min(loads.length, drivers.length);
@@ -182,7 +188,7 @@ export default function DispatchAI() {
   }
 
   function handleAssigned(payload) {
-    // if your DispatchAIBox calls onAssigned with the function result
+    // If DispatchAIBox calls onAssigned with the function result
     if (payload?.ok) {
       setActionMsg(payload?.message || "Action completed.");
       if (payload?.recommendation?.id)
@@ -328,10 +334,20 @@ export default function DispatchAI() {
                 const displayRef =
                   load.reference || load.load_number || shortId(load.id);
                 const driverLabel = driver.full_name || driver.id;
+
+                // Lane key for training/audit:
+                // Prefer a real lane_key if the loads table has it,
+                // else fall back to something stable for this load.
+                const laneKey =
+                  load.lane_key ||
+                  load.reference ||
+                  load.load_number ||
+                  `LOAD:${load.id}`;
+
                 return (
                   <div
                     key={`${load.id}-${driver.id}`}
-                    className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900/40 p-3"
+                    className="flex flex-col gap-3 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 sm:flex-row sm:items-center sm:justify-between"
                   >
                     <div className="text-sm">
                       <div className="text-zinc-300">
@@ -343,21 +359,34 @@ export default function DispatchAI() {
                         Suggested: assign driver to this available load.
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => assign(load.id, driverLabel)} // send UUID
-                        className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
-                      >
-                        <UserCheck className="h-4 w-4" />
-                        Assign
-                      </button>
-                      <button
-                        onClick={() => unassign(load.id)} // send UUID
-                        className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
-                      >
-                        <UserX className="h-4 w-4" />
-                        Unassign
-                      </button>
+
+                    <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => assign(load.id, driverLabel)} // send UUID
+                          className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                        >
+                          <UserCheck className="h-4 w-4" />
+                          Assign
+                        </button>
+                        <button
+                          onClick={() => unassign(load.id)} // send UUID
+                          className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
+                        >
+                          <UserX className="h-4 w-4" />
+                          Unassign
+                        </button>
+                      </div>
+
+                      {/* NEW: thumbs that train AI + log driver_feedback with load_id */}
+                      <DriverThumbsBar
+                        driverId={driver.id}
+                        laneKey={laneKey}
+                        loadId={load.id}
+                        size="sm"
+                        className="sm:ml-3"
+                        onChange={fetchData}
+                      />
                     </div>
                   </div>
                 );
