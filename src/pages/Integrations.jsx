@@ -13,6 +13,7 @@ import {
   CreditCard,
   Truck,
   Cloud,
+  CloudRain,
   MessageSquare,
   Mail,
   Receipt,
@@ -157,6 +158,7 @@ export default function Integrations() {
   const [msg, setMsg] = useState(null);
   const [user, setUser] = useState(null);
   const [googleMapsConnected, setGoogleMapsConnected] = useState(false);
+  const [openWeatherConnected, setOpenWeatherConnected] = useState(false);
   const [emailConnected, setEmailConnected] = useState(true); // Email is now connected!
 
   // Load integrations
@@ -183,6 +185,10 @@ export default function Integrations() {
       const hasGoogleMapsKey = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
       setGoogleMapsConnected(hasGoogleMapsKey);
 
+      // Check if OpenWeather API key exists in env
+      const hasOpenWeatherKey = !!import.meta.env.VITE_OPENWEATHER_API_KEY;
+      setOpenWeatherConnected(hasOpenWeatherKey);
+
       setLoading(false);
     }
 
@@ -201,6 +207,20 @@ export default function Integrations() {
     setMsg({ 
       kind: "info", 
       text: "API Key is stored in your .env file. Edit VITE_GOOGLE_MAPS_API_KEY to change it." 
+    });
+  };
+
+  const handleOpenWeatherDisconnect = () => {
+    setMsg({ 
+      kind: "info", 
+      text: "To disconnect OpenWeather, remove VITE_OPENWEATHER_API_KEY from your .env file and restart the server." 
+    });
+  };
+
+  const handleOpenWeatherConfigure = () => {
+    setMsg({ 
+      kind: "info", 
+      text: "API Key is stored in your .env file. Edit VITE_OPENWEATHER_API_KEY to change it. Get a free API key at openweathermap.org/api" 
     });
   };
 
@@ -302,7 +322,7 @@ export default function Integrations() {
             </p>
           </div>
 
-          <div className="grid gap-4">
+          <div className="grid gap-4 md:grid-cols-2">
             <IntegrationCard
               icon={MapPin}
               name="Google Maps"
@@ -312,6 +332,17 @@ export default function Integrations() {
               onConfigure={handleGoogleMapsConfigure}
               onDisconnect={handleGoogleMapsDisconnect}
               logo="https://www.gstatic.com/images/branding/product/1x/maps_48dp.png"
+            />
+            
+            <IntegrationCard
+              icon={CloudRain}
+              name="OpenWeather"
+              description="Real-time weather conditions and alerts for pickup and delivery locations"
+              status={openWeatherConnected ? "connected" : "available"}
+              badge={openWeatherConnected ? "Connected" : "Free"}
+              onConfigure={handleOpenWeatherConfigure}
+              onDisconnect={handleOpenWeatherDisconnect}
+              logo="https://openweathermap.org/themes/openweathermap/assets/img/logo_white_cropped.png"
             />
           </div>
         </div>

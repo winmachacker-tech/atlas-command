@@ -1,65 +1,35 @@
 // FILE: src/pages/DriverSettlements.jsx
-// Purpose: Accounting view for driver settlements.
-// - Org-scoped (uses team_members -> org_id).
-// - Lists driver_settlements for the current org.
-// - Shows driver name, week, gross, deductions, net, status.
-// - Lets user open a settlement and see all line items.
-// - Simple "Generate weekly settlement" form that calls
-//   rpc_generate_driver_settlement_week(driver, week_start).
-//
-// Security:
-// - All reads/writes are scoped by org_id.
-// - Relies on existing RLS (org_id = current_org_id()).
-// - Does NOT change any RLS or security rules.
+// Purpose:
+// - Accounting view of weekly driver settlements
+// - Generate weekly settlement via rpc_generate_driver_settlement_week
+// - List settlements for the org with filters
+// - Show settlement details + line items
+// - Delete settlement button (org-scoped, RLS-safe)
+// - Show settlement ID + week range + created-at badges
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import {
-  Loader2,
-  AlertTriangle,
-  RefreshCw,
-  Calendar,
+  CalendarDays,
   DollarSign,
-  User,
   Filter,
-  ChevronDown,
-  ChevronRight,
-  CheckCircle2,
-  XCircle,
-  FileText,
-  ArrowRight,
+  Loader2,
+  Trash2,
+  User,
+  Hash,
+  Clock,
 } from "lucide-react";
 
-/* ---------------------------- helpers ---------------------------- */
+/* ------------------------ tiny helpers ------------------------ */
 
 function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
 
-function cleanStr(v) {
-  return (v ?? "").toString().trim();
-}
-
-function toast(setToast, tone, msg) {
-  setToast({ tone, msg });
-  setTimeout(() => setToast(null), 3500);
-}
-
-function formatMoney(v) {
-  if (v == null || isNaN(Number(v))) return "$0.00";
-  const num = Number(v);
-  return num.toLocaleString(undefined, {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
-function formatDate(d) {
+function fmtDate(d) {
   if (!d) return "—";
   const dt = new Date(d);
-  if (Number.isNaN(dt.getTime())) return d;
+  if (Number.isNaN(dt.getTime())) return "—";
   return dt.toLocaleDateString(undefined, {
     year: "numeric",
     month: "short",
@@ -67,66 +37,71 @@ function formatDate(d) {
   });
 }
 
-const STATUS_BADGE = {
-  DRAFT: {
-    label: "Draft",
-    className:
-      "bg-slate-700/40 text-slate-100 border border-slate-500/60",
-  },
-  REVIEW: {
-    label: "In review",
-    className:
-      "bg-amber-500/10 text-amber-200 border border-amber-500/50",
-  },
-  APPROVED: {
-    label: "Approved",
-    className:
-      "bg-emerald-500/10 text-emerald-200 border border-emerald-500/50",
-  },
-  PAID: {
-    label: "Paid",
-    className:
-      "bg-emerald-600/15 text-emerald-100 border border-emerald-500/70",
-  },
-  VOID: {
-    label: "Void",
-    className: "bg-red-500/10 text-red-100 border border-red-500/60",
-  },
-};
+function fmtMoney(n) {
+  const v = Number(n || 0);
+  return v.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  });
+}
 
-/* ============================== PAGE ============================== */
+function toast(setter, tone, msg) {
+  setter({ tone, msg });
+  setTimeout(() => setter(null), 4000);
+}
+
+/* ======================= MAIN COMPONENT ======================= */
 
 export default function DriverSettlements() {
   const [userId, setUserId] = useState(null);
   const [orgId, setOrgId] = useState(null);
 
-  const [loading, setLoading] = useState(true);
-  const [fatalError, setFatalError] = useState("");
-
-  const [toastState, setToast] = useState(null);
-
-  const [settlements, setSettlements] = useState([]);
-  const [settlementsLoading, setSettlementsLoading] = useState(false);
-
   const [drivers, setDrivers] = useState([]);
-  const [driversLoading, setDriversLoading] = useState(false);
+  const [settlements, setSettlements] = useState([]);
+  const [lines, setLines] = useState([]);
 
-  const [selectedSettlementId, setSelectedSettlementId] = useState(null);
-  const [selectedLines, setSelectedLines] = useState([]);
-  const [linesLoading, setLinesLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
+  // generate form
+  const [genDriverId, setGenDriverId] = useState("");
+  const [genWeekStart, setGenWeekStart] = useState("");
+  const [generating, setGenerating] = useState(false);
+
+  // filters / selection
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [searchDriver, setSearchDriver] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
 
-  const [generateLoading, setGenerateLoading] = useState(false);
-  const [generateForm, setGenerateForm] = useState({
-    driver_id: "",
-    week_start: "",
-  });
+  // delete state
+  const [deleting, setDeleting] = useState(false);
 
-  const [updatingStatusId, setUpdatingStatusId] = useState(null);
+  // toast
+  const [toastState, setToastState] = useState(null);
 
-  /* ================== INITIAL LOAD: USER + ORG ================== */
+  /* ----------------- derive selected settlement ----------------- */
+
+  const selectedSettlement = useMemo(
+    () => settlements.find((s) => s.id === selectedId) || null,
+    [settlements, selectedId]
+  );
+
+  const visibleSettlements = useMemo(() => {
+    return settlements.filter((s) => {
+      if (statusFilter !== "ALL" && s.status !== statusFilter) return false;
+      if (searchDriver.trim()) {
+        const t = searchDriver.trim().toLowerCase();
+        const name = `${s.driver_first_name || ""} ${
+          s.driver_last_name || ""
+        }`.toLowerCase();
+        if (!name.includes(t)) return false;
+      }
+      return true;
+    });
+  }, [settlements, statusFilter, searchDriver]);
+
+  /* ====================== INITIAL LOAD ====================== */
 
   useEffect(() => {
     let cancelled = false;
@@ -135,20 +110,25 @@ export default function DriverSettlements() {
       try {
         setLoading(true);
 
+        // 1) current user
         const {
           data: { user },
           error: userErr,
         } = await supabase.auth.getUser();
         if (userErr) throw userErr;
         if (!user) {
-          setFatalError("No authenticated user. Please log in again.");
+          toast(
+            setToastState,
+            "error",
+            "No authenticated user. Please log in again."
+          );
           setLoading(false);
           return;
         }
-
         if (cancelled) return;
         setUserId(user.id);
 
+        // 2) org from team_members
         const { data: member, error: memberErr } = await supabase
           .from("team_members")
           .select("org_id, status, is_default")
@@ -160,25 +140,28 @@ export default function DriverSettlements() {
 
         if (memberErr) throw memberErr;
         if (!member) {
-          setFatalError(
-            "You do not belong to an active organization. Ask your admin to add you to an org."
+          toast(
+            setToastState,
+            "error",
+            "You do not belong to an active organization."
           );
           setLoading(false);
           return;
         }
-
         if (cancelled) return;
         setOrgId(member.org_id);
 
+        // 3) load drivers + settlements
         await Promise.all([
           loadDrivers(member.org_id),
           loadSettlements(member.org_id),
         ]);
       } catch (err) {
         console.error("[DriverSettlements] init error:", err);
-        setFatalError(
-          err?.message ||
-            "Something went wrong while loading settlements. Please try again."
+        toast(
+          setToastState,
+          "error",
+          err?.message || "Failed to load driver settlements."
         );
       } finally {
         if (!cancelled) setLoading(false);
@@ -186,252 +169,57 @@ export default function DriverSettlements() {
     }
 
     init();
-
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ====================== LOAD DRIVERS ====================== */
+  /* =================== LOAD DRIVERS/SETTLEMENTS =================== */
 
   const loadDrivers = useCallback(
     async (orgIdParam) => {
       const oid = orgIdParam || orgId;
       if (!oid) return;
-
       try {
-        setDriversLoading(true);
-
         const { data, error } = await supabase
           .from("drivers")
-          .select(`
-            id,
-            org_id,
-            first_name,
-            last_name,
-            status
-          `)
+          .select(
+            "id, org_id, first_name, last_name, status, pay_model, pay_rate_percent, pay_rate_per_mile, pay_flat_per_load, escrow_percent"
+          )
           .eq("org_id", oid)
           .order("last_name", { ascending: true });
 
         if (error) throw error;
         setDrivers(data || []);
+
+        // default driver for generate form
+        if (!genDriverId && data && data.length > 0) {
+          setGenDriverId(data[0].id);
+        }
       } catch (err) {
         console.error("[DriverSettlements] loadDrivers error:", err);
         toast(
-          setToast,
+          setToastState,
           "error",
-          err?.message || "Failed to load drivers for this organization."
+          err?.message || "Failed to load drivers."
         );
-      } finally {
-        setDriversLoading(false);
       }
     },
-    [orgId]
+    [orgId, genDriverId]
   );
-
-  /* ==================== LOAD SETTLEMENTS ==================== */
 
   const loadSettlements = useCallback(
     async (orgIdParam) => {
       const oid = orgIdParam || orgId;
       if (!oid) return;
-
       try {
-        setSettlementsLoading(true);
+        if (!orgIdParam) setRefreshing(true);
 
         const { data, error } = await supabase
           .from("driver_settlements")
           .select(
             `
-              id,
-              org_id,
-              driver_id,
-              period_type,
-              period_start,
-              period_end,
-              gross_earnings,
-              total_deductions,
-              net_pay,
-              status,
-              created_at,
-              paid_at,
-              driver:drivers (
-                first_name,
-                last_name
-              )
-            `
-          )
-          .eq("org_id", oid)
-          .order("period_start", { ascending: false })
-          .order("created_at", { ascending: false });
-
-        if (error) throw error;
-
-        setSettlements(data || []);
-      } catch (err) {
-        console.error("[DriverSettlements] loadSettlements error:", err);
-        toast(
-          setToast,
-          "error",
-          err?.message || "Failed to load settlements."
-        );
-      } finally {
-        setSettlementsLoading(false);
-      }
-    },
-    [orgId]
-  );
-
-  /* ================= LOAD LINES FOR ONE SETTLEMENT ================ */
-
-  async function openSettlement(id) {
-    if (!id || !orgId) return;
-
-    setSelectedSettlementId((prev) => (prev === id ? null : id));
-    setSelectedLines([]);
-    if (selectedSettlementId === id) {
-      // just collapsed
-      return;
-    }
-
-    try {
-      setLinesLoading(true);
-
-      const { data, error } = await supabase
-        .from("driver_settlement_lines")
-        .select(
-          `
-            id,
-            org_id,
-            settlement_id,
-            line_kind,
-            description,
-            load_id,
-            amount,
-            is_deduction,
-            code,
-            created_at,
-            load:loads (
-              reference,
-              origin,
-              destination
-            )
-          `
-        )
-        .eq("org_id", orgId)
-        .eq("settlement_id", id)
-        .order("created_at", { ascending: true });
-
-      if (error) throw error;
-
-      setSelectedLines(data || []);
-    } catch (err) {
-      console.error("[DriverSettlements] openSettlement error:", err);
-      toast(
-        setToast,
-        "error",
-        err?.message || "Failed to load settlement lines."
-      );
-    } finally {
-      setLinesLoading(false);
-    }
-  }
-
-  /* ====================== FILTERED SETTLEMENTS ====================== */
-
-  const filteredSettlements = useMemo(() => {
-    return settlements.filter((s) => {
-      if (statusFilter !== "ALL" && s.status !== statusFilter) return false;
-
-      if (searchDriver) {
-        const drv = s.driver;
-        const name = `${drv?.first_name || ""} ${
-          drv?.last_name || ""
-        }`.toLowerCase();
-        if (!name.includes(searchDriver.toLowerCase())) return false;
-      }
-
-      return true;
-    });
-  }, [settlements, statusFilter, searchDriver]);
-
-  /* ====================== GENERATE WEEKLY ====================== */
-
-  async function handleGenerate(e) {
-    e.preventDefault();
-    if (!orgId || !generateForm.driver_id || !generateForm.week_start) {
-      toast(
-        setToast,
-        "error",
-        "Select a driver and a week start date first."
-      );
-      return;
-    }
-
-    try {
-      setGenerateLoading(true);
-
-      const { data, error } = await supabase.rpc(
-        "rpc_generate_driver_settlement_week",
-        {
-          p_driver_id: generateForm.driver_id,
-          p_week_start: generateForm.week_start,
-        }
-      );
-
-      if (error) {
-        console.error(
-          "[DriverSettlements] rpc_generate_driver_settlement_week error:",
-          error
-        );
-        toast(
-          setToast,
-          "error",
-          error.message || "Failed to generate settlement."
-        );
-        return;
-      }
-
-      toast(
-        setToast,
-        "success",
-        "Settlement generated. Loading latest data…"
-      );
-
-      await loadSettlements();
-      if (data) {
-        // auto-expand the new one if it exists in the refreshed list
-        setSelectedSettlementId(data);
-        await openSettlement(data);
-      }
-    } catch (err) {
-      console.error("[DriverSettlements] handleGenerate exception:", err);
-      toast(
-        setToast,
-        "error",
-        err?.message || "Unexpected error while generating settlement."
-      );
-    } finally {
-      setGenerateLoading(false);
-    }
-  }
-
-  /* ====================== UPDATE STATUS ====================== */
-
-  async function updateStatus(id, nextStatus) {
-    if (!id || !orgId) return;
-
-    try {
-      setUpdatingStatusId(id);
-
-      const { data, error } = await supabase
-        .from("driver_settlements")
-        .update({ status: nextStatus })
-        .eq("id", id)
-        .eq("org_id", orgId)
-        .select(
-          `
             id,
             org_id,
             driver_id,
@@ -443,62 +231,227 @@ export default function DriverSettlements() {
             net_pay,
             status,
             created_at,
-            paid_at,
-            driver:drivers (
-              first_name,
-              last_name
-            )
+            updated_at,
+            drivers:driver_id ( first_name, last_name )
           `
-        )
-        .single();
+          )
+          .eq("org_id", oid)
+          .order("period_start", { ascending: false });
+
+        if (error) throw error;
+
+        const mapped =
+          (data || []).map((row) => ({
+            id: row.id,
+            org_id: row.org_id,
+            driver_id: row.driver_id,
+            period_type: row.period_type,
+            period_start: row.period_start,
+            period_end: row.period_end,
+            gross_earnings: row.gross_earnings,
+            total_deductions: row.total_deductions,
+            net_pay: row.net_pay,
+            status: row.status,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            driver_first_name: row.drivers?.first_name || "",
+            driver_last_name: row.drivers?.last_name || "",
+          })) || [];
+
+        setSettlements(mapped);
+
+        // if nothing selected, auto-select first
+        if (!selectedId && mapped.length > 0) {
+          setSelectedId(mapped[0].id);
+        }
+      } catch (err) {
+        console.error("[DriverSettlements] loadSettlements error:", err);
+        toast(
+          setToastState,
+          "error",
+          err?.message || "Failed to load settlements."
+        );
+      } finally {
+        if (!orgIdParam) setRefreshing(false);
+      }
+    },
+    [orgId, selectedId]
+  );
+
+  const loadLinesForSettlement = useCallback(
+    async (settlementId) => {
+      if (!settlementId || !orgId) {
+        setLines([]);
+        return;
+      }
+      try {
+        const { data, error } = await supabase
+          .from("driver_settlement_lines")
+          .select(
+            `
+            id,
+            org_id,
+            settlement_id,
+            line_kind,
+            description,
+            load_id,
+            amount,
+            is_deduction,
+            created_at
+          `
+          )
+          .eq("org_id", orgId)
+          .eq("settlement_id", settlementId)
+          .order("created_at", { ascending: true });
+
+        if (error) throw error;
+        setLines(data || []);
+      } catch (err) {
+        console.error("[DriverSettlements] loadLines error:", err);
+        toast(
+          setToastState,
+          "error",
+          err?.message || "Failed to load settlement details."
+        );
+      }
+    },
+    [orgId]
+  );
+
+  // whenever selection changes, load its lines
+  useEffect(() => {
+    if (!selectedSettlement) {
+      setLines([]);
+      return;
+    }
+    loadLinesForSettlement(selectedSettlement.id);
+  }, [selectedSettlement, loadLinesForSettlement]);
+
+  /* ================== GENERATE WEEKLY SETTLEMENT ================== */
+
+  async function handleGenerate() {
+    if (!genDriverId || !genWeekStart) {
+      toast(
+        setToastState,
+        "error",
+        "Pick a driver and a week start date first."
+      );
+      return;
+    }
+    if (!orgId) {
+      toast(
+        setToastState,
+        "error",
+        "Missing organization context. Try reloading the page."
+      );
+      return;
+    }
+
+    try {
+      setGenerating(true);
+
+      console.log("[DriverSettlements] generating settlement", {
+        driver: genDriverId,
+        weekStart: genWeekStart,
+      });
+
+      const { data, error } = await supabase.rpc(
+        "rpc_generate_driver_settlement_week",
+        {
+          p_driver_id: genDriverId,
+          p_week_start: genWeekStart, // 'YYYY-MM-DD'
+        }
+      );
 
       if (error) {
-        console.error("[DriverSettlements] updateStatus error:", error);
+        console.error(
+          "[DriverSettlements] rpc_generate_driver_settlement_week error:",
+          error
+        );
         toast(
-          setToast,
+          setToastState,
           "error",
-          error.message || "Failed to update settlement status."
+          error.message || "Failed to generate settlement."
         );
         return;
       }
 
-      setSettlements((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, ...data } : s))
-      );
-      toast(setToast, "success", "Status updated.");
-    } catch (err) {
-      console.error("[DriverSettlements] updateStatus exception:", err);
+      const newId = data; // function returns uuid
+
       toast(
-        setToast,
+        setToastState,
+        "success",
+        "Draft settlement generated for that driver/week."
+      );
+
+      // reload settlements and auto-select the new one
+      await loadSettlements(orgId);
+      if (newId) {
+        setSelectedId(newId);
+      }
+    } catch (err) {
+      console.error("[DriverSettlements] handleGenerate exception:", err);
+      toast(
+        setToastState,
         "error",
-        err?.message || "Unexpected error while updating status."
+        err?.message || "Unexpected error generating settlement."
       );
     } finally {
-      setUpdatingStatusId(null);
+      setGenerating(false);
     }
   }
 
-  /* ======================== RENDER HELPERS ======================== */
+  /* ====================== DELETE SETTLEMENT ====================== */
 
-  function renderStatusBadge(status) {
-    const meta = STATUS_BADGE[status] || STATUS_BADGE.DRAFT;
-    return (
-      <span
-        className={cx(
-          "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium",
-          meta.className
-        )}
-      >
-        {meta.label}
-      </span>
+  async function handleDeleteSettlement() {
+    if (!selectedSettlement || !orgId) return;
+
+    const confirmDelete = window.confirm(
+      "Delete this settlement and all its line items? This cannot be undone."
     );
-  }
+    if (!confirmDelete) return;
 
-  function getNextStatus(status) {
-    if (status === "DRAFT") return "REVIEW";
-    if (status === "REVIEW") return "APPROVED";
-    if (status === "APPROVED") return "PAID";
-    return null;
+    try {
+      setDeleting(true);
+
+      // 1) delete lines (org-scoped)
+      const { error: linesErr } = await supabase
+        .from("driver_settlement_lines")
+        .delete()
+        .eq("org_id", orgId)
+        .eq("settlement_id", selectedSettlement.id);
+
+      if (linesErr) throw linesErr;
+
+      // 2) delete header (org-scoped)
+      const { error: headErr } = await supabase
+        .from("driver_settlements")
+        .delete()
+        .eq("org_id", orgId)
+        .eq("id", selectedSettlement.id);
+
+      if (headErr) throw headErr;
+
+      // update local state
+      setSettlements((prev) =>
+        prev.filter((s) => s.id !== selectedSettlement.id)
+      );
+      setLines([]);
+      setSelectedId((prevId) =>
+        prevId === selectedSettlement.id ? null : prevId
+      );
+
+      toast(setToastState, "success", "Settlement deleted.");
+    } catch (err) {
+      console.error("[DriverSettlements] delete settlement error:", err);
+      toast(
+        setToastState,
+        "error",
+        err?.message || "Failed to delete settlement."
+      );
+    } finally {
+      setDeleting(false);
+    }
   }
 
   /* =========================== RENDER =========================== */
@@ -506,188 +459,138 @@ export default function DriverSettlements() {
   if (loading) {
     return (
       <div className="p-6 flex items-center justify-center">
-        <div className="flex items-center gap-3 text-slate-300">
-          <Loader2 className="w-5 h-5 animate-spin" />
-          <span>Loading settlements…</span>
+        <div className="flex items-center gap-2 text-slate-300 text-sm">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Loading driver settlements…</span>
         </div>
       </div>
     );
   }
-
-  if (fatalError) {
-    return (
-      <div className="p-6">
-        <div className="rounded-xl border border-red-500/40 bg-red-500/5 p-4 flex items-start gap-3 text-sm text-red-100">
-          <AlertTriangle className="w-5 h-5 mt-0.5" />
-          <div>
-            <div className="font-semibold mb-1">
-              Cannot load driver settlements
-            </div>
-            <div>{fatalError}</div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const selectedSettlement = settlements.find(
-    (s) => s.id === selectedSettlementId
-  );
 
   return (
     <div className="p-6 space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold text-slate-100">
             Driver settlements
           </h1>
           <p className="text-xs text-slate-400">
-            Accounting view of weekly driver settlements. All data is
-            scoped to your organization via Row Level Security.
+            Accounting view of weekly driver settlements. All data is scoped to
+            your organization via Row Level Security.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => loadSettlements()}
-            disabled={settlementsLoading}
-            className={cx(
-              "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium",
-              "border-slate-700 bg-slate-900/60 hover:bg-slate-800/80",
-              settlementsLoading && "opacity-70 cursor-not-allowed"
-            )}
-          >
-            <RefreshCw
-              className={cx(
-                "w-3.5 h-3.5",
-                settlementsLoading && "animate-spin"
-              )}
-            />
-            <span>Refresh</span>
-          </button>
-        </div>
+        <button
+          onClick={() => loadSettlements()}
+          disabled={refreshing}
+          className={cx(
+            "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium",
+            "border-slate-700 bg-slate-950/70 hover:bg-slate-900/80",
+            refreshing && "opacity-60 cursor-not-allowed"
+          )}
+        >
+          <Loader2
+            className={cx("h-3.5 w-3.5", refreshing && "animate-spin")}
+          />
+          <span>Refresh</span>
+        </button>
       </div>
 
-      {/* Top row: Generate + Filters */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      {/* Top: generate + filters */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.6fr),minmax(0,1fr)] gap-4">
         {/* Generate weekly settlement */}
-        <div className="lg:col-span-2 rounded-xl border border-slate-700/80 bg-slate-950/60 p-4 space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-emerald-400" />
-              <div>
-                <div className="text-xs font-medium text-slate-100">
-                  Generate weekly settlement
-                </div>
-                <p className="text-[11px] text-slate-400">
-                  Pick a driver and the Monday (or first day) of the
-                  week. Atlas will calculate earnings based on their pay
-                  model and create a draft settlement.
-                </p>
-              </div>
-            </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 space-y-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-slate-100">
+            <CalendarDays className="h-4 w-4 text-emerald-400" />
+            <span>Generate weekly settlement</span>
           </div>
+          <p className="text-xs text-slate-400">
+            Pick a driver and the Monday (or first day) of the week. Atlas will
+            calculate earnings based on their pay model and create a draft
+            settlement.
+          </p>
 
-          <form
-            onSubmit={handleGenerate}
-            className="flex flex-wrap items-end gap-3 text-xs"
-          >
-            <div className="flex flex-col gap-1 min-w-[180px]">
-              <label className="text-[11px] text-slate-400">Driver</label>
+          <div className="flex flex-wrap items-center gap-3 mt-1 text-xs">
+            {/* Driver select */}
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400 w-10">Driver</span>
               <select
-                className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100"
-                value={generateForm.driver_id}
-                onChange={(e) =>
-                  setGenerateForm((f) => ({
-                    ...f,
-                    driver_id: e.target.value,
-                  }))
-                }
+                className="min-w-[200px] rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-100"
+                value={genDriverId}
+                onChange={(e) => setGenDriverId(e.target.value)}
               >
-                <option value="">Select driver…</option>
                 {drivers.map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.first_name} {d.last_name}
-                    {d.status === "INACTIVE" ? " (inactive)" : ""}
                   </option>
                 ))}
               </select>
             </div>
 
-            <div className="flex flex-col gap-1 min-w-[160px]">
-              <label className="text-[11px] text-slate-400">
-                Week start date
-              </label>
+            {/* Week start date */}
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400 w-24">Week start date</span>
               <input
                 type="date"
-                className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100"
-                value={generateForm.week_start}
-                onChange={(e) =>
-                  setGenerateForm((f) => ({
-                    ...f,
-                    week_start: e.target.value,
-                  }))
-                }
+                className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-100"
+                value={genWeekStart}
+                onChange={(e) => setGenWeekStart(e.target.value)}
               />
             </div>
 
+            {/* Generate button */}
             <button
-              type="submit"
-              disabled={generateLoading || !orgId}
+              onClick={handleGenerate}
+              disabled={generating || !genDriverId || !genWeekStart}
               className={cx(
                 "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium",
-                "border-emerald-500/60 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20",
-                (generateLoading || !orgId) &&
+                "border-emerald-500/60 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/25",
+                (generating || !genDriverId || !genWeekStart) &&
                   "opacity-60 cursor-not-allowed"
               )}
             >
-              {generateLoading ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              {generating ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <CheckCircle2 className="w-3.5 h-3.5" />
+                <DollarSign className="h-3.5 w-3.5" />
               )}
               <span>Generate settlement</span>
             </button>
-          </form>
+          </div>
         </div>
 
         {/* Filters */}
-        <div className="rounded-xl border border-slate-700/80 bg-slate-950/60 p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <Filter className="w-4 h-4 text-slate-400" />
-            <div className="text-xs font-medium text-slate-100">
-              Filters
-            </div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 space-y-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-slate-100">
+            <Filter className="h-4 w-4 text-amber-400" />
+            <span>Filters</span>
           </div>
 
           <div className="space-y-2 text-xs">
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] text-slate-400">
-                Status
-              </label>
+            {/* Status */}
+            <div className="flex items-center gap-2">
+              <span className="w-10 text-slate-400">Status</span>
               <select
-                className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100"
+                className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-100"
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
               >
                 <option value="ALL">All statuses</option>
                 <option value="DRAFT">Draft</option>
-                <option value="REVIEW">In review</option>
+                <option value="IN_REVIEW">In review</option>
                 <option value="APPROVED">Approved</option>
                 <option value="PAID">Paid</option>
-                <option value="VOID">Void</option>
               </select>
             </div>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] text-slate-400">
-                Driver name
-              </label>
-              <div className="relative">
-                <User className="w-3.5 h-3.5 text-slate-500 absolute left-2 top-1/2 -translate-y-1/2" />
+            {/* Driver search */}
+            <div className="flex items-center gap-2">
+              <span className="w-10 text-slate-400">Driver</span>
+              <div className="flex-1 relative">
+                <User className="h-3.5 w-3.5 text-slate-500 absolute left-2 top-1/2 -translate-y-1/2" />
                 <input
-                  className="w-full rounded-md border border-slate-700 bg-slate-900 pl-7 pr-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-900 pl-7 pr-2 py-1.5 text-xs text-slate-100 placeholder-slate-500"
                   placeholder="Search driver…"
                   value={searchDriver}
                   onChange={(e) => setSearchDriver(e.target.value)}
@@ -695,34 +598,31 @@ export default function DriverSettlements() {
               </div>
             </div>
 
-            <p className="text-[10px] text-slate-500 pt-1 border-t border-slate-800/70 mt-2">
-              Note: In future, status transitions will be restricted to
-              accounting roles only. For now, any org member can move a
-              settlement forward.
+            <p className="text-[11px] text-slate-500 pt-1">
+              In future, status transitions will be restricted to accounting
+              roles only. For now, any org member can move a settlement forward.
             </p>
           </div>
         </div>
       </div>
 
-      {/* Main table + details */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        {/* Table */}
-        <div className="xl:col-span-2 rounded-xl border border-slate-800 bg-slate-950/70 overflow-hidden">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800 text-[11px] text-slate-400">
+      {/* Main: settlements list + details */}
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,2fr),minmax(0,1.3fr)] gap-4">
+        {/* Settlements table */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/80 overflow-hidden">
+          <div className="px-4 py-2 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
             <div className="flex items-center gap-2">
-              <DollarSign className="w-3.5 h-3.5" />
+              <DollarSign className="h-3.5 w-3.5 text-emerald-400" />
               <span>
-                Settlements{" "}
-                <span className="text-slate-500">
-                  ({filteredSettlements.length} of {settlements.length})
-                </span>
+                Settlements ({visibleSettlements.length} of{" "}
+                {settlements.length})
               </span>
             </div>
           </div>
 
-          <div className="overflow-auto max-h-[480px]">
+          <div className="overflow-auto max-h-[420px]">
             <table className="min-w-full text-xs">
-              <thead className="bg-slate-950/90 border-b border-slate-800/80">
+              <thead className="bg-slate-950/90 border-b border-slate-800">
                 <tr className="text-[11px] text-slate-400">
                   <th className="px-3 py-2 text-left">Week</th>
                   <th className="px-3 py-2 text-left">Driver</th>
@@ -730,128 +630,77 @@ export default function DriverSettlements() {
                   <th className="px-3 py-2 text-right">Deductions</th>
                   <th className="px-3 py-2 text-right">Net</th>
                   <th className="px-3 py-2 text-left">Status</th>
-                  <th className="px-3 py-2 text-right w-12"></th>
                 </tr>
               </thead>
               <tbody>
-                {settlementsLoading ? (
+                {visibleSettlements.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={7}
-                      className="px-3 py-4 text-center text-slate-400"
-                    >
-                      <div className="inline-flex items-center gap-2">
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Loading settlements…</span>
-                      </div>
-                    </td>
-                  </tr>
-                ) : filteredSettlements.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={7}
+                      colSpan={6}
                       className="px-3 py-4 text-center text-slate-500"
                     >
                       No settlements match your filters.
                     </td>
                   </tr>
                 ) : (
-                  filteredSettlements.map((s) => {
-                    const isOpen = selectedSettlementId === s.id;
-                    const drvName = `${s.driver?.first_name || ""} ${
-                      s.driver?.last_name || ""
-                    }`.trim();
-
-                    const nextStatus = getNextStatus(s.status);
-
+                  visibleSettlements.map((s) => {
+                    const isActive = s.id === selectedId;
                     return (
                       <tr
                         key={s.id}
+                        onClick={() => setSelectedId(s.id)}
                         className={cx(
-                          "border-t border-slate-800/80 hover:bg-slate-900/40",
-                          isOpen && "bg-slate-900/50"
+                          "border-t border-slate-800 cursor-pointer",
+                          isActive
+                            ? "bg-emerald-500/5"
+                            : "hover:bg-slate-900/40"
                         )}
                       >
-                        {/* Week */}
-                        <td className="px-3 py-1.5 align-top">
+                        <td className="px-3 py-2">
                           <div className="flex flex-col">
                             <span className="text-slate-100">
-                              {formatDate(s.period_start)} –{" "}
-                              {formatDate(s.period_end)}
+                              {fmtDate(s.period_start)} –{" "}
+                              {fmtDate(s.period_end)}
                             </span>
                             <span className="text-[10px] text-slate-500">
-                              Created {formatDate(s.created_at)}
+                              Created {fmtDate(s.created_at)}
                             </span>
                           </div>
                         </td>
-
-                        {/* Driver */}
-                        <td className="px-3 py-1.5 align-top">
+                        <td className="px-3 py-2">
                           <div className="flex flex-col">
                             <span className="text-slate-100">
-                              {drvName || "Unknown driver"}
+                              {s.driver_first_name} {s.driver_last_name}
                             </span>
                             <span className="text-[10px] text-slate-500">
                               ID: {s.id.slice(0, 8)}
                             </span>
                           </div>
                         </td>
-
-                        {/* Gross */}
-                        <td className="px-3 py-1.5 text-right align-top text-slate-100">
-                          {formatMoney(s.gross_earnings)}
+                        <td className="px-3 py-2 text-right text-slate-100">
+                          {fmtMoney(s.gross_earnings)}
                         </td>
-
-                        {/* Deductions */}
-                        <td className="px-3 py-1.5 text-right align-top text-slate-100">
-                          {formatMoney(s.total_deductions)}
+                        <td className="px-3 py-2 text-right text-slate-100">
+                          {fmtMoney(s.total_deductions)}
                         </td>
-
-                        {/* Net */}
-                        <td className="px-3 py-1.5 text-right align-top text-emerald-200">
-                          {formatMoney(s.net_pay)}
+                        <td className="px-3 py-2 text-right text-emerald-300">
+                          {fmtMoney(s.net_pay)}
                         </td>
-
-                        {/* Status */}
-                        <td className="px-3 py-1.5 align-top">
-                          <div className="flex flex-col gap-1">
-                            {renderStatusBadge(s.status)}
-                            {nextStatus && (
-                              <button
-                                onClick={() =>
-                                  updateStatus(s.id, nextStatus)
-                                }
-                                disabled={updatingStatusId === s.id}
-                                className={cx(
-                                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]",
-                                  "border-slate-600/70 text-slate-200 hover:bg-slate-800/80",
-                                  updatingStatusId === s.id &&
-                                    "opacity-60 cursor-not-allowed"
-                                )}
-                              >
-                                {updatingStatusId === s.id ? (
-                                  <Loader2 className="w-3 h-3 animate-spin" />
-                                ) : (
-                                  <ArrowRight className="w-3 h-3" />
-                                )}
-                                <span>Mark {nextStatus}</span>
-                              </button>
+                        <td className="px-3 py-2">
+                          <span
+                            className={cx(
+                              "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium border",
+                              s.status === "PAID"
+                                ? "bg-emerald-500/10 border-emerald-500/60 text-emerald-200"
+                                : s.status === "APPROVED"
+                                ? "bg-sky-500/10 border-sky-500/60 text-sky-200"
+                                : s.status === "IN_REVIEW"
+                                ? "bg-amber-500/10 border-amber-500/60 text-amber-200"
+                                : "bg-slate-700/40 border-slate-500/60 text-slate-200"
                             )}
-                          </div>
-                        </td>
-
-                        {/* Expand */}
-                        <td className="px-3 py-1.5 text-right align-top">
-                          <button
-                            onClick={() => openSettlement(s.id)}
-                            className="inline-flex items-center justify-center rounded-md border border-slate-600 bg-slate-900/80 px-1.5 py-0.5 text-slate-200 hover:bg-slate-800"
                           >
-                            {isOpen ? (
-                              <ChevronDown className="w-3 h-3" />
-                            ) : (
-                              <ChevronRight className="w-3 h-3" />
-                            )}
-                          </button>
+                            {s.status || "DRAFT"}
+                          </span>
                         </td>
                       </tr>
                     );
@@ -862,146 +711,165 @@ export default function DriverSettlements() {
           </div>
         </div>
 
-        {/* Details panel */}
-        <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <FileText className="w-4 h-4 text-slate-300" />
-            <div className="text-xs font-medium text-slate-100">
-              Settlement details
+        {/* Settlement details */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/80 flex flex-col min-h-[260px]">
+          <div className="px-4 py-2 border-b border-slate-800 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-100">
+              <Clock className="h-4 w-4 text-emerald-400" />
+              <span>Settlement details</span>
             </div>
+
+            {selectedSettlement && (
+              <button
+                onClick={handleDeleteSettlement}
+                disabled={deleting}
+                className={cx(
+                  "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-medium",
+                  "border-red-500/70 bg-red-500/10 text-red-100 hover:bg-red-500/20",
+                  deleting && "opacity-60 cursor-not-allowed"
+                )}
+                title="Delete this settlement and all its line items"
+              >
+                {deleting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
+                <span>Delete</span>
+              </button>
+            )}
           </div>
 
           {!selectedSettlement ? (
-            <p className="text-[11px] text-slate-500">
+            <div className="flex-1 flex items-center justify-center text-xs text-slate-500 px-4 py-4">
               Select a settlement from the table to view line items and a
               breakdown of earnings and deductions.
-            </p>
+            </div>
           ) : (
-            <>
-              <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-3 space-y-2 text-xs">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <User className="w-3.5 h-3.5 text-slate-300" />
-                    <div className="flex flex-col">
-                      <span className="text-slate-100">
-                        {selectedSettlement.driver?.first_name}{" "}
-                        {selectedSettlement.driver?.last_name}
+            <div className="flex-1 flex flex-col">
+              {/* Header summary */}
+              <div className="px-4 pt-3 pb-2 border-b border-slate-800 space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-100">
+                      {selectedSettlement.driver_first_name}{" "}
+                      {selectedSettlement.driver_last_name}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-slate-400">
+                      <span className="inline-flex items-center gap-1">
+                        <CalendarDays className="h-3.5 w-3.5" />
+                        Week {fmtDate(selectedSettlement.period_start)} –{" "}
+                        {fmtDate(selectedSettlement.period_end)}
                       </span>
-                      <span className="text-[10px] text-slate-500">
-                        Week {formatDate(selectedSettlement.period_start)} –{" "}
-                        {formatDate(selectedSettlement.period_end)}
+                      <span className="inline-flex items-center gap-1">
+                        <Clock className="h-3.5 w-3.5" />
+                        Created {fmtDate(selectedSettlement.created_at)}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <Hash className="h-3.5 w-3.5" />
+                        ID {selectedSettlement.id}
                       </span>
                     </div>
                   </div>
-                  {renderStatusBadge(selectedSettlement.status)}
+
+                  <div className="text-right text-[11px] space-y-1">
+                    <div className="text-slate-400">Status</div>
+                    <div>
+                      <span
+                        className={cx(
+                          "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium border",
+                          selectedSettlement.status === "PAID"
+                            ? "bg-emerald-500/10 border-emerald-500/60 text-emerald-200"
+                            : selectedSettlement.status === "APPROVED"
+                            ? "bg-sky-500/10 border-sky-500/60 text-sky-200"
+                            : selectedSettlement.status === "IN_REVIEW"
+                            ? "bg-amber-500/10 border-amber-500/60 text-amber-200"
+                            : "bg-slate-700/40 border-slate-500/60 text-slate-200"
+                        )}
+                      >
+                        {selectedSettlement.status || "DRAFT"}
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-800/70 mt-2">
-                  <div>
-                    <div className="text-[10px] text-slate-500">
-                      Gross
-                    </div>
-                    <div className="text-xs text-slate-100">
-                      {formatMoney(selectedSettlement.gross_earnings)}
+                {/* Totals */}
+                <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
+                  <div className="rounded-xl bg-slate-900/80 border border-slate-700 px-3 py-2">
+                    <div className="text-[11px] text-slate-400">Gross</div>
+                    <div className="text-slate-100 font-semibold">
+                      {fmtMoney(selectedSettlement.gross_earnings)}
                     </div>
                   </div>
-                  <div>
-                    <div className="text-[10px] text-slate-500">
+                  <div className="rounded-xl bg-slate-900/80 border border-slate-700 px-3 py-2">
+                    <div className="text-[11px] text-slate-400">
                       Deductions
                     </div>
-                    <div className="text-xs text-rose-200">
-                      {formatMoney(selectedSettlement.total_deductions)}
+                    <div className="text-rose-300 font-semibold">
+                      {fmtMoney(selectedSettlement.total_deductions)}
                     </div>
                   </div>
-                  <div>
-                    <div className="text-[10px] text-slate-500">
-                      Net pay
-                    </div>
-                    <div className="text-xs text-emerald-200">
-                      {formatMoney(selectedSettlement.net_pay)}
+                  <div className="rounded-xl bg-slate-900/80 border border-slate-700 px-3 py-2">
+                    <div className="text-[11px] text-slate-400">Net pay</div>
+                    <div className="text-emerald-300 font-semibold">
+                      {fmtMoney(selectedSettlement.net_pay)}
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-[11px] text-slate-400">
-                  <span>Line items</span>
-                  {linesLoading && (
-                    <span className="inline-flex items-center gap-1 text-slate-400">
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      <span>Loading…</span>
-                    </span>
-                  )}
-                </div>
+              {/* Line items */}
+              <div className="flex-1 overflow-auto px-4 py-3">
+                <div className="text-xs text-slate-400 mb-2">Line items</div>
 
-                <div className="max-h-[280px] overflow-auto rounded-lg border border-slate-800 bg-slate-950/80">
-                  {selectedLines.length === 0 && !linesLoading ? (
-                    <div className="px-3 py-4 text-[11px] text-slate-500">
-                      No line items found for this settlement.
-                    </div>
-                  ) : (
+                {lines.length === 0 ? (
+                  <div className="text-xs text-slate-500">
+                    No line items for this settlement yet.
+                  </div>
+                ) : (
+                  <div className="overflow-auto">
                     <table className="min-w-full text-[11px]">
-                      <thead className="bg-slate-950/90 border-b border-slate-800/80 text-slate-400">
+                      <thead className="border-b border-slate-800 text-slate-400">
                         <tr>
-                          <th className="px-3 py-1.5 text-left">
+                          <th className="text-left px-2 py-1.5 w-1/2">
                             Description
                           </th>
-                          <th className="px-3 py-1.5 text-left">Load</th>
-                          <th className="px-3 py-1.5 text-right">Amount</th>
-                          <th className="px-3 py-1.5 text-left">Type</th>
+                          <th className="text-left px-2 py-1.5">Load</th>
+                          <th className="text-right px-2 py-1.5 w-24">
+                            Amount
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
-                        {selectedLines.map((ln) => {
-                          const isDed = ln.is_deduction;
-                          const loadRef =
-                            ln.load?.reference ||
-                            `${ln.load?.origin || ""} → ${
-                              ln.load?.destination || ""
-                            }`.trim() ||
-                            "—";
-
-                          return (
-                            <tr
-                              key={ln.id}
-                              className="border-t border-slate-800/70"
+                        {lines.map((ln) => (
+                          <tr
+                            key={ln.id}
+                            className="border-b border-slate-900/70"
+                          >
+                            <td className="px-2 py-1.5 text-slate-100">
+                              {ln.description || "—"}
+                            </td>
+                            <td className="px-2 py-1.5 text-slate-400">
+                              {ln.load_id ? ln.load_id.slice(0, 8) : "—"}
+                            </td>
+                            <td
+                              className={cx(
+                                "px-2 py-1.5 text-right",
+                                ln.is_deduction
+                                  ? "text-rose-300"
+                                  : "text-emerald-200"
+                              )}
                             >
-                              <td className="px-3 py-1.5 text-slate-100">
-                                {ln.description || "—"}
-                              </td>
-                              <td className="px-3 py-1.5 text-slate-300">
-                                {loadRef}
-                              </td>
-                              <td
-                                className={cx(
-                                  "px-3 py-1.5 text-right",
-                                  isDed
-                                    ? "text-rose-200"
-                                    : "text-emerald-200"
-                                )}
-                              >
-                                {formatMoney(ln.amount)}
-                              </td>
-                              <td className="px-3 py-1.5 text-slate-400">
-                                {ln.line_kind}
-                                {ln.code ? ` · ${ln.code}` : ""}
-                              </td>
-                            </tr>
-                          );
-                        })}
+                              {fmtMoney(ln.amount)}
+                            </td>
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
-
-              <p className="text-[10px] text-slate-500">
-                Future steps: add PDF export + &ldquo;Send via Atlas&rdquo;
-                so accounting can send approved settlements to drivers by
-                email or SMS.
-              </p>
-            </>
+            </div>
           )}
         </div>
       </div>
@@ -1011,7 +879,7 @@ export default function DriverSettlements() {
         <div className="fixed bottom-4 right-4 z-40">
           <div
             className={cx(
-              "rounded-lg px-3 py-2 text-xs shadow-lg border backdrop-blur bg-slate-950/90",
+              "rounded-lg px-3 py-2 text-xs shadow-lg border backdrop-blur bg-slate-950/95",
               toastState.tone === "error"
                 ? "border-red-500/60 text-red-100"
                 : "border-emerald-500/60 text-emerald-100"

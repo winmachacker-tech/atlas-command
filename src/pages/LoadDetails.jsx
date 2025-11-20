@@ -1,26 +1,7 @@
 ﻿// FILE: src/pages/LoadDetails.jsx
-// Purpose:
-// - Load details UI with comprehensive enhancements
-// - Edit Load functionality
-// - Status Timeline/Progress Bar
-// - Quick Actions Menu
-// - Assigned Driver Info display
-// - Activity/History Log
-// - Inline editing for key fields
-// - Print/Export options
-// - Related Loads section
-// - Profitability metrics with REAL DIESEL PRICES from EIA API
-// - Stop status tracking
-// - Keyboard shortcuts
-// - Dark Google Map with multi-stop route + GREEN polyline (collapsible)
-// - AI Recommendations section (collapsible)
-// - TEMP: Best-Fit Drivers card is static (no hook) to avoid crashes while AI stack is under diagnostics
-// - "Train AI" button placeholder (calls RPC – you can wire to your real one)
-// - "Load Documents" buttons (Upload/Refresh/Open/Delete)
-// - "Send Instructions" button with email/SMS capabilities
-// - AUTO-CALCULATE MILES using Google Distance Matrix API (WITH FALLBACK TO LOADS.ORIGIN/DESTINATION)
-// - RATE PER MILE display in profitability metrics
-
+import WeatherCard from "../components/WeatherCard";
+import RouteWeatherAlerts from "../components/RouteWeatherAlerts";
+import ChainControlAlerts from "../components/ChainControlAlerts";
 import {
   useEffect,
   useMemo,
@@ -31,6 +12,8 @@ import {
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { calculateFuelCost } from "../services/fuelPriceService";
+import { getRouteWeatherAlerts } from "../services/weatherService";
+import { getChainControlAlerts } from "../services/chainControlService";
 import {
   ArrowLeft,
   RefreshCw,
@@ -62,6 +45,7 @@ import {
   Package,
   MapPin,
   Calculator,
+  CloudAlert,
 } from "lucide-react";
 import AiRecommendationsForLoad from "../components/AiRecommendationsForLoad.jsx";
 import {
@@ -177,7 +161,7 @@ function StatusTimeline({ status }) {
 
 /* ------------------------- Map component ------------------------- */
 
-function RouteMap({ stops }) {
+function RouteMap({ stops, onRouteCalculated }) {
   const [coords, setCoords] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -225,12 +209,21 @@ function RouteMap({ stops }) {
 
           if (data.status === "OK" && data.results?.[0]) {
             const { lat, lng } = data.results[0].geometry.location;
-            results.push({ lat, lng });
+            results.push({ 
+              lat, 
+              lng,
+              name: stop.location_name || stop.city || 'Stop',
+              stopType: stop.stop_type
+            });
           }
         }
 
         if (!cancelled) {
           setCoords(results);
+          // Notify parent component with waypoints for weather checking
+          if (onRouteCalculated && results.length >= 2) {
+            onRouteCalculated(results);
+          }
         }
       } catch (err) {
         console.error("[RouteMap] geocode error", err);
@@ -245,7 +238,7 @@ function RouteMap({ stops }) {
     return () => {
       cancelled = true;
     };
-  }, [activeStops]);
+  }, [activeStops, onRouteCalculated]);
 
   const center = useMemo(() => {
     if (!coords.length) {
@@ -436,6 +429,14 @@ export default function LoadDetails() {
     pricePerGallon: 3.87, // Default fallback
   });
 
+  // Route weather alerts - NEW
+  const [routeWeatherAlerts, setRouteWeatherAlerts] = useState([]);
+  const [loadingWeatherAlerts, setLoadingWeatherAlerts] = useState(false);
+
+  // Chain control alerts - NEW
+  const [chainControlAlerts, setChainControlAlerts] = useState([]);
+  const [loadingChainAlerts, setLoadingChainAlerts] = useState(false);
+
   const fileInputRef = useRef(null);
   const quickActionsRef = useRef(null);
 
@@ -444,6 +445,8 @@ export default function LoadDetails() {
   const [showAiSection, setShowAiSection] = useState(true);
   const [showActivityLog, setShowActivityLog] = useState(false);
   const [showRelatedLoads, setShowRelatedLoads] = useState(false);
+  const [showWeatherAlerts, setShowWeatherAlerts] = useState(true); // NEW
+  const [showChainAlerts, setShowChainAlerts] = useState(true); // NEW
 
   const loadKey = load?.id?.slice(0, 6) ?? "—";
 
@@ -511,6 +514,42 @@ export default function LoadDetails() {
 
     fetchFuelCost();
   }, [load?.miles]);
+
+  /* -------- Callback for when route is calculated in map -------- */
+  const handleRouteCalculated = useCallback(async (waypoints) => {
+    console.log('[LoadDetails] Route calculated, checking weather and chain requirements for waypoints:', waypoints);
+    
+    if (!waypoints || waypoints.length < 2) return;
+
+    try {
+      // Check weather alerts
+      setLoadingWeatherAlerts(true);
+      const weatherAlerts = await getRouteWeatherAlerts(waypoints);
+      setRouteWeatherAlerts(weatherAlerts);
+      console.log('[LoadDetails] Weather alerts received:', weatherAlerts);
+      
+      // Auto-expand weather alerts section if there are alerts
+      if (weatherAlerts && weatherAlerts.length > 0) {
+        setShowWeatherAlerts(true);
+      }
+      
+      // Check chain control requirements
+      setLoadingChainAlerts(true);
+      const chainAlerts = await getChainControlAlerts(waypoints);
+      setChainControlAlerts(chainAlerts);
+      console.log('[LoadDetails] Chain control alerts received:', chainAlerts);
+      
+      // Auto-expand chain alerts section if there are alerts
+      if (chainAlerts && chainAlerts.length > 0) {
+        setShowChainAlerts(true);
+      }
+    } catch (error) {
+      console.error('[LoadDetails] Error fetching route alerts:', error);
+    } finally {
+      setLoadingWeatherAlerts(false);
+      setLoadingChainAlerts(false);
+    }
+  }, []);
 
   /* -------- fetch load + stops + driver + activity + related -------- */
 
@@ -1902,6 +1941,32 @@ export default function LoadDetails() {
           </div>
         </section>
 
+        {/* Weather Section */}
+        <section className="bg-slate-900/70 border border-sky-500/30 rounded-2xl p-5 space-y-4">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🌤️</span>
+            <h2 className="text-base font-semibold text-slate-50">
+              Weather Conditions
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Pickup Weather */}
+            <WeatherCard 
+              city={pickupDisplayCity} 
+              state={pickupDisplayState}
+              label="Pickup Weather"
+            />
+
+            {/* Delivery Weather */}
+            <WeatherCard 
+              city={deliveryDisplayCity} 
+              state={deliveryDisplayState}
+              label="Delivery Weather"
+            />
+          </div>
+        </section>
+
         {/* Right column: Driver + Best-Fit + docs */}
         <div className="space-y-4">
           {/* Assigned Driver Info */}
@@ -2068,6 +2133,87 @@ export default function LoadDetails() {
         </div>
       </div>
 
+      {/* Route Weather Alerts Section - NEW */}
+      <section className="bg-slate-900/70 border border-amber-500/30 rounded-2xl p-5">
+        <button
+          type="button"
+          onClick={() => setShowWeatherAlerts((v) => !v)}
+          className="w-full flex items-center justify-between gap-2 mb-4 text-left"
+        >
+          <div className="flex items-center gap-2">
+            <CloudAlert className="h-4 w-4 text-amber-300" />
+            <h2 className="text-base font-semibold text-slate-50">
+              Weather Along Route
+            </h2>
+            {routeWeatherAlerts.length > 0 && (
+              <span className="inline-flex items-center rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-200 border border-amber-500/40">
+                {routeWeatherAlerts.length} Alert{routeWeatherAlerts.length !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 text-[11px] text-slate-400">
+            <span>{showWeatherAlerts ? "Collapse" : "Expand"}</span>
+            <ChevronDown
+              className={cx(
+                "h-4 w-4 transition-transform",
+                showWeatherAlerts ? "rotate-0" : "-rotate-90"
+              )}
+            />
+          </div>
+        </button>
+
+        {showWeatherAlerts && (
+          <RouteWeatherAlerts 
+            alerts={routeWeatherAlerts} 
+            loading={loadingWeatherAlerts}
+          />
+        )}
+      </section>
+
+      {/* Chain Control Alerts Section - NEW */}
+      <section className="bg-slate-900/70 border border-red-500/30 rounded-2xl p-5">
+        <button
+          type="button"
+          onClick={() => setShowChainAlerts((v) => !v)}
+          className="w-full flex items-center justify-between gap-2 mb-4 text-left"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-xl">⛓️</span>
+            <h2 className="text-base font-semibold text-slate-50">
+              Chain Control & Mountain Passes
+            </h2>
+            {chainControlAlerts.length > 0 && (
+              <span className={cx(
+                "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border",
+                chainControlAlerts.some(a => a.chainRequirement.code === 'R3')
+                  ? "bg-red-500/20 text-red-200 border-red-500/40"
+                  : chainControlAlerts.some(a => a.chainRequirement.code === 'R2')
+                  ? "bg-amber-500/20 text-amber-200 border-amber-500/40"
+                  : "bg-yellow-500/20 text-yellow-200 border-yellow-500/40"
+              )}>
+                {chainControlAlerts.length} Alert{chainControlAlerts.length !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 text-[11px] text-slate-400">
+            <span>{showChainAlerts ? "Collapse" : "Expand"}</span>
+            <ChevronDown
+              className={cx(
+                "h-4 w-4 transition-transform",
+                showChainAlerts ? "rotate-0" : "-rotate-90"
+              )}
+            />
+          </div>
+        </button>
+
+        {showChainAlerts && (
+          <ChainControlAlerts 
+            alerts={chainControlAlerts} 
+            loading={loadingChainAlerts}
+          />
+        )}
+      </section>
+
       {/* Route & Stops with status tracking */}
       <section className="bg-slate-900/70 border border-emerald-500/30 rounded-2xl p-5 space-y-4">
         <div className="flex items-center justify-between gap-2">
@@ -2193,7 +2339,12 @@ export default function LoadDetails() {
           </div>
         </button>
 
-        {showRouteMap && <RouteMap stops={displayStops} />}
+        {showRouteMap && (
+          <RouteMap 
+            stops={displayStops} 
+            onRouteCalculated={handleRouteCalculated}
+          />
+        )}
       </section>
 
       {/* AI Recommendations (collapsible) */}

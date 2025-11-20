@@ -1056,11 +1056,12 @@ export default function Loads() {
 
       {/* Add Load modal */}
       {isAddOpen && (
-        <AddLoadModal
-          onClose={() => setIsAddOpen(false)}
-          onAdded={(row) => setLoads((prev) => [row, ...prev])}
-        />
-      )}
+  <AddLoadModal
+    isOpen={isAddOpen}
+    onClose={() => setIsAddOpen(false)}
+    onAdded={(row) => setLoads((prev) => [row, ...prev])}
+  />
+)}
 
       {/* Edit Load modal */}
      {editingLoad && (
