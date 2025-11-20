@@ -37,7 +37,7 @@
 //   - Extra fields from V2 (is_busy, thumbs_up, assign_count) are safe to ignore
 //     if you don't want to display them yet.
 
-import { useState, useEffect } from "react";
+import { useState, useMemo, useCallback, memo } from "react";
 import { supabase } from "../lib/supabase";
 import {
   Bot,
@@ -51,59 +51,89 @@ function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
 
-export default function LoadPredictCell(props) {
+// Make source string human-readable for V2 sources
+function describeSource(source) {
+  if (!source) return "No data";
+  if (source === "v2_assign+thumbs") return "Assignments + thumbs";
+  if (source === "v2_assign_only") return "Assignments only";
+  if (source === "v2_thumbs_only") return "Thumbs-only data";
+  if (source === "v2_fallback") return "Heuristic fallback";
+  // backwards-compatible with any old sources
+  if (source === "model") return "Learned model";
+  if (source === "thumbs") return "Thumbs-only fallback";
+  return source;
+}
+
+function LoadPredictCell(props) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [results, setResults] = useState([]);
   const [hasAttemptedPredict, setHasAttemptedPredict] = useState(false);
 
-  // Pull "load" if it exists, but keep access to ALL props
-  const load = props?.load ?? undefined;
+  // Memoize expensive prop extraction
+  const { loadId, originText, destinationText, hasOriginDest } = useMemo(() => {
+    // Pull "load" if it exists
+    const load = props?.load ?? undefined;
 
-  // 🔍 Debug: see what props + load actually look like
-  useEffect(() => {
-    console.log("[LoadPredictCell] props for AI:", props);
-    if (load) {
-      console.log("[LoadPredictCell] derived load object:", load);
-    }
-  }, [props, load]);
+    // Robust load ID detection
+    const id =
+      (load && (load.id || load.load_id || load.loadID || load.loadId)) ||
+      props?.load_id ||
+      props?.loadId ||
+      props?.id ||
+      null;
 
-  // Robust load ID detection
-  const loadId =
-    (load && (load.id || load.load_id || load.loadID || load.loadId)) ||
-    props?.load_id ||
-    props?.loadId ||
-    props?.id ||
-    null;
+    // Try to be smart about origin / destination labels
+    const origin =
+      load?.origin ||
+      load?.origin_city ||
+      load?.pickup_city ||
+      load?.origin_label ||
+      load?.origin_display ||
+      null;
 
-  // Try to be smart about origin / destination labels (if we ever get load)
-  const originText =
-    load?.origin ||
-    load?.origin_city ||
-    load?.pickup_city ||
-    load?.origin_label ||
-    load?.origin_display ||
-    null;
+    const destination =
+      load?.destination ||
+      load?.dest_city ||
+      load?.delivery_city ||
+      load?.destination_label ||
+      load?.destination_display ||
+      null;
 
-  const destinationText =
-    load?.destination ||
-    load?.dest_city ||
-    load?.delivery_city ||
-    load?.destination_label ||
-    load?.destination_display ||
-    null;
+    return {
+      loadId: id,
+      originText: origin,
+      destinationText: destination,
+      hasOriginDest: !!(origin && destination),
+    };
+  }, [
+    props?.load?.id,
+    props?.load?.load_id,
+    props?.load?.loadID,
+    props?.load?.loadId,
+    props?.load_id,
+    props?.loadId,
+    props?.id,
+    props?.load?.origin,
+    props?.load?.origin_city,
+    props?.load?.pickup_city,
+    props?.load?.origin_label,
+    props?.load?.origin_display,
+    props?.load?.destination,
+    props?.load?.dest_city,
+    props?.load?.delivery_city,
+    props?.load?.destination_label,
+    props?.load?.destination_display,
+  ]);
 
-  const hasOriginDest = !!(originText && destinationText);
-
-  async function handlePredict() {
+  const handlePredict = useCallback(async () => {
     setErr("");
     setHasAttemptedPredict(true);
 
     if (!loadId) {
       console.warn(
-        "[LoadPredictCell] Missing loadId. Cannot call rpc_ai_best_drivers_for_lane_v2. Full props:",
-        props
+        "[LoadPredictCell] Missing loadId. Cannot call rpc_ai_best_drivers_for_lane_v2."
       );
       setErr("This load is missing an ID, so Atlas can't run AI on it.");
       return;
@@ -111,11 +141,6 @@ export default function LoadPredictCell(props) {
 
     setLoading(true);
     try {
-      console.log(
-        "[LoadPredictCell] Calling rpc_ai_best_drivers_for_lane_v2 with loadId:",
-        loadId
-      );
-
       // ⬇️ IMPORTANT: call the V2 RPC (does NOT remove or modify V1 on the backend)
       const { data, error } = await supabase.rpc(
         "rpc_ai_best_drivers_for_lane_v2",
@@ -146,8 +171,13 @@ export default function LoadPredictCell(props) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [loadId]);
 
+  const handleToggle = useCallback(() => {
+    setOpen((v) => !v);
+  }, []);
+
+  // Memoize computed values
   const top = results[0];
 
   const laneLabel =
@@ -158,20 +188,6 @@ export default function LoadPredictCell(props) {
       : "Lane unknown";
 
   const modelVer = top?.model_ver || "N/A";
-
-  // Make the source string human-readable for V2 sources
-  function describeSource(source) {
-    if (!source) return "No data";
-    if (source === "v2_assign+thumbs") return "Assignments + thumbs";
-    if (source === "v2_assign_only") return "Assignments only";
-    if (source === "v2_thumbs_only") return "Thumbs-only data";
-    if (source === "v2_fallback") return "Heuristic fallback";
-    // backwards-compatible with any old sources
-    if (source === "model") return "Learned model";
-    if (source === "thumbs") return "Thumbs-only fallback";
-    return source;
-  }
-
   const sourceLabel = describeSource(top?.source);
 
   return (
@@ -211,7 +227,7 @@ export default function LoadPredictCell(props) {
       {results.length > 0 && (
         <button
           type="button"
-          onClick={() => setOpen((v) => !v)}
+          onClick={handleToggle}
           className="w-full rounded-lg border border-slate-700 bg-slate-900/60 px-2 py-1 flex items-center justify-between hover:bg-slate-800/80"
         >
           <div className="flex flex-col text-left">
@@ -287,3 +303,26 @@ export default function LoadPredictCell(props) {
     </div>
   );
 }
+
+// 🔥 CRITICAL: Memoize the component to prevent unnecessary re-renders
+export default memo(LoadPredictCell, (prevProps, nextProps) => {
+  // Custom comparison - only re-render if load data actually changed
+  const prevLoad = prevProps?.load;
+  const nextLoad = nextProps?.load;
+  
+  // Compare load IDs
+  const prevId = prevLoad?.id || prevLoad?.load_id || prevProps?.load_id || prevProps?.id;
+  const nextId = nextLoad?.id || nextLoad?.load_id || nextProps?.load_id || nextProps?.id;
+  
+  if (prevId !== nextId) return false; // Props changed, re-render
+  
+  // Compare origin/destination
+  const prevOrigin = prevLoad?.origin || prevLoad?.origin_city;
+  const nextOrigin = nextLoad?.origin || nextLoad?.origin_city;
+  const prevDest = prevLoad?.destination || prevLoad?.dest_city;
+  const nextDest = nextLoad?.destination || nextLoad?.dest_city;
+  
+  if (prevOrigin !== nextOrigin || prevDest !== nextDest) return false;
+  
+  return true; // Props are the same, skip re-render
+});

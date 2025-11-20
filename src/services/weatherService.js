@@ -7,32 +7,70 @@ const weatherCache = new Map();
 const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
 
 /**
+ * Check if a string looks like a street address
+ */
+function looksLikeStreetAddress(str) {
+  if (!str) return false;
+  const streetPatterns = /^\d+|street|st\b|avenue|ave\b|boulevard|blvd|road|rd\b|drive|dr\b|lane|ln\b|way|court|ct\b|circle|place|pl\b/i;
+  return streetPatterns.test(str);
+}
+
+/**
  * Parse city and state from a full address
- * @param {string} address - Full address (e.g., "123 Main St\nFolsom,CA,US")
+ * @param {string} address - Full address (e.g., "123 Main St,Folsom,CA,US" or "123 Main St\nFolsom,CA,US")
  * @returns {Object} { city, state }
  */
 function parseCityState(address) {
   if (!address) return { city: null, state: null };
   
-  // If it's already just "City, State" format
-  if (!address.includes('\n') && address.includes(',')) {
-    const parts = address.split(',').map(s => s.trim());
-    return { city: parts[0], state: parts[1] || 'US' };
+  console.log('[Weather] Parsing address:', address);
+  
+  // Normalize: replace newlines with commas for consistent parsing
+  const normalized = address.replace(/\n/g, ',');
+  const parts = normalized.split(',').map(s => s.trim()).filter(Boolean);
+  
+  if (parts.length === 0) return { city: null, state: null };
+  
+  // If only one part and it looks like a street address, we can't extract city
+  if (parts.length === 1) {
+    if (looksLikeStreetAddress(parts[0])) {
+      console.warn('[Weather] Single part looks like street address, cannot extract city:', parts[0]);
+      return { city: null, state: null };
+    }
+    return { city: parts[0], state: 'US' };
   }
   
-  // Parse full address: "123 Street\nCity,State,Country"
-  const lines = address.split('\n');
-  if (lines.length > 1) {
-    const cityStateLine = lines[1].trim();
-    const parts = cityStateLine.split(',').map(s => s.trim());
-    return { 
-      city: parts[0], 
-      state: parts[1] || 'US'
-    };
+  // Filter out parts that look like street addresses
+  const nonStreetParts = parts.filter(p => !looksLikeStreetAddress(p));
+  
+  console.log('[Weather] Non-street parts:', nonStreetParts);
+  
+  // If we filtered everything out, try to find city before country code
+  if (nonStreetParts.length === 0) {
+    // Try to find city before "US" or similar country code
+    const countryIndex = parts.findIndex(p => p.toUpperCase() === 'US' || p.toUpperCase() === 'USA');
+    if (countryIndex > 0) {
+      const cityPart = parts[countryIndex - 1];
+      // Make sure it's not a street address
+      if (!looksLikeStreetAddress(cityPart)) {
+        return { city: cityPart, state: parts[countryIndex + 1] || 'US' };
+      }
+    }
+    
+    console.warn('[Weather] Could not extract city from:', address);
+    return { city: null, state: null };
   }
   
-  // Fallback: assume it's just the city
-  return { city: address.trim(), state: 'US' };
+  // Standard parsing from filtered parts
+  // Format is usually: City, State, Country
+  const city = nonStreetParts[0];
+  const state = nonStreetParts[1] && nonStreetParts[1].toUpperCase() !== 'US' && nonStreetParts[1].toUpperCase() !== 'USA' 
+    ? nonStreetParts[1] 
+    : null;
+  
+  console.log('[Weather] Extracted city:', city, 'state:', state);
+  
+  return { city, state };
 }
 
 /**
@@ -51,10 +89,22 @@ export async function getWeatherByCity(cityOrAddress, state) {
   let city = cityOrAddress;
   let stateCode = state;
   
-  if (cityOrAddress && cityOrAddress.includes('\n')) {
+  // Check if this looks like it needs parsing
+  const needsParsing = cityOrAddress && (
+    cityOrAddress.includes(',') || 
+    cityOrAddress.includes('\n') ||
+    looksLikeStreetAddress(cityOrAddress)
+  );
+  
+  if (needsParsing) {
     const parsed = parseCityState(cityOrAddress);
-    city = parsed.city;
-    stateCode = parsed.state;
+    if (parsed.city) {
+      city = parsed.city;
+      stateCode = parsed.state || stateCode;
+    } else {
+      console.warn('[Weather] Failed to parse city from address:', cityOrAddress);
+      return null;
+    }
   }
 
   if (!city) {
@@ -62,17 +112,24 @@ export async function getWeatherByCity(cityOrAddress, state) {
     return null;
   }
 
-  const cacheKey = `${city},${stateCode}`.toLowerCase();
+  const cacheKey = `${city},${stateCode || 'US'}`.toLowerCase();
   const cached = weatherCache.get(cacheKey);
   
   // Return cached data if still fresh
   if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+    console.log('[Weather] Using cached data for:', cacheKey);
     return cached.data;
   }
 
   try {
-    const query = `${city},${stateCode},US`;
+    // Build query - handle US state codes properly
+    const query = stateCode && stateCode.length === 2 && stateCode.toUpperCase() !== 'US'
+      ? `${city},${stateCode},US`
+      : `${city},US`;
+      
     const url = `${BASE_URL}/weather?q=${encodeURIComponent(query)}&appid=${OPENWEATHER_API_KEY}&units=imperial`;
+    
+    console.log(`[Weather] Fetching weather for: ${query}`);
     
     const response = await fetch(url);
     
@@ -103,7 +160,7 @@ export async function getWeatherByCity(cityOrAddress, state) {
     
     return weather;
   } catch (error) {
-    console.error('Failed to fetch weather:', error);
+    console.error('[Weather] Failed to fetch weather:', error);
     return null;
   }
 }

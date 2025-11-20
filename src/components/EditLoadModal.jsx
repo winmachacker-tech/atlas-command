@@ -4,10 +4,7 @@
 // - Edits core load fields only (no schema changes)
 // - Calls Supabase to update the existing load row
 //
-// Notes:
-// - Expects a `load` object with the current values
-// - Parent should pass: { load, onClose, onUpdated? }
-// - Does NOT touch any RLS / security. Just a normal update.
+// FIXED: Field names now match actual database schema
 
 import { useEffect, useState } from "react";
 import { X, Loader2, ChevronDown } from "lucide-react";
@@ -41,9 +38,9 @@ function IconButton({ title, onClick, children }) {
 }
 
 // Simple options for a status dropdown.
-// Adjust values to match your `loads.status` enum/text.
 const STATUS_OPTIONS = [
   "AVAILABLE",
+  "DISPATCHED",
   "IN_TRANSIT",
   "DELIVERED",
   "CANCELLED",
@@ -68,34 +65,34 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
     if (!load) return;
 
     setForm({
-      // BASIC
-      reference_number: load.reference_number ?? load.load_number ?? "",
+      // BASIC - Using correct field names from database
+      reference: load.reference ?? load.load_number ?? "",
       status: load.status ?? "AVAILABLE",
 
-      // LOCATIONS & SCHEDULE
+      // LOCATIONS & SCHEDULE - Using correct field names
       origin_city: load.origin_city ?? "",
       origin_state: load.origin_state ?? "",
-      destination_city: load.destination_city ?? "",
-      destination_state: load.destination_state ?? "",
+      dest_city: load.dest_city ?? load.destination_city ?? "",
+      dest_state: load.dest_state ?? load.destination_state ?? "",
       pickup_date: load.pickup_date ?? "",
       pickup_time: load.pickup_time ?? "",
       delivery_date: load.delivery_date ?? "",
       delivery_time: load.delivery_time ?? "",
 
-      // CONTACTS
-      shipper_company: load.shipper_company ?? "",
-      broker_customer: load.broker_customer ?? "",
-      shipper_contact: load.shipper_contact ?? "",
-      shipper_phone: load.shipper_phone ?? "",
-      shipper_email: load.shipper_email ?? "",
-      receiver_contact: load.receiver_contact ?? "",
-      receiver_phone: load.receiver_phone ?? "",
-      receiver_email: load.receiver_email ?? "",
+      // CONTACTS - Using correct field names
+      shipper: load.shipper ?? load.shipper_company ?? "",
+      broker: load.broker ?? load.broker_customer ?? "",
+      shipper_contact_name: load.shipper_contact_name ?? load.shipper_contact ?? "",
+      shipper_contact_phone: load.shipper_contact_phone ?? load.shipper_phone ?? "",
+      shipper_contact_email: load.shipper_contact_email ?? load.shipper_email ?? "",
+      receiver_contact_name: load.receiver_contact_name ?? load.receiver_contact ?? "",
+      receiver_contact_phone: load.receiver_contact_phone ?? load.receiver_phone ?? "",
+      receiver_contact_email: load.receiver_contact_email ?? load.receiver_email ?? "",
 
-      // DETAILS
+      // DETAILS - Using correct field names
       commodity: load.commodity ?? "",
       equipment_type: load.equipment_type ?? "",
-      weight_lbs: load.weight_lbs ?? "",
+      weight: load.weight ?? load.weight_lbs ?? "",
       pieces: load.pieces ?? "",
       temperature: load.temperature ?? "",
       special_instructions: load.special_instructions ?? "",
@@ -118,59 +115,77 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
     setSaving(true);
     setError("");
 
-    // Change these keys to match your `loads` table exactly if needed.
+    // Build payload with CORRECT field names matching database schema
     const updatePayload = {
-      status: form.status,
-      reference_number: form.reference_number,
+      status: form.status || null,
+      reference: form.reference || null,
 
-      origin_city: form.origin_city,
-      origin_state: form.origin_state,
-      destination_city: form.destination_city,
-      destination_state: form.destination_state,
-      pickup_date: form.pickup_date,
-      pickup_time: form.pickup_time,
-      delivery_date: form.delivery_date,
-      delivery_time: form.delivery_time,
+      // Locations - using correct field names
+      origin_city: form.origin_city || null,
+      origin_state: form.origin_state || null,
+      dest_city: form.dest_city || null,
+      dest_state: form.dest_state || null,
+      
+      pickup_date: form.pickup_date || null,
+      pickup_time: form.pickup_time || null,
+      delivery_date: form.delivery_date || null,
+      delivery_time: form.delivery_time || null,
 
-      shipper_company: form.shipper_company,
-      broker_customer: form.broker_customer,
-      shipper_contact: form.shipper_contact,
-      shipper_phone: form.shipper_phone,
-      shipper_email: form.shipper_email,
-      receiver_contact: form.receiver_contact,
-      receiver_phone: form.receiver_phone,
-      receiver_email: form.receiver_email,
+      // Companies - using correct field names
+      shipper: form.shipper || null,
+      broker: form.broker || null,
+      
+      // Contacts - using correct field names
+      shipper_contact_name: form.shipper_contact_name || null,
+      shipper_contact_phone: form.shipper_contact_phone || null,
+      shipper_contact_email: form.shipper_contact_email || null,
+      receiver_contact_name: form.receiver_contact_name || null,
+      receiver_contact_phone: form.receiver_contact_phone || null,
+      receiver_contact_email: form.receiver_contact_email || null,
 
-      commodity: form.commodity,
-      equipment_type: form.equipment_type,
-      weight_lbs: form.weight_lbs === "" ? null : Number(form.weight_lbs),
-      pieces: form.pieces === "" ? null : Number(form.pieces),
-      temperature: form.temperature,
-      special_instructions: form.special_instructions,
-      miles: form.miles === "" ? null : Number(form.miles),
-      rate: form.rate === "" ? null : Number(form.rate),
+      // Load details - using correct field names
+      commodity: form.commodity || null,
+      equipment_type: form.equipment_type || null,
+      weight: form.weight && !isNaN(parseFloat(form.weight)) ? parseFloat(form.weight) : null,
+      pieces: form.pieces && !isNaN(parseInt(form.pieces)) ? parseInt(form.pieces) : null,
+      temperature: form.temperature || null,
+      special_instructions: form.special_instructions || null,
+      miles: form.miles && !isNaN(parseInt(form.miles)) ? parseInt(form.miles) : null,
+      rate: form.rate && !isNaN(parseFloat(form.rate)) ? parseFloat(form.rate) : null,
     };
 
-    // Remove undefined keys so we don't accidentally blow up
+    // CRITICAL: Convert empty strings to null
     Object.keys(updatePayload).forEach((k) => {
-      if (updatePayload[k] === undefined) delete updatePayload[k];
+      if (updatePayload[k] === undefined || updatePayload[k] === "") {
+        updatePayload[k] = null;
+      }
     });
 
-    const { error: dbError } = await supabase
+    console.log("[EditLoadModal] Updating load with payload:", updatePayload);
+
+    const { data, error: dbError } = await supabase
       .from("loads")
       .update(updatePayload)
-      .eq("id", load.id);
+      .eq("id", load.id)
+      .select()
+      .single();
 
     setSaving(false);
 
     if (dbError) {
       console.error("[EditLoadModal] update error:", dbError);
+      console.error("[EditLoadModal] Error message:", dbError.message);
+      console.error("[EditLoadModal] Error details:", dbError.details);
+      console.error("[EditLoadModal] Error hint:", dbError.hint);
+      console.error("[EditLoadModal] Payload that failed:", updatePayload);
       setError(dbError.message || "Failed to update load.");
       return;
     }
 
+    console.log("[EditLoadModal] Successfully updated load:", data);
+
     if (onUpdated) {
-      onUpdated(updatePayload);
+      onUpdated(data);
     }
 
     if (onClose) {
@@ -189,7 +204,7 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
             </p>
             <div className="flex items-baseline gap-3">
               <h2 className="text-xl font-semibold text-slate-50">
-                {form.reference_number || "—"}
+                {form.reference || load.id?.slice(0, 6) || "—"}
               </h2>
               <span className="rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide text-emerald-200">
                 {form.status || "AVAILABLE"}
@@ -225,9 +240,9 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                 <label className="text-xs text-slate-400">Load #</label>
                 <input
                   type="text"
-                  value={form.reference_number}
+                  value={form.reference}
                   onChange={(e) =>
-                    updateField("reference_number", e.target.value)
+                    updateField("reference", e.target.value)
                   }
                   className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
@@ -257,9 +272,9 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                 </label>
                 <input
                   type="text"
-                  value={form.shipper_company}
+                  value={form.shipper}
                   onChange={(e) =>
-                    updateField("shipper_company", e.target.value)
+                    updateField("shipper", e.target.value)
                   }
                   className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
@@ -271,9 +286,9 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                 </label>
                 <input
                   type="text"
-                  value={form.broker_customer}
+                  value={form.broker}
                   onChange={(e) =>
-                    updateField("broker_customer", e.target.value)
+                    updateField("broker", e.target.value)
                   }
                   className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
@@ -303,11 +318,12 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                   <input
                     type="text"
                     placeholder="State"
+                    maxLength={2}
                     value={form.origin_state}
                     onChange={(e) =>
-                      updateField("origin_state", e.target.value)
+                      updateField("origin_state", e.target.value.toUpperCase())
                     }
-                    className="h-9 rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
+                    className="h-9 rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 uppercase outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                   />
                 </div>
               </div>
@@ -319,20 +335,21 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                   <input
                     type="text"
                     placeholder="City"
-                    value={form.destination_city}
+                    value={form.dest_city}
                     onChange={(e) =>
-                      updateField("destination_city", e.target.value)
+                      updateField("dest_city", e.target.value)
                     }
                     className="h-9 rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                   />
                   <input
                     type="text"
                     placeholder="State"
-                    value={form.destination_state}
+                    maxLength={2}
+                    value={form.dest_state}
                     onChange={(e) =>
-                      updateField("destination_state", e.target.value)
+                      updateField("dest_state", e.target.value.toUpperCase())
                     }
-                    className="h-9 rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
+                    className="h-9 rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 uppercase outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                   />
                 </div>
               </div>
@@ -396,9 +413,9 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                 <label className="text-xs text-slate-400">Shipper Contact</label>
                 <input
                   type="text"
-                  value={form.shipper_contact}
+                  value={form.shipper_contact_name}
                   onChange={(e) =>
-                    updateField("shipper_contact", e.target.value)
+                    updateField("shipper_contact_name", e.target.value)
                   }
                   className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
@@ -407,9 +424,9 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                 <label className="text-xs text-slate-400">Shipper Phone</label>
                 <input
                   type="text"
-                  value={form.shipper_phone}
+                  value={form.shipper_contact_phone}
                   onChange={(e) =>
-                    updateField("shipper_phone", e.target.value)
+                    updateField("shipper_contact_phone", e.target.value)
                   }
                   className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
@@ -418,9 +435,9 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                 <label className="text-xs text-slate-400">Shipper Email</label>
                 <input
                   type="email"
-                  value={form.shipper_email}
+                  value={form.shipper_contact_email}
                   onChange={(e) =>
-                    updateField("shipper_email", e.target.value)
+                    updateField("shipper_contact_email", e.target.value)
                   }
                   className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
@@ -435,9 +452,9 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                 </label>
                 <input
                   type="text"
-                  value={form.receiver_contact}
+                  value={form.receiver_contact_name}
                   onChange={(e) =>
-                    updateField("receiver_contact", e.target.value)
+                    updateField("receiver_contact_name", e.target.value)
                   }
                   className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
@@ -446,9 +463,9 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                 <label className="text-xs text-slate-400">Receiver Phone</label>
                 <input
                   type="text"
-                  value={form.receiver_phone}
+                  value={form.receiver_contact_phone}
                   onChange={(e) =>
-                    updateField("receiver_phone", e.target.value)
+                    updateField("receiver_contact_phone", e.target.value)
                   }
                   className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
@@ -457,9 +474,9 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                 <label className="text-xs text-slate-400">Receiver Email</label>
                 <input
                   type="email"
-                  value={form.receiver_email}
+                  value={form.receiver_contact_email}
                   onChange={(e) =>
-                    updateField("receiver_email", e.target.value)
+                    updateField("receiver_contact_email", e.target.value)
                   }
                   className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
@@ -508,9 +525,9 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                 <label className="text-xs text-slate-400">Weight (lbs)</label>
                 <input
                   type="number"
-                  value={form.weight_lbs}
+                  value={form.weight}
                   onChange={(e) =>
-                    updateField("weight_lbs", e.target.value)
+                    updateField("weight", e.target.value)
                   }
                   className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
@@ -552,6 +569,7 @@ export default function EditLoadModal({ load, onClose, onUpdated }) {
                 <label className="text-xs text-slate-400">Rate ($)</label>
                 <input
                   type="number"
+                  step="0.01"
                   value={form.rate}
                   onChange={(e) => updateField("rate", e.target.value)}
                   className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"

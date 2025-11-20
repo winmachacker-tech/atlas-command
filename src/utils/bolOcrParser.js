@@ -214,14 +214,13 @@ function cleanNumericFields(data) {
   return data;
 }
 
-// Generate prompt based on page count
+// Generate prompt based on page count - ENHANCED VERSION
 function getExtractionPrompt(pageCount) {
   const multiPageNote =
     pageCount > 1
       ? `\n\nIMPORTANT: This is a ${pageCount}-page document. Look across ALL ${pageCount} pages to find the information. Some details may be on page 1 while others are on page 2 or 3. Combine information from all pages to create a complete extraction.`
       : "";
 
-  // We explicitly ask for nested address objects and single-line addresses
   return `You are extracting data from a trucking RATE CONFIRMATION document sent by a freight broker. These documents contain load details, pricing, and location information.${multiPageNote}
 
 Very important:
@@ -229,13 +228,21 @@ Very important:
 - DO NOT use the broker's remittance, "Send bills to", or payment addresses for origin/destination or stops.
 - When in doubt, choose the locations that look like facilities where freight is picked up or delivered (farms, warehouses, shippers, receivers), not offices or PO boxes.
 
+**CRITICAL LOCATION REQUIREMENT:** 
+For EVERY pickup and delivery location, you MUST extract the city and state. Look carefully at the document:
+- If you see "200 N McCarran Blvd, Reno, NV 89502", extract city as "Reno" and state as "NV"
+- If you see "XYZ Warehouse\\n1234 Main St\\nLos Angeles, CA 90001", extract city as "Los Angeles" and state as "CA"
+- Even if only a street address is visible, look for city/state on the same line or nearby lines
+- City and state are MANDATORY - do not return null for these fields if any location information is present
+- If an address shows "200 N McCarran Blvd" on one line and no city, look at the next lines or surrounding text for the city and state
+
 Extract all visible information and return ONLY valid JSON with this exact structure (use null for missing fields):
 
 {
   "reference": "load number or confirmation number",
   "shipper": "shipper/pickup company name (main pickup)",
-  "origin": "pickup location as City, ST format (main pickup city/state)",
-  "destination": "delivery location as City, ST format (final delivery city/state)",
+  "origin": "pickup location as City, ST format (main pickup city/state) - REQUIRED",
+  "destination": "delivery location as City, ST format (final delivery city/state) - REQUIRED",
   "broker_name": "broker or customer company name",
 
   "pickup_date": "pickup date in YYYY-MM-DD format",
@@ -268,27 +275,27 @@ Extract all visible information and return ONLY valid JSON with this exact struc
   "detention_charges": "detention charges as number only",
   "accessorial_charges": "other accessorial charges as number only",
 
-  "pickup_address_full": "single-line pickup address including company, street, city, state, and ZIP if possible (e.g. \\"ABC Foods, 10098-9476 FAIRVIEW DR, HOLLISTER, CA 95023\\")",
-  "delivery_address_full": "single-line delivery address including company, street, city, state, and ZIP if possible (e.g. \\"XYZ Warehouse, 317 MAPLE AVE, NEW HAMPTON, NY 10958\\")",
+  "pickup_address_full": "COMPLETE pickup address including company, street, city, state, and ZIP. Example: \\"ABC Foods, 10098-9476 FAIRVIEW DR, HOLLISTER, CA 95023\\"",
+  "delivery_address_full": "COMPLETE delivery address including company, street, city, state, and ZIP. Example: \\"XYZ Warehouse, 317 MAPLE AVE, NEW HAMPTON, NY 10958\\" or \\"200 N McCarran Blvd, Reno, NV 89502\\"",
 
   "pickup_address": {
     "company_name": "pickup facility/company name",
     "address_line1": "street line for pickup (e.g. 10098-9476 FAIRVIEW DR)",
     "address_line2": "suite/building info if present, otherwise null",
-    "city": "pickup city",
-    "state": "2-letter pickup state code",
+    "city": "pickup city - REQUIRED, never null if any address is present",
+    "state": "2-letter pickup state code - REQUIRED, never null if any address is present",
     "postal_code": "pickup ZIP/postal code",
-    "country": "2-letter country code if clearly visible, else null"
+    "country": "US or other 2-letter country code if clearly visible, else \\"US\\""
   },
 
   "delivery_address": {
     "company_name": "delivery facility/company name",
-    "address_line1": "street line for delivery (e.g. 317 MAPLE AVE)",
+    "address_line1": "street line for delivery (e.g. 317 MAPLE AVE or 200 N McCarran Blvd)",
     "address_line2": "suite/building info if present, otherwise null",
-    "city": "delivery city",
-    "state": "2-letter delivery state code",
+    "city": "delivery city - REQUIRED, never null if any address is present (e.g. if you see 200 N McCarran Blvd, Reno, NV then city is Reno)",
+    "state": "2-letter delivery state code - REQUIRED, never null if any address is present (e.g. if you see 200 N McCarran Blvd, Reno, NV then state is NV)",
     "postal_code": "delivery ZIP/postal code",
-    "country": "2-letter country code if clearly visible, else null"
+    "country": "US or other 2-letter country code if clearly visible, else \\"US\\""
   },
 
   "stops": [
@@ -298,10 +305,10 @@ Extract all visible information and return ONLY valid JSON with this exact struc
       "location_name": "facility/company name for this stop",
       "address_line1": "street address line",
       "address_line2": "second line if present, else null",
-      "city": "city for this stop",
-      "state": "2-letter state code",
+      "city": "city for this stop - REQUIRED",
+      "state": "2-letter state code - REQUIRED",
       "postal_code": "ZIP/postal code",
-      "country": "2-letter country code if clearly visible, else null",
+      "country": "US or other 2-letter country code if clearly visible, else \\"US\\"",
       "scheduled_start": "scheduled start date/time in ISO format YYYY-MM-DDTHH:MM or null",
       "scheduled_end": "scheduled end date/time in ISO format YYYY-MM-DDTHH:MM or null",
       "contact_name": "contact name at this stop if visible",
@@ -314,14 +321,18 @@ Extract all visible information and return ONLY valid JSON with this exact struc
 
 CRITICAL RULES:
 - Return ONLY the JSON object, no markdown formatting, no code blocks, no explanations.
-- Use null for any field not clearly visible.
+- Use null for any field not clearly visible, EXCEPT city and state which are mandatory if any location is present.
+- **City and state are REQUIRED for all addresses** - look carefully at the document for these, even if they appear on different lines.
 - Convert all dates to YYYY-MM-DD format.
 - Convert all times to 24-hour HH:MM format.
-- Format origin and destination as "City, ST" with 2-letter state codes.
+- Format origin and destination as "City, ST" with 2-letter state codes (e.g. "Reno, NV").
+- For pickup_address_full and delivery_address_full, include the COMPLETE address with city, state, and ZIP.
 - Equipment type MUST be one of the exact values listed.
 - All monetary values and measurements should be numbers only (no $ or commas).
 - Origin/destination and the stops array MUST use the actual pickup/delivery locations, NOT the broker's mailing or payment address.
-- If there is exactly one pickup and one delivery, the stops array should contain 2 stops: one PICKUP and one DELIVERY.`;
+- If there is exactly one pickup and one delivery, the stops array should contain 2 stops: one PICKUP and one DELIVERY, each with city and state populated.
+- Even if you only see "200 N McCarran Blvd, Reno, NV", make sure city="Reno" and state="NV" are extracted into the delivery_address object.
+- Look at ALL lines around an address - the city and state might be on the line below the street address.`;
 }
 
 // Convert file to base64
