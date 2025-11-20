@@ -1,7 +1,8 @@
 ﻿// FILE: src/pages/Drivers.jsx
-// Purpose: Drivers page with org-aware RLS-safe CRUD.
+// Purpose: Drivers page with org-aware RLS-safe CRUD + Driver Pay Settings.
 // - Loads drivers for the current user's active org (from team_members).
 // - Creates drivers with org_id + created_by so RLS "WITH CHECK" passes.
+// - Adds pay configuration for each driver (percent / per-mile / per-load, escrow, advances).
 // - Simple inline table UI (you can enhance styling/columns as needed).
 
 import { useEffect, useMemo, useState, useCallback } from "react";
@@ -34,6 +35,53 @@ function toast(setToast, tone, msg) {
     setToast(null);
   }, 3500);
 }
+function numOrNull(v) {
+  const s = cleanStr(v);
+  if (!s) return null;
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+/* Simple formatter for pay summary in the table (non-edit mode) */
+function formatPaySummary(row) {
+  const pm = row.pay_model || "PERCENT";
+  let main = "—";
+
+  if (pm === "PERCENT") {
+    if (row.pay_rate_percent != null) {
+      main = `${row.pay_rate_percent}% of load`;
+    } else {
+      main = "Percent of load";
+    }
+  } else if (pm === "PER_MILE") {
+    if (row.pay_rate_per_mile != null) {
+      main = `$${row.pay_rate_per_mile}/mi`;
+    } else {
+      main = "Per mile";
+    }
+  } else if (pm === "FLAT_PER_LOAD") {
+    if (row.pay_flat_per_load != null) {
+      main = `$${row.pay_flat_per_load} per load`;
+    } else {
+      main = "Flat per load";
+    }
+  } else {
+    main = "Custom";
+  }
+
+  const extras = [];
+  if (row.escrow_percent != null) {
+    extras.push(`Escrow ${row.escrow_percent}%`);
+  }
+  if (row.advance_limit != null) {
+    extras.push(`Adv $${row.advance_limit}`);
+  }
+
+  return {
+    main,
+    extras: extras.join(" · "),
+  };
+}
 
 /* ============================== PAGE ============================== */
 
@@ -58,6 +106,14 @@ export default function Drivers() {
     license_class: "",
     status: "ACTIVE",
     notes: "",
+    // pay settings
+    pay_model: "PERCENT",
+    pay_rate_percent: "",
+    pay_rate_per_mile: "",
+    pay_flat_per_load: "",
+    escrow_percent: "",
+    advance_limit: "",
+    pay_notes: "",
   });
 
   const [savingId, setSavingId] = useState(null);
@@ -79,6 +135,7 @@ export default function Drivers() {
         d.phone,
         d.license_number,
         d.status,
+        d.pay_model,
       ];
       return fields.some((v) => cleanStr(v).toLowerCase().includes(term));
     });
@@ -139,7 +196,7 @@ export default function Drivers() {
         console.error("[Drivers] init error:", err);
         setFatalError(
           err?.message ||
-          "Something went wrong while loading drivers. Please try again."
+            "Something went wrong while loading drivers. Please try again."
         );
       } finally {
         if (!cancelled) setLoading(false);
@@ -179,6 +236,13 @@ export default function Drivers() {
               med_card_expiry,
               status,
               notes,
+              pay_model,
+              pay_rate_percent,
+              pay_rate_per_mile,
+              pay_flat_per_load,
+              escrow_percent,
+              advance_limit,
+              pay_notes,
               created_by,
               created_at,
               updated_at
@@ -226,9 +290,6 @@ export default function Drivers() {
         return;
       }
 
-      // Build row that matches RLS expectations:
-      // - org_id = current org
-      // - created_by = auth.uid() (if your policy checks this)
       const payload = {
         org_id: orgId,
         created_by: userId,
@@ -240,6 +301,15 @@ export default function Drivers() {
         license_class: cleanStr(newDraft.license_class) || null,
         status: cleanStr(newDraft.status) || "ACTIVE",
         notes: cleanStr(newDraft.notes) || null,
+        // pay configuration
+        pay_model: cleanStr(newDraft.pay_model) || "PERCENT",
+        // NOTE: treat values as simple numbers; for percent, enter "75" for 75%
+        pay_rate_percent: numOrNull(newDraft.pay_rate_percent),
+        pay_rate_per_mile: numOrNull(newDraft.pay_rate_per_mile),
+        pay_flat_per_load: numOrNull(newDraft.pay_flat_per_load),
+        escrow_percent: numOrNull(newDraft.escrow_percent),
+        advance_limit: numOrNull(newDraft.advance_limit),
+        pay_notes: cleanStr(newDraft.pay_notes) || null,
       };
 
       console.log("[Drivers] create payload:", payload);
@@ -261,6 +331,13 @@ export default function Drivers() {
             med_card_expiry,
             status,
             notes,
+            pay_model,
+            pay_rate_percent,
+            pay_rate_per_mile,
+            pay_flat_per_load,
+            escrow_percent,
+            advance_limit,
+            pay_notes,
             created_by,
             created_at,
             updated_at
@@ -270,7 +347,6 @@ export default function Drivers() {
 
       if (error) {
         console.error("[Drivers] create driver error:", error);
-        // If you still hit RLS, you'll see it here with full message.
         toast(
           setToast,
           "error",
@@ -292,6 +368,13 @@ export default function Drivers() {
         license_class: "",
         status: "ACTIVE",
         notes: "",
+        pay_model: "PERCENT",
+        pay_rate_percent: "",
+        pay_rate_per_mile: "",
+        pay_flat_per_load: "",
+        escrow_percent: "",
+        advance_limit: "",
+        pay_notes: "",
       });
 
       toast(setToast, "success", "Driver created.");
@@ -332,6 +415,26 @@ export default function Drivers() {
           null,
         status: cleanStr(editDraft.status ?? original.status) || "ACTIVE",
         notes: cleanStr(editDraft.notes ?? original.notes) || null,
+        // pay configuration
+        pay_model:
+          cleanStr(editDraft.pay_model ?? original.pay_model) || "PERCENT",
+        pay_rate_percent: numOrNull(
+          editDraft.pay_rate_percent ?? original.pay_rate_percent
+        ),
+        pay_rate_per_mile: numOrNull(
+          editDraft.pay_rate_per_mile ?? original.pay_rate_per_mile
+        ),
+        pay_flat_per_load: numOrNull(
+          editDraft.pay_flat_per_load ?? original.pay_flat_per_load
+        ),
+        escrow_percent: numOrNull(
+          editDraft.escrow_percent ?? original.escrow_percent
+        ),
+        advance_limit: numOrNull(
+          editDraft.advance_limit ?? original.advance_limit
+        ),
+        pay_notes:
+          cleanStr(editDraft.pay_notes ?? original.pay_notes) || null,
       };
 
       const { data, error } = await supabase
@@ -353,6 +456,13 @@ export default function Drivers() {
             med_card_expiry,
             status,
             notes,
+            pay_model,
+            pay_rate_percent,
+            pay_rate_per_mile,
+            pay_flat_per_load,
+            escrow_percent,
+            advance_limit,
+            pay_notes,
             created_by,
             created_at,
             updated_at
@@ -399,6 +509,18 @@ export default function Drivers() {
       license_class: row.license_class ?? "",
       status: row.status ?? "ACTIVE",
       notes: row.notes ?? "",
+      pay_model: row.pay_model ?? "PERCENT",
+      pay_rate_percent:
+        row.pay_rate_percent != null ? String(row.pay_rate_percent) : "",
+      pay_rate_per_mile:
+        row.pay_rate_per_mile != null ? String(row.pay_rate_per_mile) : "",
+      pay_flat_per_load:
+        row.pay_flat_per_load != null ? String(row.pay_flat_per_load) : "",
+      escrow_percent:
+        row.escrow_percent != null ? String(row.escrow_percent) : "",
+      advance_limit:
+        row.advance_limit != null ? String(row.advance_limit) : "",
+      pay_notes: row.pay_notes ?? "",
     });
   }
 
@@ -477,9 +599,7 @@ export default function Drivers() {
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">
-            Drivers
-          </h1>
+          <h1 className="text-lg font-semibold text-slate-100">Drivers</h1>
           <p className="text-xs text-slate-400">
             Org-scoped list of drivers. All actions respect Row Level
             Security.
@@ -525,62 +645,136 @@ export default function Drivers() {
       </div>
 
       {/* New driver quick form */}
-      <div className="rounded-xl border border-slate-700/80 bg-slate-950/60 p-3 flex flex-wrap gap-2 items-center text-xs">
-        <span className="text-slate-400 mr-2">New driver:</span>
-        <input
-          className="min-w-[120px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
-          placeholder="First name"
-          value={newDraft.first_name}
-          onChange={(e) =>
-            setNewDraft((d) => ({ ...d, first_name: e.target.value }))
-          }
-        />
-        <input
-          className="min-w-[120px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
-          placeholder="Last name (required)"
-          value={newDraft.last_name}
-          onChange={(e) =>
-            setNewDraft((d) => ({ ...d, last_name: e.target.value }))
-          }
-        />
-        <input
-          className="min-w-[160px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
-          placeholder="Email"
-          value={newDraft.email}
-          onChange={(e) =>
-            setNewDraft((d) => ({ ...d, email: e.target.value }))
-          }
-        />
-        <input
-          className="min-w-[120px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
-          placeholder="Phone"
-          value={newDraft.phone}
-          onChange={(e) =>
-            setNewDraft((d) => ({ ...d, phone: e.target.value }))
-          }
-        />
-        <input
-          className="min-w-[120px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
-          placeholder="License #"
-          value={newDraft.license_number}
-          onChange={(e) =>
-            setNewDraft((d) => ({
-              ...d,
-              license_number: e.target.value,
-            }))
-          }
-        />
-        <input
-          className="min-w-[80px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
-          placeholder="Class"
-          value={newDraft.license_class}
-          onChange={(e) =>
-            setNewDraft((d) => ({
-              ...d,
-              license_class: e.target.value,
-            }))
-          }
-        />
+      <div className="rounded-xl border border-slate-700/80 bg-slate-950/60 p-3 space-y-2 text-xs">
+        <div className="flex flex-wrap gap-2 items-center">
+          <span className="text-slate-400 mr-2">New driver:</span>
+          <input
+            className="min-w-[120px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+            placeholder="First name"
+            value={newDraft.first_name}
+            onChange={(e) =>
+              setNewDraft((d) => ({ ...d, first_name: e.target.value }))
+            }
+          />
+          <input
+            className="min-w-[120px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+            placeholder="Last name (required)"
+            value={newDraft.last_name}
+            onChange={(e) =>
+              setNewDraft((d) => ({ ...d, last_name: e.target.value }))
+            }
+          />
+          <input
+            className="min-w-[160px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+            placeholder="Email"
+            value={newDraft.email}
+            onChange={(e) =>
+              setNewDraft((d) => ({ ...d, email: e.target.value }))
+            }
+          />
+          <input
+            className="min-w-[120px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+            placeholder="Phone"
+            value={newDraft.phone}
+            onChange={(e) =>
+              setNewDraft((d) => ({ ...d, phone: e.target.value }))
+            }
+          />
+          <input
+            className="min-w-[120px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+            placeholder="License #"
+            value={newDraft.license_number}
+            onChange={(e) =>
+              setNewDraft((d) => ({
+                ...d,
+                license_number: e.target.value,
+              }))
+            }
+          />
+          <input
+            className="min-w-[80px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+            placeholder="Class"
+            value={newDraft.license_class}
+            onChange={(e) =>
+              setNewDraft((d) => ({
+                ...d,
+                license_class: e.target.value,
+              }))
+            }
+          />
+        </div>
+
+        {/* New driver pay settings */}
+        <div className="flex flex-wrap gap-2 items-center">
+          <span className="text-slate-400 mr-2">Pay settings:</span>
+          <select
+            className="min-w-[130px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100"
+            value={newDraft.pay_model}
+            onChange={(e) =>
+              setNewDraft((d) => ({ ...d, pay_model: e.target.value }))
+            }
+          >
+            <option value="PERCENT">Percent of load</option>
+            <option value="PER_MILE">Per mile</option>
+            <option value="FLAT_PER_LOAD">Flat per load</option>
+            <option value="CUSTOM">Custom</option>
+          </select>
+          <input
+            className="w-28 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+            placeholder="% of load (e.g. 75)"
+            value={newDraft.pay_rate_percent}
+            onChange={(e) =>
+              setNewDraft((d) => ({
+                ...d,
+                pay_rate_percent: e.target.value,
+              }))
+            }
+          />
+          <input
+            className="w-24 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+            placeholder="$ / mi"
+            value={newDraft.pay_rate_per_mile}
+            onChange={(e) =>
+              setNewDraft((d) => ({
+                ...d,
+                pay_rate_per_mile: e.target.value,
+              }))
+            }
+          />
+          <input
+            className="w-28 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+            placeholder="$ / load"
+            value={newDraft.pay_flat_per_load}
+            onChange={(e) =>
+              setNewDraft((d) => ({
+                ...d,
+                pay_flat_per_load: e.target.value,
+              }))
+            }
+          />
+          <input
+            className="w-24 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+            placeholder="Escrow %"
+            value={newDraft.escrow_percent}
+            onChange={(e) =>
+              setNewDraft((d) => ({
+                ...d,
+                escrow_percent: e.target.value,
+              }))
+            }
+          />
+          <input
+            className="w-32 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 placeholder-slate-500"
+            placeholder="Advance limit $"
+            value={newDraft.advance_limit}
+            onChange={(e) =>
+              setNewDraft((d) => ({
+                ...d,
+                advance_limit: e.target.value,
+              }))
+            }
+          />
+        </div>
       </div>
 
       {/* Search */}
@@ -608,6 +802,7 @@ export default function Drivers() {
               <th className="px-3 py-2 text-left">Email</th>
               <th className="px-3 py-2 text-left">Phone</th>
               <th className="px-3 py-2 text-left">License</th>
+              <th className="px-3 py-2 text-left">Pay</th>
               <th className="px-3 py-2 text-left">Status</th>
               <th className="px-3 py-2 text-left w-12"></th>
             </tr>
@@ -616,7 +811,7 @@ export default function Drivers() {
             {visibleDrivers.length === 0 ? (
               <tr>
                 <td
-                  colSpan={6}
+                  colSpan={7}
                   className="px-3 py-4 text-center text-slate-500"
                 >
                   No drivers found.
@@ -625,6 +820,8 @@ export default function Drivers() {
             ) : (
               visibleDrivers.map((row) => {
                 const isEditing = editingId === row.id;
+                const paySummary = formatPaySummary(row);
+
                 return (
                   <tr
                     key={row.id}
@@ -742,6 +939,101 @@ export default function Drivers() {
                           <span className="text-[10px] text-slate-500">
                             {row.license_class || ""}
                           </span>
+                        </div>
+                      )}
+                    </td>
+
+                    {/* PAY SETTINGS */}
+                    <td className="px-3 py-1.5 align-top">
+                      {isEditing ? (
+                        <div className="flex flex-col gap-1">
+                          <select
+                            className="w-full rounded-md border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[11px] text-slate-100"
+                            value={editDraft.pay_model}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({
+                                ...d,
+                                pay_model: e.target.value,
+                              }))
+                            }
+                          >
+                            <option value="PERCENT">Percent of load</option>
+                            <option value="PER_MILE">Per mile</option>
+                            <option value="FLAT_PER_LOAD">
+                              Flat per load
+                            </option>
+                            <option value="CUSTOM">Custom</option>
+                          </select>
+                          <div className="flex flex-wrap gap-1">
+                            <input
+                              className="w-20 rounded-md border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-100 placeholder-slate-500"
+                              placeholder="% of load"
+                              value={editDraft.pay_rate_percent}
+                              onChange={(e) =>
+                                setEditDraft((d) => ({
+                                  ...d,
+                                  pay_rate_percent: e.target.value,
+                                }))
+                              }
+                            />
+                            <input
+                              className="w-20 rounded-md border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-100 placeholder-slate-500"
+                              placeholder="$ / mi"
+                              value={editDraft.pay_rate_per_mile}
+                              onChange={(e) =>
+                                setEditDraft((d) => ({
+                                  ...d,
+                                  pay_rate_per_mile: e.target.value,
+                                }))
+                              }
+                            />
+                            <input
+                              className="w-24 rounded-md border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-100 placeholder-slate-500"
+                              placeholder="$ / load"
+                              value={editDraft.pay_flat_per_load}
+                              onChange={(e) =>
+                                setEditDraft((d) => ({
+                                  ...d,
+                                  pay_flat_per_load: e.target.value,
+                                }))
+                              }
+                            />
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            <input
+                              className="w-20 rounded-md border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-100 placeholder-slate-500"
+                              placeholder="Escrow %"
+                              value={editDraft.escrow_percent}
+                              onChange={(e) =>
+                                setEditDraft((d) => ({
+                                  ...d,
+                                  escrow_percent: e.target.value,
+                                }))
+                              }
+                            />
+                            <input
+                              className="w-28 rounded-md border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-100 placeholder-slate-500"
+                              placeholder="Advance limit $"
+                              value={editDraft.advance_limit}
+                              onChange={(e) =>
+                                setEditDraft((d) => ({
+                                  ...d,
+                                  advance_limit: e.target.value,
+                                }))
+                              }
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col">
+                          <span className="text-slate-200">
+                            {paySummary.main}
+                          </span>
+                          {paySummary.extras && (
+                            <span className="text-[10px] text-slate-500">
+                              {paySummary.extras}
+                            </span>
+                          )}
                         </div>
                       )}
                     </td>

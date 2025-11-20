@@ -7,7 +7,8 @@ import { supabase } from '../lib/supabase';
  * @returns {Promise<Object>} The created or existing load record
  */
 export async function createLoadFromOCR(ocrData) {
-  console.log('[OCR] createLoadFromOCR v5 – org-aware + RLS-friendly');
+  console.log('[OCR] createLoadFromOCR v6 – FULL FIELD MAPPING');
+  console.log('[OCR] Raw OCR data:', JSON.stringify(ocrData, null, 2));
 
   try {
     // 1) Get current user
@@ -20,7 +21,6 @@ export async function createLoadFromOCR(ocrData) {
     if (!user) throw new Error('Not authenticated');
 
     // 2) Get the user's org_id from team_members
-    //    This aligns with your tenant model and RLS expectations.
     const { data: membership, error: memberError } = await supabase
       .from('team_members')
       .select('org_id, email, role, status, is_default')
@@ -66,14 +66,30 @@ export async function createLoadFromOCR(ocrData) {
       delivery_time = deliveryDt.toTimeString().split(' ')[0].substring(0, 5);
     }
 
-    // Build origin and destination strings
+    // Build FULL origin string with street address
     const origin = pickupStop
-      ? `${pickupStop.city}, ${pickupStop.state} ${pickupStop.zip}`.trim()
+      ? [
+          pickupStop.facility_name,
+          pickupStop.address,
+          `${pickupStop.city}, ${pickupStop.state} ${pickupStop.zip}`,
+        ]
+          .filter(Boolean)
+          .join(', ')
       : null;
 
+    // Build FULL destination string with street address
     const destination = deliveryStop
-      ? `${deliveryStop.city}, ${deliveryStop.state} ${deliveryStop.zip}`.trim()
+      ? [
+          deliveryStop.facility_name,
+          deliveryStop.address,
+          `${deliveryStop.city}, ${deliveryStop.state} ${deliveryStop.zip}`,
+        ]
+          .filter(Boolean)
+          .join(', ')
       : null;
+
+    console.log('[OCR] Built origin:', origin);
+    console.log('[OCR] Built destination:', destination);
 
     // Build special instructions combining all relevant info
     const instructionsParts = [];
@@ -147,6 +163,8 @@ export async function createLoadFromOCR(ocrData) {
         'step deck': 'STEP_DECK',
         stepdeck: 'STEP_DECK',
         step: 'STEP_DECK',
+        'drop deck': 'STEP_DECK',
+        'drop': 'STEP_DECK',
         lowboy: 'LOWBOY',
         'low boy': 'LOWBOY',
         'power only': 'POWER_ONLY',
@@ -181,9 +199,12 @@ export async function createLoadFromOCR(ocrData) {
 
     const nowIso = new Date().toISOString();
 
-    // Build the load object
-    // 🔐 IMPORTANT: org_id is set explicitly from team_members,
-    //              which should match current_org_id() under your RLS.
+    // Extract contact info from broker
+    const brokerContact = ocrData.broker?.contact || null;
+    const brokerPhone = ocrData.broker?.phone || null;
+    const brokerEmail = ocrData.broker?.email || null;
+
+    // Build the load object with ALL available data
     const loadData = {
       org_id: orgId,
 
@@ -194,21 +215,28 @@ export async function createLoadFromOCR(ocrData) {
       status: 'AVAILABLE',
       created_by: user.id,
 
+      // Broker information
       broker_name: ocrData.broker?.name || null,
+      broker: ocrData.broker?.name || null,
       customer: ocrData.broker?.name || null,
 
+      // FULL addresses with street, city, state, zip
       origin: origin,
       origin_city: pickupStop?.city || null,
       origin_state: pickupStop?.state || null,
+      
       destination: destination,
       dest_city: deliveryStop?.city || null,
       dest_state: deliveryStop?.state || null,
 
+      // Shipper information
       shipper_name: pickupStop?.facility_name || null,
       shipper: pickupStop?.facility_name || null,
 
+      // Consignee information
       consignee_name: deliveryStop?.facility_name || null,
 
+      // Dates and times
       pickup_date: pickup_date,
       pickup_time: pickup_time,
       pickup_at: pickupStop?.appointment
@@ -221,31 +249,45 @@ export async function createLoadFromOCR(ocrData) {
         ? new Date(deliveryStop.appointment).toISOString()
         : null,
 
-      shipper_contact_name: pickupStop?.facility_name || null,
-      shipper_contact_phone: null,
-      shipper_contact_email: null,
+      // Contact information - NOW PROPERLY MAPPED!
+      shipper_contact_name: pickupStop?.facility_name || brokerContact || null,
+      shipper_contact_phone: brokerPhone || null,
+      shipper_contact_email: brokerEmail || null,
+      
       receiver_contact_name: deliveryStop?.facility_name || null,
-      receiver_contact_phone: null,
-      receiver_contact_email: null,
+      receiver_contact_phone: brokerPhone || null, // Often same broker contact
+      receiver_contact_email: brokerEmail || null,
 
+      // Load details
       commodity: ocrData.commodity || null,
       equipment_type: equipment_type,
       temperature: temperature,
       special_instructions: special_instructions,
       notes: notes,
 
+      // Financial
       rate: ocrData.rate || null,
+      
+      // Assignment
       driver_id: null,
 
+      // Timestamps
       created_at: nowIso,
       updated_at: nowIso,
     };
 
-    console.log(
-      '[OCR] Inserting load with org_id/ref_no:',
-      orgId,
-      loadNumber
-    );
+    console.log('[OCR] Final load data to insert:');
+    console.log('  org_id:', orgId);
+    console.log('  ref_no:', loadNumber);
+    console.log('  origin:', origin);
+    console.log('  destination:', destination);
+    console.log('  origin_city:', loadData.origin_city);
+    console.log('  origin_state:', loadData.origin_state);
+    console.log('  dest_city:', loadData.dest_city);
+    console.log('  dest_state:', loadData.dest_state);
+    console.log('  shipper_contact_phone:', loadData.shipper_contact_phone);
+    console.log('  shipper_contact_email:', loadData.shipper_contact_email);
+    console.log('  broker:', loadData.broker);
 
     const { data: newLoad, error: insertError } = await supabase
       .from('loads')
@@ -299,9 +341,11 @@ export async function createLoadFromOCR(ocrData) {
     console.log('✅ [OCR] Load created successfully:', newLoad.id);
     console.log('  Load Number:', newLoad.load_number);
     console.log('  Equipment:', newLoad.equipment_type);
+    console.log('  Full Origin:', newLoad.origin);
+    console.log('  Full Destination:', newLoad.destination);
     return newLoad;
   } catch (error) {
-    console.error('Error creating load from OCR (v5 org-aware):', error);
+    console.error('Error creating load from OCR (v6 full mapping):', error);
     throw error;
   }
 }

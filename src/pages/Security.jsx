@@ -1,6 +1,7 @@
 ﻿// FILE: src/pages/Security.jsx
 // Purpose: Account Security Center for Atlas Command
 // - Current session summary
+// - Login Activity (last 5 logins from security_login_events, org-scoped via RLS)
 // - Password change
 // - REAL TOTP 2FA (Supabase MFA)
 // - MFA backup codes (generate + count)
@@ -8,6 +9,7 @@
 // - Tenant Isolation "Security Center" (audit views + drilldown)
 // - Recent security events (org_audit_events)
 // - API keys placeholder
+// - Known devices (device fingerprinting, "This device" tagging)
 
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
@@ -24,7 +26,14 @@ import {
   Eye,
   ListChecks,
   X,
+  MapPin,
+  Clock,
+  ShieldCheck,
 } from "lucide-react";
+import {
+  getCurrentDeviceFingerprint,
+  getCurrentDeviceLabel,
+} from "../lib/deviceFingerprint.js";
 
 export default function SecurityPage() {
   const [session, setSession] = useState(null);
@@ -36,6 +45,17 @@ export default function SecurityPage() {
   // Sessions (simple current-session view)
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [sessions, setSessions] = useState([]);
+
+  // Login activity (from security_login_events, last 5)
+  const [loginEvents, setLoginEvents] = useState([]);
+  const [loadingLoginEvents, setLoadingLoginEvents] = useState(true);
+
+  // Known devices
+  const [knownDevices, setKnownDevices] = useState([]);
+  const [devicesLoading, setDevicesLoading] = useState(true);
+  const [devicesError, setDevicesError] = useState(null);
+  const [currentFingerprint, setCurrentFingerprint] = useState(null);
+  const [currentDeviceLabel, setCurrentDeviceLabel] = useState("This device");
 
   // Password change
   const [passwordNew, setPasswordNew] = useState("");
@@ -79,24 +99,20 @@ export default function SecurityPage() {
     return a.filter(Boolean).join(" ");
   }
 
-  // Load the current session
-  useEffect(() => {
-    async function load() {
-      const { data } = await supabase.auth.getSession();
-      setSession(data.session || null);
-    }
-    load();
-  }, []);
-
-  // Load simple "sessions" info (for now just current device)
+   
+  
   useEffect(() => {
     async function loadSessions() {
       setLoadingSessions(true);
       const { data } = await supabase.auth.getSession();
-      if (data?.session) {
+      const currentSession = data?.session || null;
+
+      setSession(currentSession); // <-- important
+
+      if (currentSession) {
         setSessions([
           {
-            id: data.session.access_token,
+            id: currentSession.access_token,
             userAgent: navigator.userAgent,
             lastActive: new Date().toLocaleString(),
             current: true,
@@ -108,6 +124,31 @@ export default function SecurityPage() {
       setLoadingSessions(false);
     }
     loadSessions();
+  }, []);
+
+
+
+
+  // Compute current browser fingerprint + label (mirrors Edge Function logic)
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFingerprint() {
+      try {
+        const fp = await getCurrentDeviceFingerprint();
+        if (!cancelled) {
+          setCurrentFingerprint(fp);
+          setCurrentDeviceLabel(getCurrentDeviceLabel());
+        }
+      } catch (err) {
+        console.error("[Security] Failed to compute device fingerprint", err);
+      }
+    }
+
+    loadFingerprint();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Load security activity (org_audit_events for this user)
@@ -147,6 +188,71 @@ export default function SecurityPage() {
       }
     }
     loadLogs();
+  }, [session]);
+
+  // Load login activity (security_login_events for current org, last 5)
+  useEffect(() => {
+    async function loadLoginEvents() {
+      if (!session) return;
+      setLoadingLoginEvents(true);
+      try {
+        const { data, error } = await supabase
+          .from("security_login_events")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(5);
+        if (error) {
+          console.error("[SecurityPage] Failed to load login events:", error);
+          setLoginEvents([]);
+        } else {
+          setLoginEvents(data || []);
+        }
+      } finally {
+        setLoadingLoginEvents(false);
+      }
+    }
+    loadLoginEvents();
+  }, [session]);
+
+  // Load known devices from security_known_devices
+  useEffect(() => {
+    if (!session) return;
+
+    let cancelled = false;
+
+    async function loadKnownDevices() {
+      setDevicesLoading(true);
+      setDevicesError(null);
+      try {
+      const { data, error } = await supabase
+  .from("security_known_devices")
+  .select(
+    "id, email, device_label, device_fingerprint, last_ip, first_seen_at, last_seen_at"
+  )
+  .order("last_seen_at", { ascending: false });
+
+
+        if (error) throw error;
+        if (!cancelled) {
+          setKnownDevices(data || []);
+        }
+      } catch (e) {
+        console.error("[Security] Failed to load known devices", e);
+        if (!cancelled) {
+          setDevicesError("Failed to load known devices");
+          setKnownDevices([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setDevicesLoading(false);
+        }
+      }
+    }
+
+    loadKnownDevices();
+    return () => {
+      cancelled = true;
+    };
   }, [session]);
 
   // ---- TOTP MFA LOGIC ----
@@ -571,8 +677,8 @@ export default function SecurityPage() {
             <div>
               <h2 className="text-lg font-semibold">Security Center</h2>
               <p className="text-xs text-gray-400">
-                Live audit of tenant isolation: tables, views, policies, and
-                RLS bypass risks.
+                Live audit of tenant isolation: tables, views, policies, and RLS
+                bypass risks.
               </p>
             </div>
           </div>
@@ -776,7 +882,9 @@ export default function SecurityPage() {
           <div className="border border-slate-700 rounded-xl p-3 bg-slate-950/60">
             <div className="flex items-center gap-2 mb-2">
               <AlertTriangle className="w-4 h-4 text-slate-200" />
-              <h3 className="font-semibold text-sm">Security Definer Functions</h3>
+              <h3 className="font-semibold text-sm">
+                Security Definer Functions
+              </h3>
             </div>
             {auditLoading ? (
               <div className="flex items-center gap-2 text-gray-300">
@@ -850,6 +958,184 @@ export default function SecurityPage() {
           </p>
           <p className="text-gray-500 text-xs">User ID: {session.user.id}</p>
         </div>
+      </section>
+
+      {/* Known Devices */}
+      <section className="border border-gray-700 rounded-2xl p-6 bg-gray-900/40">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex flex-col">
+            <h2 className="text-xl font-semibold">Known Devices</h2>
+            <p className="text-xs text-gray-400">
+              Devices that have been used to sign in to this account.
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-[11px] text-gray-400">Current device</p>
+            <p className="text-[11px] text-gray-300 font-mono max-w-xs truncate">
+              {currentDeviceLabel || "This device"}
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-4 shadow-sm shadow-black/40">
+          {devicesLoading ? (
+            <div className="flex items-center gap-2 text-sm text-zinc-300">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Loading devices…
+            </div>
+          ) : devicesError ? (
+            <div className="text-sm text-red-400">{devicesError}</div>
+          ) : knownDevices.length === 0 ? (
+            <div className="text-sm text-zinc-400">
+              No devices recorded yet. New logins will appear here.
+            </div>
+          ) : (
+            <ul className="space-y-3">
+              {knownDevices.map((dev) => {
+                const isThisDevice =
+                  currentFingerprint &&
+                  dev.device_fingerprint === currentFingerprint;
+
+                return (
+                  <li
+                    key={dev.id}
+                    className="flex items-start justify-between gap-3 rounded-xl border border-white/5 bg-black/20 px-3 py-2.5"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium text-zinc-100 truncate">
+                          {dev.device_label || "Unknown device"}
+                        </p>
+                        {isThisDevice && (
+                          <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400 border border-emerald-500/30">
+                            This device
+                          </span>
+                        )}
+                        {dev.last_mfa_used && (
+                          <span className="inline-flex items-center rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-400 border border-sky-500/30">
+                            MFA used
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-xs text-zinc-400 break-all">
+                        IP:{" "}
+                        <span className="font-mono text-zinc-300">
+                          {dev.last_ip || "Unknown"}
+                        </span>
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-zinc-500">
+                        First seen:{" "}
+                        {dev.first_seen_at
+                          ? new Date(dev.first_seen_at).toLocaleString()
+                          : "Unknown"}
+                        {" • "}
+                        Last seen:{" "}
+                        {dev.last_seen_at
+                          ? new Date(dev.last_seen_at).toLocaleString()
+                          : "Unknown"}
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="text-[11px] text-zinc-500">
+                        {dev.email}
+                      </span>
+                      {/* Future: trust / revoke controls */}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </section>
+
+      {/* Login Activity (last 5 logins) */}
+      <section className="border border-gray-700 rounded-2xl p-6 bg-gray-900/40">
+        <div className="flex items-center justify-between gap-2 mb-4">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 text-emerald-300" />
+            <h2 className="text-xl font-semibold">Login Activity</h2>
+          </div>
+          <p className="text-xs text-gray-400">
+            Last 5 sign-ins for your organization (org-scoped via RLS).
+          </p>
+        </div>
+
+        {loadingLoginEvents ? (
+          <div className="text-center text-gray-300 text-sm">
+            <Loader2 className="w-4 h-4 animate-spin mx-auto mb-2" />
+            Loading login activity…
+          </div>
+        ) : loginEvents.length === 0 ? (
+          <p className="text-gray-500 text-sm">
+            No login events recorded yet. Once users sign in, their login
+            history will appear here.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {loginEvents.map((e) => {
+              const locationParts = [e.city, e.region, e.country].filter(
+                Boolean
+              );
+              const location =
+                locationParts.length > 0 ? locationParts.join(", ") : null;
+              const userAgent = e.user_agent || "Unknown device";
+              const ip = e.ip_address || "Unknown IP";
+
+              return (
+                <div
+                  key={e.id}
+                  className="border border-gray-700 rounded-xl p-4 bg-gray-800/30 flex flex-col md:flex-row md:items-center md:justify-between gap-3"
+                >
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-gray-100">
+                      {e.email || "Unknown user"}
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      IP: <span className="font-mono">{ip}</span>
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      Device:{" "}
+                      <span className="break-all">
+                        {userAgent.length > 140
+                          ? userAgent.slice(0, 140) + "…"
+                          : userAgent}
+                      </span>
+                    </p>
+                    {location && (
+                      <p className="text-xs text-gray-400 flex items-center gap-1">
+                        <MapPin className="w-3 h-3 text-emerald-300" />
+                        {location}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col items-start md:items-end gap-2">
+                    <div className="flex items-center gap-2 text-xs text-gray-400">
+                      <Clock className="w-4 h-4" />
+                      <span>
+                        {e.created_at
+                          ? new Date(e.created_at).toLocaleString()
+                          : "Unknown time"}
+                      </span>
+                    </div>
+                    <span
+                      className={cx(
+                        "inline-flex items-center justify-center px-3 py-1 rounded-full text-[11px] border",
+                        e.mfa_used
+                          ? "bg-emerald-900/40 border-emerald-600/70 text-emerald-200"
+                          : "bg-amber-900/30 border-amber-600/70 text-amber-200"
+                      )}
+                    >
+                      {e.mfa_used ? "MFA USED" : "NO MFA"}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       {/* Password Change */}

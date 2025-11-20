@@ -274,3 +274,19 @@ html.dark .divide-neutral-200 > :not([hidden]) ~ :not([hidden]),
 html.dark .divide-gray-200 > :not([hidden]) ~ :not([hidden]) {
   border-color: #262b36 !important;
 }
+
+/* ==========================================================================
+   Input Utility Classes for EditLoadModal (and other forms)
+   ========================================================================== */
+
+.input-text {
+  @apply w-full rounded-xl border border-slate-700/80 bg-slate-950/80 px-3 py-2 text-sm text-slate-50 placeholder:text-slate-500 focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-400;
+}
+
+.input-select {
+  @apply w-full rounded-xl border border-slate-700/80 bg-slate-950/80 px-3 py-1.5 text-sm text-slate-50 focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-400;
+}
+
+.field-label {
+  @apply text-[11px] font-medium uppercase tracking-[0.14em] text-slate-400;
+}

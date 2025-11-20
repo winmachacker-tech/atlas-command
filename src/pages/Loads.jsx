@@ -37,6 +37,7 @@ import LearnedSuggestions from "../components/LearnedSuggestions.jsx";
 import AiRecommendationsForLoad from "../components/AiRecommendationsForLoad.jsx";
 import RCUploader from "../components/RCUploader";
 
+
 /** MUST match DB enum/check */
 const STATUS_CHOICES = [
   { label: "Available", value: "AVAILABLE" },
@@ -1062,21 +1063,20 @@ export default function Loads() {
       )}
 
       {/* Edit Load modal */}
-      {!!editingLoad && (
-        <EditLoadModal
-          load={editingLoad}
-          onClose={() => setEditingLoad(null)}
-          onUpdated={async (updatedLoad) => {
-            const fresh = await refreshOne(updatedLoad.id);
-            if (fresh) {
-              setLoads((prev) =>
-                prev.map((l) => (l.id === fresh.id ? fresh : l))
-              );
-            }
-            setEditingLoad(null);
-          }}
-        />
-      )}
+     {editingLoad && (
+  <EditLoadModal
+    load={editingLoad}
+    onClose={() => setEditingLoad(null)}
+    onSaved={(updated) => {
+      if (updated?.id) {
+        setLoads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
+      }
+      setEditingLoad(null);
+    }}
+  />
+)}
+
+
 
       {/* Assign Driver modal */}
       {!!assigningDriverLoad && (

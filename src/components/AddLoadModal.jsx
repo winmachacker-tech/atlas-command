@@ -1,5 +1,15 @@
-﻿// src/components/AddLoadModal.jsx
-import { useState, useEffect } from "react";
+// FILE: src/components/AddLoadModal.jsx
+// Purpose:
+// - Fast, clean "Add Load" modal
+// - Optional OCR upload to auto-fill key fields from a rate confirmation
+// - Inserts a new row into `loads` via Supabase
+//
+// Notes:
+// - Relies on RLS / current_org_id() on the backend (no org_id set here)
+// - Parent can pass: { open?, isOpen?, onClose, onCreated?, onSaved? }
+// - Does NOT touch any RLS / security, only a normal insert.
+
+import { useEffect, useState } from "react";
 import { X, Loader2, Plus, ChevronDown, Upload } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { extractRateConfirmationData } from "../utils/bolOcrParser";
@@ -21,932 +31,868 @@ function Ico({ as: Icon, className = "" }) {
 function IconButton({ title, onClick, children }) {
   return (
     <button
-      onClick={onClick}
+      type="button"
       title={title}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/30 bg-white/5 text-white transition-colors hover:border-white/40 hover:bg-white/10"
+      onClick={onClick}
+      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-slate-100 transition-colors hover:bg-white/10 hover:border-white/20"
     >
       {children}
     </button>
   );
 }
 
-export default function AddLoadModal({ onClose, onAdded }) {
-  const [formData, setFormData] = useState({
-    reference: "",
-    shipper: "",
-    origin: "",
-    destination: "",
-    status: "AVAILABLE",
-    driver_id: "",
-    rate: "",
-    pickup_date: "",
-    pickup_time: "",
-    delivery_date: "",
-    delivery_time: "",
-    // Contact info
-    shipper_contact_name: "",
-    shipper_contact_phone: "",
-    shipper_contact_email: "",
-    receiver_contact_name: "",
-    receiver_contact_phone: "",
-    receiver_contact_email: "",
-    // Reference numbers
-    bol_number: "",
-    po_number: "",
-    customer_reference: "",
-    // Load details
-    commodity: "",
-    weight: "",
-    pieces: "",
-    equipment_type: "DRY_VAN",
-    temperature: "",
-    special_instructions: "",
-    // Financial & distance
-    miles: "",
-    rate_per_mile: "",
-    detention_charges: "",
-    accessorial_charges: "",
-    broker_name: "",
-  });
-  const [calculatingMiles, setCalculatingMiles] = useState(false);
-  const [drivers, setDrivers] = useState([]);
-  const [loadingDrivers, setLoadingDrivers] = useState(true);
+// Simple options for a status dropdown.
+// Adjust values to match your `loads.status` enum/text.
+const STATUS_OPTIONS = ["AVAILABLE", "IN_TRANSIT", "DELIVERED", "CANCELLED"];
+
+const EQUIPMENT_OPTIONS = [
+  "Dry Van",
+  "Reefer",
+  "Flatbed",
+  "Step Deck",
+  "Hotshot",
+  "Power Only",
+];
+
+// Map OCR equipment codes (DRY_VAN, REEFER, STEP_DECK, etc.) to UI labels
+function mapEquipmentFromOcr(codeOrLabel) {
+  if (!codeOrLabel) return "";
+  const raw = String(codeOrLabel).toUpperCase();
+
+  if (raw.includes("DRY") && raw.includes("VAN")) return "Dry Van";
+  if (raw.includes("REEFER") || raw.includes("REFRIG")) return "Reefer";
+  if (raw.includes("FLATBED")) return "Flatbed";
+  if (raw.includes("STEP") && raw.includes("DECK")) return "Step Deck";
+  if (raw.includes("HOTSHOT")) return "Hotshot";
+  if (raw.includes("POWER")) return "Power Only";
+
+  // Fall back to original if it already matches one of our options
+  if (EQUIPMENT_OPTIONS.includes(codeOrLabel)) return codeOrLabel;
+
+  return "";
+}
+
+// Parse "City, ST" into { city, state }
+function parseCityState(value) {
+  if (!value) return { city: "", state: "" };
+  const parts = String(value)
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const city = parts[0] || "";
+  const state = (parts[1] || "").slice(0, 2).toUpperCase();
+  return { city, state };
+}
+
+// Basic initial form state for a brand new load
+const EMPTY_FORM = {
+  // BASIC
+  reference_number: "",
+  status: "AVAILABLE",
+
+  // HIGH-LEVEL LANE TEXT (maps to loads.origin / loads.destination)
+  origin: "",
+  destination: "",
+
+  // LOCATIONS & SCHEDULE (more structured)
+  origin_city: "",
+  origin_state: "",
+  destination_city: "",
+  destination_state: "",
+  pickup_date: "",
+  pickup_time: "",
+  delivery_date: "",
+  delivery_time: "",
+
+  // CONTACTS
+  shipper_company: "",
+  broker_customer: "",
+  shipper_contact: "",
+  shipper_phone: "",
+  shipper_email: "",
+  receiver_contact: "",
+  receiver_phone: "",
+  receiver_email: "",
+
+  // DETAILS
+  commodity: "",
+  equipment_type: "",
+  weight_lbs: "",
+  pieces: "",
+  temperature: "",
+  special_instructions: "",
+  miles: "",
+  rate: "",
+};
+
+export default function AddLoadModal(props) {
+  const { open, isOpen, onClose, onCreated, onSaved, initialData } = props;
+
+  // Support both `open` and `isOpen` to be flexible with parent usage
+  const isVisible = (open ?? isOpen ?? false) === true;
+
+  const [form, setForm] = useState(() => ({
+    ...EMPTY_FORM,
+    ...(initialData || {}),
+  }));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  
-  // OCR states
-  const [isProcessingOCR, setIsProcessingOCR] = useState(false);
-  const [ocrError, setOcrError] = useState(null);
-  const [ocrSuccess, setOcrSuccess] = useState(false);
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrInfo, setOcrInfo] = useState("");
 
-  // Fetch available drivers on mount
+  // When the modal opens with different initialData, reset the form
   useEffect(() => {
-    async function fetchDrivers() {
-      try {
-        const { data, error } = await supabase
-          .from("v_drivers_active")
-          .select("id, first_name, last_name")
-          .eq("status", "ACTIVE")
-          .order("last_name", { ascending: true });
-        
-        if (error) throw error;
-        setDrivers(data || []);
-      } catch (e) {
-        console.warn("[AddLoadModal] Failed to load drivers:", e);
-        // Don't block the modal if drivers fail to load
-      } finally {
-        setLoadingDrivers(false);
-      }
-    }
-    fetchDrivers();
-  }, []);
+    if (!isVisible) return;
+    setForm((prev) => ({
+      ...EMPTY_FORM,
+      ...(initialData || {}),
+    }));
+    setError("");
+    setOcrInfo("");
+  }, [isVisible, initialData]);
 
-  // OCR Upload Handler
-  async function handleOCRUpload(event) {
+  if (!isVisible) return null;
+
+  function updateField(key, value) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleOcrFileChange(event) {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    // Validate file type
-    if (!file.type.startsWith('image/') && file.type !== 'application/pdf') {
-      setOcrError('Please upload an image file (JPG, PNG, etc.) or PDF');
-      return;
-    }
-
-    // Validate file size (max 20MB for OpenAI)
-    if (file.size > 20 * 1024 * 1024) {
-      setOcrError('File size must be under 20MB');
-      return;
-    }
-
-    setIsProcessingOCR(true);
-    setOcrError(null);
-    setOcrSuccess(false);
-
-    try {
-      const extractedData = await extractRateConfirmationData(file);
-      
-      // Count how many fields were extracted
-      let fieldsExtracted = 0;
-      
-      // Auto-populate form fields with extracted data
-      setFormData(prev => {
-        const updates = {};
-        
-        // Helper to add field if it has a value
-        const addField = (key, value) => {
-          if (value !== null && value !== undefined && value !== '') {
-            updates[key] = value;
-            fieldsExtracted++;
-          }
-        };
-        
-        addField('reference', extractedData.reference);
-        addField('shipper', extractedData.shipper);
-        addField('origin', extractedData.origin);
-        addField('destination', extractedData.destination);
-        addField('broker_name', extractedData.broker_name);
-        addField('pickup_date', extractedData.pickup_date);
-        addField('pickup_time', extractedData.pickup_time);
-        addField('delivery_date', extractedData.delivery_date);
-        addField('delivery_time', extractedData.delivery_time);
-        addField('shipper_contact_name', extractedData.shipper_contact_name);
-        addField('shipper_contact_phone', extractedData.shipper_contact_phone);
-        addField('shipper_contact_email', extractedData.shipper_contact_email);
-        addField('receiver_contact_name', extractedData.receiver_contact_name);
-        addField('receiver_contact_phone', extractedData.receiver_contact_phone);
-        addField('receiver_contact_email', extractedData.receiver_contact_email);
-        addField('bol_number', extractedData.bol_number);
-        addField('po_number', extractedData.po_number);
-        addField('customer_reference', extractedData.customer_reference);
-        addField('commodity', extractedData.commodity);
-        
-        if (extractedData.weight) {
-          addField('weight', extractedData.weight.toString());
-        }
-        if (extractedData.pieces) {
-          addField('pieces', extractedData.pieces.toString());
-        }
-        
-        addField('equipment_type', extractedData.equipment_type);
-        addField('temperature', extractedData.temperature);
-        addField('special_instructions', extractedData.special_instructions);
-        
-        if (extractedData.miles) {
-          addField('miles', extractedData.miles.toString());
-        }
-        if (extractedData.rate) {
-          addField('rate', extractedData.rate.toString());
-        }
-        if (extractedData.rate_per_mile) {
-          addField('rate_per_mile', extractedData.rate_per_mile.toString());
-        }
-        if (extractedData.detention_charges) {
-          addField('detention_charges', extractedData.detention_charges.toString());
-        }
-        if (extractedData.accessorial_charges) {
-          addField('accessorial_charges', extractedData.accessorial_charges.toString());
-        }
-        
-        return { ...prev, ...updates };
-      });
-
-      setOcrSuccess(true);
-      
-      // If we didn't extract miles but we have origin and destination, auto-calculate
-      if (!extractedData.miles && extractedData.origin && extractedData.destination) {
-        setTimeout(() => {
-          calculateMiles();
-        }, 500);
-      }
-
-      console.log(`✅ Extracted ${fieldsExtracted} fields from rate confirmation`);
-      
-      // Clear success message after 8 seconds
-      setTimeout(() => setOcrSuccess(false), 8000);
-      
-    } catch (error) {
-      console.error('OCR extraction error:', error);
-      
-      let errorMessage = 'Failed to extract data from document. ';
-      
-      if (error.message.includes('API')) {
-        errorMessage += 'There was an issue connecting to OpenAI. Check your API key.';
-      } else if (error.message.includes('JSON')) {
-        errorMessage += 'The document format was unclear. Please try a clearer image or enter data manually.';
-      } else {
-        errorMessage += 'Please try again with a clearer image or enter manually.';
-      }
-      
-      setOcrError(errorMessage);
-    } finally {
-      setIsProcessingOCR(false);
-      // Reset file input
-      event.target.value = '';
-    }
-  }
-
-  // Auto-calculate miles using Google Maps Distance Matrix API
-  async function calculateMiles() {
-    if (!formData.origin || !formData.destination) {
-      alert("Please enter both origin and destination to calculate miles.");
-      return;
-    }
-
-    setCalculatingMiles(true);
+    setOcrLoading(true);
+    setOcrInfo("");
     setError("");
 
     try {
-      const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-      
-      if (!apiKey) {
-        // Fallback: If no API key, let user enter manually
-        setError("Google Maps API key not configured. Please enter miles manually.");
-        setCalculatingMiles(false);
-        return;
+      const extracted = await extractRateConfirmationData(file);
+
+      console.log("[AddLoadModal] OCR extracted data:", extracted);
+
+      // Safely pull nested address info if present
+      const pickupAddr = extracted?.pickup_address || {};
+      const deliveryAddr = extracted?.delivery_address || {};
+
+      // Derive origin city/state:
+      // 1) explicit origin_city / origin_state
+      // 2) pickup_address.city/state
+      // 3) parse "origin" string ("City, ST")
+      const fromOriginString = parseCityState(extracted.origin);
+      let originCity =
+        extracted.origin_city || pickupAddr.city || fromOriginString.city;
+      let originState =
+        extracted.origin_state || pickupAddr.state || fromOriginString.state;
+
+      // Derive destination city/state
+      const fromDestString = parseCityState(extracted.destination);
+      let destinationCity =
+        extracted.destination_city ||
+        deliveryAddr.city ||
+        fromDestString.city;
+      let destinationState =
+        extracted.destination_state ||
+        deliveryAddr.state ||
+        fromDestString.state;
+
+      // Build full address strings for loads.origin / loads.destination
+      const pickupFull =
+        extracted.pickup_address_full ||
+        [
+          pickupAddr.company_name,
+          pickupAddr.address_line1,
+          pickupAddr.address_line2,
+          [originCity, originState].filter(Boolean).join(", "),
+          pickupAddr.postal_code,
+        ]
+          .filter(Boolean)
+          .join(", ") ||
+        [originCity, originState].filter(Boolean).join(", ");
+
+      const deliveryFull =
+        extracted.delivery_address_full ||
+        [
+          deliveryAddr.company_name,
+          deliveryAddr.address_line1,
+          deliveryAddr.address_line2,
+          [destinationCity, destinationState].filter(Boolean).join(", "),
+          deliveryAddr.postal_code,
+        ]
+          .filter(Boolean)
+          .join(", ") ||
+        [destinationCity, destinationState].filter(Boolean).join(", ");
+
+      const merged = { ...form };
+
+      // Reference / load number
+      if (
+        extracted.reference_number ||
+        extracted.load_number ||
+        extracted.reference
+      ) {
+        merged.reference_number =
+          extracted.reference_number ||
+          extracted.load_number ||
+          extracted.reference;
       }
 
-      const origin = encodeURIComponent(formData.origin.trim());
-      const destination = encodeURIComponent(formData.destination.trim());
-      
-      // Use CORS proxy for development
-      const proxyUrl = 'https://api.allorigins.win/raw?url=';
-      const apiUrl = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${origin}&destinations=${destination}&units=imperial&key=${apiKey}`;
-      
-      const response = await fetch(proxyUrl + encodeURIComponent(apiUrl));
+      // HIGH-LEVEL ORIGIN / DESTINATION TEXT (used by loads.origin / loads.destination)
+      if (pickupFull) merged.origin = pickupFull;
+      if (deliveryFull) merged.destination = deliveryFull;
 
-      if (!response.ok) throw new Error("Failed to fetch distance data");
+      // LOCATIONS (structured city/state)
+      if (originCity) merged.origin_city = originCity;
+      if (originState) merged.origin_state = originState;
+      if (destinationCity) merged.destination_city = destinationCity;
+      if (destinationState) merged.destination_state = destinationState;
 
-      const data = await response.json();
+      // DATES & TIMES
+      if (extracted.pickup_date) merged.pickup_date = extracted.pickup_date;
+      if (extracted.pickup_time) merged.pickup_time = extracted.pickup_time;
+      if (extracted.delivery_date) merged.delivery_date = extracted.delivery_date;
+      if (extracted.delivery_time) merged.delivery_time = extracted.delivery_time;
 
-      if (data.status !== "OK") {
-        throw new Error(data.error_message || "Failed to calculate distance");
+      // CONTACTS & COMPANIES
+      if (extracted.shipper_company || extracted.shipper || pickupAddr.company_name) {
+        merged.shipper_company =
+          extracted.shipper_company || extracted.shipper || pickupAddr.company_name;
+      }
+      if (extracted.broker_customer || extracted.broker_name || extracted.broker) {
+        merged.broker_customer =
+          extracted.broker_customer || extracted.broker_name || extracted.broker;
       }
 
-      const element = data.rows[0]?.elements[0];
-      
-      if (!element || element.status !== "OK") {
-        throw new Error("Could not calculate distance. Check your origin and destination.");
+      if (extracted.shipper_contact_name) {
+        merged.shipper_contact = extracted.shipper_contact_name;
+      }
+      if (extracted.shipper_contact_phone) {
+        merged.shipper_phone = extracted.shipper_contact_phone;
+      }
+      if (extracted.shipper_contact_email) {
+        merged.shipper_email = extracted.shipper_contact_email;
       }
 
-      // Convert meters to miles
-      const miles = Math.round(element.distance.value * 0.000621371);
-      
-      handleChange("miles", miles.toString());
-      setError(""); // Clear any previous errors
-      
-      // Auto-calculate rate if rate_per_mile is set
-      if (formData.rate_per_mile) {
-        const calculatedRate = (miles * parseFloat(formData.rate_per_mile)).toFixed(2);
-        handleChange("rate", calculatedRate);
+      if (extracted.receiver_contact_name) {
+        merged.receiver_contact = extracted.receiver_contact_name;
       }
-    } catch (e) {
-      console.error("[AddLoadModal] Miles calculation error:", e);
-      setError(e.message || "Failed to calculate miles. You can enter manually.");
+      if (extracted.receiver_contact_phone) {
+        merged.receiver_phone = extracted.receiver_contact_phone;
+      }
+      if (extracted.receiver_contact_email) {
+        merged.receiver_email = extracted.receiver_email;
+      }
+
+      // DETAILS
+      if (extracted.commodity) merged.commodity = extracted.commodity;
+      if (extracted.equipment_type) {
+        merged.equipment_type = mapEquipmentFromOcr(extracted.equipment_type);
+      }
+
+      if (extracted.weight_lbs || extracted.weight) {
+        merged.weight_lbs = String(
+          extracted.weight_lbs ?? extracted.weight ?? ""
+        );
+      }
+      if (extracted.pieces || extracted.pallets) {
+        merged.pieces = String(extracted.pieces ?? extracted.pallets ?? "");
+      }
+      if (extracted.temperature) {
+        merged.temperature = String(extracted.temperature);
+      }
+      if (extracted.special_instructions) {
+        merged.special_instructions = extracted.special_instructions;
+      }
+      if (extracted.miles) merged.miles = String(extracted.miles);
+      if (extracted.rate || extracted.total_rate || extracted.line_haul) {
+        merged.rate = String(
+          extracted.rate ?? extracted.total_rate ?? extracted.line_haul ?? ""
+        );
+      }
+
+      console.log("[AddLoadModal] Merged form data:", merged);
+
+      setForm(merged);
+      setOcrInfo("Rate confirmation parsed. Fields auto-filled where possible.");
+    } catch (err) {
+      console.error("[AddLoadModal] OCR error:", err);
+      setError(
+        "Could not parse rate confirmation. You can still enter fields manually."
+      );
     } finally {
-      setCalculatingMiles(false);
+      setOcrLoading(false);
+      // Reset the input so uploading the same file again re-triggers change
+      event.target.value = "";
     }
   }
 
-  // Calculate rate from rate per mile
-  function calculateRateFromPerMile() {
-    if (!formData.miles || !formData.rate_per_mile) {
-      alert("Please enter both miles and rate per mile to calculate total rate.");
-      return;
-    }
-    const miles = parseFloat(formData.miles);
-    const ratePerMile = parseFloat(formData.rate_per_mile);
-    const calculatedRate = (miles * ratePerMile).toFixed(2);
-    handleChange("rate", calculatedRate);
-  }
-
-  function handleChange(field, value) {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-  }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setError("");
-
-    // Basic validation
-    if (!formData.reference.trim()) {
-      setError("Load # is required");
-      return;
-    }
-
+  async function handleSave(e) {
+    if (e) e.preventDefault();
     setSaving(true);
-    try {
-      const { data, error } = await supabase
-        .from("loads")
-        .insert([
-          {
-            reference: formData.reference.trim(),
-            shipper: formData.shipper.trim() || null,
-            origin: formData.origin.trim() || null,
-            destination: formData.destination.trim() || null,
-            status: formData.status,
-            driver_id: formData.driver_id || null,
-            rate: formData.rate ? parseFloat(formData.rate) : null,
-            pickup_date: formData.pickup_date || null,
-            pickup_time: formData.pickup_time || null,
-            delivery_date: formData.delivery_date || null,
-            delivery_time: formData.delivery_time || null,
-            // Contact info
-            shipper_contact_name: formData.shipper_contact_name.trim() || null,
-            shipper_contact_phone: formData.shipper_contact_phone.trim() || null,
-            shipper_contact_email: formData.shipper_contact_email.trim() || null,
-            receiver_contact_name: formData.receiver_contact_name.trim() || null,
-            receiver_contact_phone: formData.receiver_contact_phone.trim() || null,
-            receiver_contact_email: formData.receiver_contact_email.trim() || null,
-            // Reference numbers
-            bol_number: formData.bol_number.trim() || null,
-            po_number: formData.po_number.trim() || null,
-            customer_reference: formData.customer_reference.trim() || null,
-            // Load details
-            commodity: formData.commodity.trim() || null,
-            weight: formData.weight ? parseFloat(formData.weight) : null,
-            pieces: formData.pieces ? parseInt(formData.pieces) : null,
-            equipment_type: formData.equipment_type || null,
-            temperature: formData.temperature.trim() || null,
-            special_instructions: formData.special_instructions.trim() || null,
-            // Financial & distance
-            miles: formData.miles ? parseInt(formData.miles) : null,
-            rate_per_mile: formData.rate_per_mile ? parseFloat(formData.rate_per_mile) : null,
-            detention_charges: formData.detention_charges ? parseFloat(formData.detention_charges) : null,
-            accessorial_charges: formData.accessorial_charges ? parseFloat(formData.accessorial_charges) : null,
-            broker_name: formData.broker_name.trim() || null,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          },
-        ])
-        .select()
-        .single();
+    setError("");
 
-      if (error) throw error;
+    // Derive origin/destination text if user didn't override:
+    const originText =
+      form.origin ||
+      (form.origin_city && form.origin_state
+        ? `${form.origin_city}, ${form.origin_state}`
+        : null);
 
-      // Call parent callback with new load
-      onAdded(data);
-      onClose();
-    } catch (e) {
-      console.error("[AddLoadModal] error:", e);
-      setError(e?.message || "Failed to create load");
-    } finally {
-      setSaving(false);
+    const destinationText =
+      form.destination ||
+      (form.destination_city && form.destination_state
+        ? `${form.destination_city}, ${form.destination_state}`
+        : null);
+
+    // Build payload with CORRECT database column names
+    const payload = {
+      status: form.status || "AVAILABLE",
+      reference: form.reference_number || null,
+
+      // High-level lane fields used across Atlas
+      origin: originText,
+      destination: destinationText,
+
+      // Structured city/state - FIXED TO MATCH DATABASE COLUMNS
+      origin_city: form.origin_city || null,
+      origin_state: form.origin_state || null,
+      dest_city: form.destination_city || null,        // Database column is dest_city
+      dest_state: form.destination_state || null,      // Database column is dest_state
+      
+      pickup_date: form.pickup_date || null,
+      pickup_time: form.pickup_time || null,
+      delivery_date: form.delivery_date || null,
+      delivery_time: form.delivery_time || null,
+
+      // Company fields - FIXED TO MATCH DATABASE COLUMNS
+      shipper: form.shipper_company || null,           // Database column is shipper
+      shipper_name: form.shipper_company || null,      // Also set shipper_name
+      broker: form.broker_customer || null,            // Database column is broker
+      broker_name: form.broker_customer || null,       // Also set broker_name
+      
+      // Contact fields
+      shipper_contact_name: form.shipper_contact || null,
+      shipper_contact_phone: form.shipper_phone || null,
+      shipper_contact_email: form.shipper_email || null,
+      receiver_contact_name: form.receiver_contact || null,
+      receiver_contact_phone: form.receiver_phone || null,
+      receiver_contact_email: form.receiver_email || null,
+
+      // Load details
+      commodity: form.commodity || null,
+      equipment_type: form.equipment_type || null,
+      weight: form.weight_lbs === "" ? null : Number(form.weight_lbs),  // Database column is weight
+      pieces: form.pieces === "" ? null : Number(form.pieces),
+      temperature: form.temperature || null,
+      special_instructions: form.special_instructions || null,
+      miles: form.miles === "" ? null : Number(form.miles),
+      rate: form.rate === "" ? null : Number(form.rate),
+    };
+
+    // Remove undefined so we don't send junk
+    Object.keys(payload).forEach((k) => {
+      if (payload[k] === undefined) delete payload[k];
+    });
+
+    console.log("[AddLoadModal] Saving payload:", payload);
+
+    const { data, error: dbError } = await supabase
+      .from("loads")
+      .insert(payload)
+      .select()
+      .single();
+
+    setSaving(false);
+
+    if (dbError) {
+      console.error("[AddLoadModal] insert error:", dbError);
+      setError(dbError.message || "Failed to create load.");
+      return;
     }
+
+    console.log("[AddLoadModal] Successfully created load:", data);
+
+    // Notify parent
+    if (onCreated) onCreated(data);
+    if (onSaved) onSaved(data);
+
+    if (onClose) onClose();
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 overflow-y-auto">
-      <div className="w-full max-w-4xl my-8 rounded-2xl border border-white/10 bg-[#0B0B0F] p-6">
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="relative flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-emerald-400/20 bg-slate-950/95 shadow-2xl shadow-black/50">
         {/* Header */}
-        <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/10">
-              <Ico as={Plus} className="text-amber-400" />
+        <div className="flex items-center justify-between border-b border-white/10 px-5 py-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.18em] text-emerald-400/80">
+              New Load
+            </p>
+            <div className="flex items-baseline gap-3">
+              <h2 className="text-xl font-semibold text-slate-50">
+                {form.reference_number || "Create Load"}
+              </h2>
+              <span className="rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide text-emerald-200">
+                {form.status || "AVAILABLE"}
+              </span>
             </div>
-            <h3 className="text-lg font-semibold">Add New Load</h3>
           </div>
-          <IconButton title="Close" onClick={onClose}>
-            <Ico as={X} />
-          </IconButton>
+
+          <div className="flex items-center gap-2">
+            {saving && (
+              <div className="flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-100">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Saving…
+              </div>
+            )}
+            <IconButton title="Close" onClick={onClose}>
+              <Ico as={X} />
+            </IconButton>
+          </div>
         </div>
 
-        {/* OCR Upload Section */}
-        <div className="mb-6 rounded-xl border-2 border-dashed border-amber-500/30 bg-gradient-to-br from-amber-500/5 to-amber-500/10 p-4">
-          <div className="flex items-start gap-3">
-            <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/20 flex-shrink-0">
-              <Ico as={Upload} className="text-amber-400" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <h4 className="text-sm font-semibold">Upload Rate Confirmation</h4>
-                <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-medium text-emerald-300 uppercase tracking-wide">
-                  AI Powered
-                </span>
-              </div>
-              <p className="text-xs text-white/60 mb-3">
-                Upload your broker's rate confirmation (screenshot, photo, or PDF) and let AI automatically fill out the form for you.
-              </p>
-              
-              <div className="flex items-center gap-2">
-                <label className="inline-block">
-                  <input
-                    type="file"
-                    accept="image/*,application/pdf"
-                    onChange={handleOCRUpload}
-                    disabled={isProcessingOCR}
-                    className="hidden"
-                    id="ocr-upload"
-                  />
-                  <span className={cx(
-                    "inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium cursor-pointer transition-all",
-                    isProcessingOCR
-                      ? "bg-white/5 text-white/40 cursor-not-allowed"
-                      : "bg-amber-500/90 text-black hover:bg-amber-400 hover:shadow-lg hover:shadow-amber-500/20"
-                  )}>
-                    {isProcessingOCR ? (
-                      <>
-                        <Ico as={Loader2} className="animate-spin" />
-                        Processing...
-                      </>
-                    ) : (
-                      <>
-                        <Ico as={Upload} />
-                        Choose File
-                      </>
-                    )}
-                  </span>
-                </label>
-                
-                {isProcessingOCR && (
-                  <div className="text-xs text-white/50">
-                    Reading document with AI...
-                  </div>
+        {/* Scrollable body */}
+        <form
+          onSubmit={handleSave}
+          className="flex-1 space-y-6 overflow-y-auto px-6 py-5"
+        >
+          {/* OCR SECTION */}
+          <section className="rounded-xl border border-emerald-400/20 bg-slate-900/60 p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">
+                  Rate Confirmation OCR
+                </h3>
+                <p className="mt-1 text-xs text-slate-300/80">
+                  Upload a PDF or image of a rate confirmation and Atlas will
+                  pre-fill as many fields as it can. You can still adjust
+                  everything manually.
+                </p>
+                {ocrInfo && (
+                  <p className="mt-2 text-[11px] text-emerald-300">{ocrInfo}</p>
                 )}
               </div>
-
-              {ocrSuccess && (
-                <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2.5">
-                  <div className="mt-0.5 h-2 w-2 rounded-full bg-emerald-400 flex-shrink-0"></div>
-                  <div className="text-xs text-emerald-200">
-                    <strong>Success!</strong> Rate confirmation processed. Review the auto-filled fields below and make any adjustments needed.
-                  </div>
-                </div>
-              )}
-
-              {ocrError && (
-                <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-xs text-red-200">
-                  <strong>Error:</strong> {ocrError}
-                </div>
-              )}
+              <div className="flex items-center gap-2">
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-100 transition hover:bg-emerald-500/20">
+                  {ocrLoading ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Processing…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="h-3.5 w-3.5" />
+                      <span>Upload Rate Confirmation</span>
+                    </>
+                  )}
+                  <input
+                    type="file"
+                    accept="application/pdf,image/*"
+                    className="hidden"
+                    onChange={handleOcrFileChange}
+                    disabled={ocrLoading}
+                  />
+                </label>
+              </div>
             </div>
-          </div>
-        </div>
+          </section>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* === BASIC INFO === */}
-          <div className="space-y-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-white/50">Basic Information</h4>
-            
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs text-white/70">
-                  Load # <span className="text-red-400">*</span>
+          {/* BASIC INFORMATION */}
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+              Basic Information
+            </h3>
+            <div className="mt-3 grid gap-4 md:grid-cols-4">
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Load # / Ref</label>
+                <input
+                  type="text"
+                  value={form.reference_number}
+                  onChange={(e) =>
+                    updateField("reference_number", e.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Status</label>
+                <div className="relative">
+                  <select
+                    value={form.status}
+                    onChange={(e) => updateField("status", e.target.value)}
+                    className="h-9 w-full appearance-none rounded-lg border border-white/10 bg-slate-900/70 px-3 pr-8 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
+                  >
+                    {STATUS_OPTIONS.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                </div>
+              </div>
+
+              <div className="space-y-1.5 md:col-span-1">
+                <label className="text-xs text-slate-400">
+                  Shipper Company
                 </label>
                 <input
                   type="text"
-                  value={formData.reference}
-                  onChange={(e) => handleChange("reference", e.target.value)}
-                  placeholder="e.g. LD-2024-001"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
-                  autoFocus
+                  value={form.shipper_company}
+                  onChange={(e) =>
+                    updateField("shipper_company", e.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
               </div>
 
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Status</label>
-                <select
-                  value={formData.status}
-                  onChange={(e) => handleChange("status", e.target.value)}
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none focus:border-amber-500/50"
-                >
-                  <option value="AVAILABLE" className="bg-[#0B0B0F]">Available</option>
-                  <option value="IN_TRANSIT" className="bg-[#0B0B0F]">In Transit</option>
-                  <option value="DELIVERED" className="bg-[#0B0B0F]">Delivered</option>
-                  <option value="CANCELLED" className="bg-[#0B0B0F]">Cancelled</option>
-                  <option value="AT_RISK" className="bg-[#0B0B0F]">At Risk</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Shipper Company</label>
+              <div className="space-y-1.5 md:col-span-1">
+                <label className="text-xs text-slate-400">
+                  Broker / Customer
+                </label>
                 <input
                   type="text"
-                  value={formData.shipper}
-                  onChange={(e) => handleChange("shipper", e.target.value)}
-                  placeholder="Company name"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Broker/Customer</label>
-                <input
-                  type="text"
-                  value={formData.broker_name}
-                  onChange={(e) => handleChange("broker_name", e.target.value)}
-                  placeholder="Broker or customer name"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
+                  value={form.broker_customer}
+                  onChange={(e) =>
+                    updateField("broker_customer", e.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
               </div>
             </div>
+          </section>
 
-            <div>
-              <label className="mb-1 block text-xs text-white/70">
-                Driver <span className="text-white/40 text-xs">(optional)</span>
-              </label>
-              <div className="relative">
-                <select
-                  value={formData.driver_id}
-                  onChange={(e) => handleChange("driver_id", e.target.value)}
-                  disabled={loadingDrivers}
-                  className="w-full appearance-none rounded-xl border border-white/10 bg-transparent px-3 py-2 pr-10 text-sm outline-none focus:border-amber-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <option value="" className="bg-[#0B0B0F]">
-                    {loadingDrivers ? "Loading drivers..." : "Select a driver (optional)"}
-                  </option>
-                  {drivers.map((d) => (
-                    <option key={d.id} value={d.id} className="bg-[#0B0B0F]">
-                      {d.last_name}, {d.first_name}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 opacity-60" />
+          {/* LOCATIONS & SCHEDULE */}
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+              Locations &amp; Schedule
+            </h3>
+
+            {/* High-level origin/destination single-line (optional for you in future UI) */}
+            {/* For now we just show the structured City/State fields that were already here */}
+
+            <div className="mt-3 grid gap-4 md:grid-cols-4">
+              {/* ORIGIN */}
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-xs text-slate-400">Origin</label>
+                <div className="grid grid-cols-[2fr,1fr] gap-2">
+                  <input
+                    type="text"
+                    placeholder="City"
+                    value={form.origin_city}
+                    onChange={(e) =>
+                      updateField("origin_city", e.target.value)
+                    }
+                    className="h-9 rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
+                  />
+                  <input
+                    type="text"
+                    placeholder="State"
+                    value={form.origin_state}
+                    onChange={(e) =>
+                      updateField("origin_state", e.target.value)
+                    }
+                    className="h-9 rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
+                  />
+                </div>
               </div>
-              {drivers.length === 0 && !loadingDrivers && (
-                <p className="mt-1 text-xs text-white/50">No active drivers available.</p>
-              )}
+
+              {/* DESTINATION */}
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-xs text-slate-400">Destination</label>
+                <div className="grid grid-cols-[2fr,1fr] gap-2">
+                  <input
+                    type="text"
+                    placeholder="City"
+                    value={form.destination_city}
+                    onChange={(e) =>
+                      updateField("destination_city", e.target.value)
+                    }
+                    className="h-9 rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
+                  />
+                  <input
+                    type="text"
+                    placeholder="State"
+                    value={form.destination_state}
+                    onChange={(e) =>
+                      updateField("destination_state", e.target.value)
+                    }
+                    className="h-9 rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
+                  />
+                </div>
+              </div>
             </div>
-          </div>
 
-          {/* === LOCATIONS & SCHEDULE === */}
-          <div className="space-y-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-white/50">Locations & Schedule</h4>
-            
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Origin</label>
-                <input
-                  type="text"
-                  value={formData.origin}
-                  onChange={(e) => handleChange("origin", e.target.value)}
-                  placeholder="City, State"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Destination</label>
-                <input
-                  type="text"
-                  value={formData.destination}
-                  onChange={(e) => handleChange("destination", e.target.value)}
-                  placeholder="City, State"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
-                />
-              </div>
-            </div>
-
-            {/* Pickup Date & Time */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div className="sm:col-span-2">
-                <label className="mb-1 block text-xs text-white/70">Pickup Date</label>
+            <div className="mt-3 grid gap-4 md:grid-cols-4">
+              {/* PICKUP DATE/TIME */}
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Pickup Date</label>
                 <input
                   type="date"
-                  value={formData.pickup_date}
-                  onChange={(e) => handleChange("pickup_date", e.target.value)}
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none focus:border-amber-500/50"
+                  value={form.pickup_date || ""}
+                  onChange={(e) => updateField("pickup_date", e.target.value)}
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
               </div>
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Time</label>
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Pickup Time</label>
                 <input
                   type="time"
-                  value={formData.pickup_time}
-                  onChange={(e) => handleChange("pickup_time", e.target.value)}
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none focus:border-amber-500/50"
+                  value={form.pickup_time || ""}
+                  onChange={(e) => updateField("pickup_time", e.target.value)}
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
               </div>
-            </div>
 
-            {/* Delivery Date & Time */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div className="sm:col-span-2">
-                <label className="mb-1 block text-xs text-white/70">Delivery Date</label>
+              {/* DELIVERY DATE/TIME */}
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Delivery Date</label>
                 <input
                   type="date"
-                  value={formData.delivery_date}
-                  onChange={(e) => handleChange("delivery_date", e.target.value)}
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none focus:border-amber-500/50"
+                  value={form.delivery_date || ""}
+                  onChange={(e) =>
+                    updateField("delivery_date", e.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
               </div>
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Time</label>
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Delivery Time</label>
                 <input
                   type="time"
-                  value={formData.delivery_time}
-                  onChange={(e) => handleChange("delivery_time", e.target.value)}
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none focus:border-amber-500/50"
+                  value={form.delivery_time || ""}
+                  onChange={(e) =>
+                    updateField("delivery_time", e.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
               </div>
             </div>
-          </div>
+          </section>
 
-          {/* === CONTACTS === */}
-          <div className="space-y-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-white/50">Contact Information</h4>
-            
-            <div className="rounded-xl border border-white/10 p-3 space-y-2">
-              <div className="text-xs font-medium text-white/70 mb-2">Shipper Contact</div>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {/* CONTACT INFORMATION */}
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+              Contact Information
+            </h3>
+            <div className="mt-3 grid gap-4 md:grid-cols-3">
+              {/* Shipper contact */}
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Shipper Contact</label>
                 <input
                   type="text"
-                  value={formData.shipper_contact_name}
-                  onChange={(e) => handleChange("shipper_contact_name", e.target.value)}
-                  placeholder="Contact name"
-                  className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
+                  value={form.shipper_contact}
+                  onChange={(e) =>
+                    updateField("shipper_contact", e.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Shipper Phone</label>
                 <input
-                  type="tel"
-                  value={formData.shipper_contact_phone}
-                  onChange={(e) => handleChange("shipper_contact_phone", e.target.value)}
-                  placeholder="Phone"
-                  className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
+                  type="text"
+                  value={form.shipper_phone}
+                  onChange={(e) =>
+                    updateField("shipper_phone", e.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Shipper Email</label>
                 <input
                   type="email"
-                  value={formData.shipper_contact_email}
-                  onChange={(e) => handleChange("shipper_contact_email", e.target.value)}
-                  placeholder="Email"
-                  className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
+                  value={form.shipper_email}
+                  onChange={(e) =>
+                    updateField("shipper_email", e.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
               </div>
             </div>
 
-            <div className="rounded-xl border border-white/10 p-3 space-y-2">
-              <div className="text-xs font-medium text-white/70 mb-2">Receiver Contact</div>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div className="mt-3 grid gap-4 md:grid-cols-3">
+              {/* Receiver contact */}
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">
+                  Receiver Contact
+                </label>
                 <input
                   type="text"
-                  value={formData.receiver_contact_name}
-                  onChange={(e) => handleChange("receiver_contact_name", e.target.value)}
-                  placeholder="Contact name"
-                  className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
+                  value={form.receiver_contact}
+                  onChange={(e) =>
+                    updateField("receiver_contact", e.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Receiver Phone</label>
                 <input
-                  type="tel"
-                  value={formData.receiver_contact_phone}
-                  onChange={(e) => handleChange("receiver_contact_phone", e.target.value)}
-                  placeholder="Phone"
-                  className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
+                  type="text"
+                  value={form.receiver_phone}
+                  onChange={(e) =>
+                    updateField("receiver_phone", e.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Receiver Email</label>
                 <input
                   type="email"
-                  value={formData.receiver_contact_email}
-                  onChange={(e) => handleChange("receiver_contact_email", e.target.value)}
-                  placeholder="Email"
-                  className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
+                  value={form.receiver_email}
+                  onChange={(e) =>
+                    updateField("receiver_email", e.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
               </div>
             </div>
-          </div>
+          </section>
 
-          {/* === LOAD DETAILS === */}
-          <div className="space-y-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-white/50">Load Details</h4>
-            
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Commodity</label>
+          {/* LOAD DETAILS */}
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+              Load Details
+            </h3>
+            <div className="mt-3 grid gap-4 md:grid-cols-4">
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-xs text-slate-400">Commodity</label>
                 <input
                   type="text"
-                  value={formData.commodity}
-                  onChange={(e) => handleChange("commodity", e.target.value)}
-                  placeholder="What's being shipped"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
+                  value={form.commodity}
+                  onChange={(e) => updateField("commodity", e.target.value)}
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
               </div>
 
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Equipment Type</label>
-                <select
-                  value={formData.equipment_type}
-                  onChange={(e) => handleChange("equipment_type", e.target.value)}
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none focus:border-amber-500/50"
-                >
-                  <option value="DRY_VAN" className="bg-[#0B0B0F]">Dry Van</option>
-                  <option value="REEFER" className="bg-[#0B0B0F]">Reefer</option>
-                  <option value="FLATBED" className="bg-[#0B0B0F]">Flatbed</option>
-                  <option value="STEP_DECK" className="bg-[#0B0B0F]">Step Deck</option>
-                  <option value="LOWBOY" className="bg-[#0B0B0F]">Lowboy</option>
-                  <option value="POWER_ONLY" className="bg-[#0B0B0F]">Power Only</option>
-                  <option value="BOX_TRUCK" className="bg-[#0B0B0F]">Box Truck</option>
-                  <option value="OTHER" className="bg-[#0B0B0F]">Other</option>
-                </select>
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Equipment Type</label>
+                <div className="relative">
+                  <select
+                    value={form.equipment_type}
+                    onChange={(e) =>
+                      updateField("equipment_type", e.target.value)
+                    }
+                    className="h-9 w-full appearance-none rounded-lg border border-white/10 bg-slate-900/70 px-3 pr-8 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
+                  >
+                    <option value="">Select equipment</option>
+                    {EQUIPMENT_OPTIONS.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Weight (lbs)</label>
+                <input
+                  type="number"
+                  value={form.weight_lbs}
+                  onChange={(e) =>
+                    updateField("weight_lbs", e.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
+                />
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Weight (lbs)</label>
+            <div className="mt-3 grid gap-4 md:grid-cols-4">
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">
+                  Pieces / Pallets
+                </label>
                 <input
                   type="number"
-                  min="0"
-                  value={formData.weight}
-                  onChange={(e) => handleChange("weight", e.target.value)}
-                  placeholder="0"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
+                  value={form.pieces}
+                  onChange={(e) => updateField("pieces", e.target.value)}
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
               </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Pieces/Pallets</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={formData.pieces}
-                  onChange={(e) => handleChange("pieces", e.target.value)}
-                  placeholder="0"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Temperature</label>
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Temperature</label>
                 <input
                   type="text"
-                  value={formData.temperature}
-                  onChange={(e) => handleChange("temperature", e.target.value)}
                   placeholder="e.g. 35°F"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
+                  value={form.temperature}
+                  onChange={(e) =>
+                    updateField("temperature", e.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Miles</label>
+                <input
+                  type="number"
+                  value={form.miles}
+                  onChange={(e) => updateField("miles", e.target.value)}
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400">Rate ($)</label>
+                <input
+                  type="number"
+                  value={form.rate}
+                  onChange={(e) => updateField("rate", e.target.value)}
+                  className="h-9 w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
                 />
               </div>
             </div>
 
-            <div>
-              <label className="mb-1 block text-xs text-white/70">Special Instructions</label>
+            <div className="mt-3">
+              <label className="mb-1.5 block text-xs text-slate-400">
+                Special Instructions
+              </label>
               <textarea
-                value={formData.special_instructions}
-                onChange={(e) => handleChange("special_instructions", e.target.value)}
-                placeholder="Any special handling, requirements, or notes..."
-                rows={2}
-                className="w-full resize-y rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
+                rows={4}
+                value={form.special_instructions}
+                onChange={(e) =>
+                  updateField("special_instructions", e.target.value)
+                }
+                className="w-full rounded-lg border border-white/10 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 outline-none ring-0 transition focus:border-emerald-400/60 focus:bg-slate-900 focus:ring-1 focus:ring-emerald-400/50"
               />
             </div>
-          </div>
-
-          {/* === REFERENCE NUMBERS === */}
-          <div className="space-y-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-white/50">Reference Numbers</h4>
-            
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div>
-                <label className="mb-1 block text-xs text-white/70">BOL #</label>
-                <input
-                  type="text"
-                  value={formData.bol_number}
-                  onChange={(e) => handleChange("bol_number", e.target.value)}
-                  placeholder="Bill of Lading"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-white/70">PO #</label>
-                <input
-                  type="text"
-                  value={formData.po_number}
-                  onChange={(e) => handleChange("po_number", e.target.value)}
-                  placeholder="Purchase Order"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Customer Ref #</label>
-                <input
-                  type="text"
-                  value={formData.customer_reference}
-                  onChange={(e) => handleChange("customer_reference", e.target.value)}
-                  placeholder="Reference"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* === FINANCIAL === */}
-          <div className="space-y-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-white/50">Financial & Distance</h4>
-            
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Rate Per Mile</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-white/40">$</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={formData.rate_per_mile}
-                    onChange={(e) => handleChange("rate_per_mile", e.target.value)}
-                    placeholder="0.00"
-                    className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 pl-7 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-white/70 flex items-center justify-between">
-                  <span>Miles</span>
-                  <button
-                    type="button"
-                    onClick={calculateMiles}
-                    disabled={calculatingMiles || !formData.origin || !formData.destination}
-                    className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {calculatingMiles ? "Calculating..." : "Auto-calculate"}
-                  </button>
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  value={formData.miles}
-                  onChange={(e) => handleChange("miles", e.target.value)}
-                  placeholder="Enter or auto-calculate"
-                  className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-white/70 flex items-center justify-between">
-                  <span>Total Rate</span>
-                  <button
-                    type="button"
-                    onClick={calculateRateFromPerMile}
-                    disabled={!formData.miles || !formData.rate_per_mile}
-                    className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Calculate
-                  </button>
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-white/40">$</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={formData.rate}
-                    onChange={(e) => handleChange("rate", e.target.value)}
-                    placeholder="0.00"
-                    className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 pl-7 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Detention Charges</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-white/40">$</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={formData.detention_charges}
-                    onChange={(e) => handleChange("detention_charges", e.target.value)}
-                    placeholder="0.00"
-                    className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 pl-7 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs text-white/70">Accessorial Charges</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-white/40">$</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={formData.accessorial_charges}
-                    onChange={(e) => handleChange("accessorial_charges", e.target.value)}
-                    placeholder="0.00"
-                    className="w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 pl-7 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
+          </section>
 
           {/* Error message */}
           {error && (
-            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
+            <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-100">
               {error}
             </div>
           )}
-
-          {/* Actions */}
-          <div className="flex items-center justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-xl border border-white/10 px-4 py-2 text-sm hover:bg-white/5"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="inline-flex items-center gap-2 rounded-xl bg-amber-500/90 px-4 py-2 text-sm font-medium text-black hover:bg-amber-400 disabled:opacity-60"
-            >
-              {saving ? (
-                <>
-                  <Ico as={Loader2} className="animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                <>
-                  <Ico as={Plus} />
-                  Add Load
-                </>
-              )}
-            </button>
-          </div>
         </form>
+
+        {/* Footer buttons */}
+        <div className="flex items-center justify-between border-t border-white/10 px-5 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-100 transition hover:bg-white/10"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form=""
+            onClick={handleSave}
+            disabled={saving}
+            className={cx(
+              "inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-950 shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+            )}
+          >
+            {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            <Plus className="h-3.5 w-3.5" />
+            <span>{saving ? "Creating…" : "Create Load"}</span>
+          </button>
+        </div>
       </div>
     </div>
   );

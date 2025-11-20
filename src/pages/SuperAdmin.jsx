@@ -6,6 +6,7 @@
 //    • See all orgs (via super-admin-orgs)
 //    • Select an org and see its team members (via super-admin-org-members)
 //    • Toggle per-user AI feature flags like ai_recommendations_enabled (via super-admin-set-feature)
+//    • Manage diesel fuel prices for profitability calculations (EIA API integration)
 //
 // SECURITY:
 // - All real access control is enforced in the Edge Functions.
@@ -26,6 +27,7 @@ import {
   ToggleLeft,
   ToggleRight,
 } from "lucide-react";
+import FuelPriceSettings from "../components/FuelPriceSettings";
 
 function cx(...classes) {
   return classes.filter(Boolean).join(" ");
@@ -403,248 +405,254 @@ export default function SuperAdmin() {
       </div>
 
       {/* Main content */}
-      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-[270px,1fr] gap-4">
-        {/* Orgs list */}
-        <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-3 flex flex-col">
-          <div className="flex items-center justify-between mb-2 px-1">
-            <div className="flex items-center gap-2">
-              <Users className="w-4 h-4 text-slate-300" />
-              <span className="text-xs font-medium uppercase tracking-wide text-slate-300">
-                Organizations
-              </span>
-            </div>
-            {loadingOrgs && (
-              <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
-            )}
-          </div>
+      <div className="max-w-6xl mx-auto space-y-4">
+        {/* Fuel Price Management Section */}
+        <FuelPriceSettings />
 
-          <div className="space-y-1 overflow-y-auto max-h-[540px] pr-1">
-            {orgs.length === 0 && !loadingOrgs && (
-              <div className="text-xs text-slate-400 px-1 py-2">
-                No organizations found.
-              </div>
-            )}
-
-            {orgs.map((org) => {
-              const isActive = org.id === selectedOrgId;
-              return (
-                <button
-                  key={org.id}
-                  onClick={() => setSelectedOrgId(org.id)}
-                  className={cx(
-                    "w-full text-left px-3 py-2 rounded-xl border text-xs mb-1 transition",
-                    isActive
-                      ? "bg-emerald-500/15 border-emerald-500/60 text-emerald-50"
-                      : "bg-slate-950/40 border-slate-800 text-slate-200 hover:bg-slate-900/80 hover:border-slate-700"
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium truncate">
-                      {org.name || "Unnamed org"}
-                    </span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-slate-600/60 text-slate-300">
-                      {fmtPlan(org.plan)}
-                    </span>
-                  </div>
-                  <div className="mt-0.5 flex items-center justify-between text-[11px] text-slate-400">
-                    <span>Created {fmtDate(org.created_at)}</span>
-                    <span
-                      className={cx(
-                        "px-1.5 py-0.5 rounded-full border text-[10px]",
-                        org.status === "active"
-                          ? "border-emerald-500/50 text-emerald-300 bg-emerald-500/10"
-                          : "border-slate-600 text-slate-300 bg-slate-900/80"
-                      )}
-                    >
-                      {fmtStatus(org.status)}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Right side: org details + members */}
-        <div className="space-y-4">
-          {/* Selected org summary */}
-          <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-4 flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-3 mb-1">
-              <div className="flex items-center gap-2">
-                <Settings2 className="w-4 h-4 text-slate-300" />
-                <span className="text-xs font-medium uppercase tracking-wide text-slate-300">
-                  Org Overview
-                </span>
-              </div>
-              {loadingMembers && (
-                <span className="inline-flex items-center gap-1 text-[11px] text-slate-400">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Loading team…
-                </span>
-              )}
-            </div>
-
-            {selectedOrg ? (
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-slate-50">
-                    {selectedOrg.name || "Unnamed org"}
-                  </div>
-                  <div className="text-xs text-slate-400 mt-0.5">
-                    ID:{" "}
-                    <span className="font-mono text-[11px] text-slate-300">
-                      {selectedOrg.id}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2 text-[11px]">
-                  <span className="px-2 py-1 rounded-full border border-slate-700 bg-slate-950/60 text-slate-200">
-                    Plan:{" "}
-                    <span className="font-semibold">
-                      {fmtPlan(selectedOrg.plan)}
-                    </span>
-                  </span>
-                  <span
-                    className={cx(
-                      "px-2 py-1 rounded-full border text-slate-200",
-                      selectedOrg.status === "active"
-                        ? "border-emerald-500/60 bg-emerald-500/10"
-                        : "border-slate-700 bg-slate-950/60"
-                    )}
-                  >
-                    Status:{" "}
-                    <span className="font-semibold">
-                      {fmtStatus(selectedOrg.status)}
-                    </span>
-                  </span>
-                  <span className="px-2 py-1 rounded-full border border-slate-700 bg-slate-950/60 text-slate-300">
-                    Members:{" "}
-                    <span className="font-semibold">{members.length}</span>
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <div className="text-sm text-slate-400">
-                Select an organization from the left to view details and team
-                members.
-              </div>
-            )}
-          </div>
-
-          {/* Members table */}
-          <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-3">
+        {/* Organizations and Team Management */}
+        <div className="grid grid-cols-1 lg:grid-cols-[270px,1fr] gap-4">
+          {/* Orgs list */}
+          <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-3 flex flex-col">
+            <div className="flex items-center justify-between mb-2 px-1">
               <div className="flex items-center gap-2">
                 <Users className="w-4 h-4 text-slate-300" />
                 <span className="text-xs font-medium uppercase tracking-wide text-slate-300">
-                  Team Members
+                  Organizations
                 </span>
               </div>
-              <span className="text-[11px] text-slate-400">
-                Toggle AI Recommendations per user. Future flags can be wired
-                here as well.
-              </span>
+              {loadingOrgs && (
+                <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+              )}
             </div>
 
-            {membersError && (
-              <div className="mb-3 text-xs text-red-400 flex items-center gap-1">
-                <AlertTriangle className="w-3.5 h-3.5" />
-                <span>{membersError}</span>
-              </div>
-            )}
+            <div className="space-y-1 overflow-y-auto max-h-[540px] pr-1">
+              {orgs.length === 0 && !loadingOrgs && (
+                <div className="text-xs text-slate-400 px-1 py-2">
+                  No organizations found.
+                </div>
+              )}
 
-            {(!members || members.length === 0) && !loadingMembers ? (
-              <div className="text-sm text-slate-400">
-                No team members found for this organization.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-800/80 text-slate-400">
-                      <th className="py-2 pr-3 text-left font-medium">User</th>
-                      <th className="py-2 px-3 text-left font-medium">Role</th>
-                      <th className="py-2 px-3 text-left font-medium">
-                        Status
-                      </th>
-                      <th className="py-2 px-3 text-left font-medium">
-                        AI Recommendations
-                      </th>
-                      <th className="py-2 px-3 text-left font-medium">
-                        Created
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {members.map((member) => {
-                      const busy = !!toggleBusy[member.id];
-                      const enabled = !!member.ai_recommendations_enabled;
+              {orgs.map((org) => {
+                const isActive = org.id === selectedOrgId;
+                return (
+                  <button
+                    key={org.id}
+                    onClick={() => setSelectedOrgId(org.id)}
+                    className={cx(
+                      "w-full text-left px-3 py-2 rounded-xl border text-xs mb-1 transition",
+                      isActive
+                        ? "bg-emerald-500/15 border-emerald-500/60 text-emerald-50"
+                        : "bg-slate-950/40 border-slate-800 text-slate-200 hover:bg-slate-900/80 hover:border-slate-700"
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium truncate">
+                        {org.name || "Unnamed org"}
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-slate-600/60 text-slate-300">
+                        {fmtPlan(org.plan)}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 flex items-center justify-between text-[11px] text-slate-400">
+                      <span>Created {fmtDate(org.created_at)}</span>
+                      <span
+                        className={cx(
+                          "px-1.5 py-0.5 rounded-full border text-[10px]",
+                          org.status === "active"
+                            ? "border-emerald-500/50 text-emerald-300 bg-emerald-500/10"
+                            : "border-slate-600 text-slate-300 bg-slate-900/80"
+                        )}
+                      >
+                        {fmtStatus(org.status)}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
-                      return (
-                        <tr
-                          key={member.id}
-                          className="border-b border-slate-800/60 last:border-b-0"
-                        >
-                          <td className="py-2 pr-3 align-middle">
-                            <div className="flex flex-col">
-                              <span className="font-medium text-slate-100">
-                                {member.email || "Unknown"}
-                              </span>
-                              <span className="font-mono text-[10px] text-slate-500">
-                                {member.user_id || "no user_id"}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="py-2 px-3 align-middle">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full border border-slate-700 bg-slate-950/60 text-[11px] text-slate-200">
-                              {member.role || "member"}
-                            </span>
-                          </td>
-                          <td className="py-2 px-3 align-middle">
-                            <span
-                              className={cx(
-                                "inline-flex items-center px-2 py-0.5 rounded-full border text-[11px]",
-                                member.status === "active"
-                                  ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-300"
-                                  : "border-slate-700 bg-slate-950/60 text-slate-300"
-                              )}
-                            >
-                              {member.status || "unknown"}
-                            </span>
-                          </td>
-                          <td className="py-2 px-3 align-middle">
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => handleToggleAiRecs(member)}
-                              className={cx(
-                                "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] transition",
-                                enabled
-                                  ? "border-emerald-500/70 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20"
-                                  : "border-slate-700 bg-slate-950/60 text-slate-300 hover:bg-slate-900/80",
-                                busy && "opacity-70 cursor-wait"
-                              )}
-                            >
-                              {busy ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : enabled ? (
-                                <ToggleRight className="w-3.5 h-3.5" />
-                              ) : (
-                                <ToggleLeft className="w-3.5 h-3.5" />
-                              )}
-                              <span>{enabled ? "Enabled" : "Disabled"}</span>
-                            </button>
-                          </td>
-                          <td className="py-2 px-3 align-middle text-slate-400">
-                            {fmtDate(member.created_at)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+          {/* Right side: org details + members */}
+          <div className="space-y-4">
+            {/* Selected org summary */}
+            <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-4 flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-3 mb-1">
+                <div className="flex items-center gap-2">
+                  <Settings2 className="w-4 h-4 text-slate-300" />
+                  <span className="text-xs font-medium uppercase tracking-wide text-slate-300">
+                    Org Overview
+                  </span>
+                </div>
+                {loadingMembers && (
+                  <span className="inline-flex items-center gap-1 text-[11px] text-slate-400">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Loading team…
+                  </span>
+                )}
               </div>
-            )}
+
+              {selectedOrg ? (
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-50">
+                      {selectedOrg.name || "Unnamed org"}
+                    </div>
+                    <div className="text-xs text-slate-400 mt-0.5">
+                      ID:{" "}
+                      <span className="font-mono text-[11px] text-slate-300">
+                        {selectedOrg.id}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-[11px]">
+                    <span className="px-2 py-1 rounded-full border border-slate-700 bg-slate-950/60 text-slate-200">
+                      Plan:{" "}
+                      <span className="font-semibold">
+                        {fmtPlan(selectedOrg.plan)}
+                      </span>
+                    </span>
+                    <span
+                      className={cx(
+                        "px-2 py-1 rounded-full border text-slate-200",
+                        selectedOrg.status === "active"
+                          ? "border-emerald-500/60 bg-emerald-500/10"
+                          : "border-slate-700 bg-slate-950/60"
+                      )}
+                    >
+                      Status:{" "}
+                      <span className="font-semibold">
+                        {fmtStatus(selectedOrg.status)}
+                      </span>
+                    </span>
+                    <span className="px-2 py-1 rounded-full border border-slate-700 bg-slate-950/60 text-slate-300">
+                      Members:{" "}
+                      <span className="font-semibold">{members.length}</span>
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-slate-400">
+                  Select an organization from the left to view details and team
+                  members.
+                </div>
+              )}
+            </div>
+
+            {/* Members table */}
+            <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Users className="w-4 h-4 text-slate-300" />
+                  <span className="text-xs font-medium uppercase tracking-wide text-slate-300">
+                    Team Members
+                  </span>
+                </div>
+                <span className="text-[11px] text-slate-400">
+                  Toggle AI Recommendations per user. Future flags can be wired
+                  here as well.
+                </span>
+              </div>
+
+              {membersError && (
+                <div className="mb-3 text-xs text-red-400 flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  <span>{membersError}</span>
+                </div>
+              )}
+
+              {(!members || members.length === 0) && !loadingMembers ? (
+                <div className="text-sm text-slate-400">
+                  No team members found for this organization.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800/80 text-slate-400">
+                        <th className="py-2 pr-3 text-left font-medium">User</th>
+                        <th className="py-2 px-3 text-left font-medium">Role</th>
+                        <th className="py-2 px-3 text-left font-medium">
+                          Status
+                        </th>
+                        <th className="py-2 px-3 text-left font-medium">
+                          AI Recommendations
+                        </th>
+                        <th className="py-2 px-3 text-left font-medium">
+                          Created
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {members.map((member) => {
+                        const busy = !!toggleBusy[member.id];
+                        const enabled = !!member.ai_recommendations_enabled;
+
+                        return (
+                          <tr
+                            key={member.id}
+                            className="border-b border-slate-800/60 last:border-b-0"
+                          >
+                            <td className="py-2 pr-3 align-middle">
+                              <div className="flex flex-col">
+                                <span className="font-medium text-slate-100">
+                                  {member.email || "Unknown"}
+                                </span>
+                                <span className="font-mono text-[10px] text-slate-500">
+                                  {member.user_id || "no user_id"}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-2 px-3 align-middle">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full border border-slate-700 bg-slate-950/60 text-[11px] text-slate-200">
+                                {member.role || "member"}
+                              </span>
+                            </td>
+                            <td className="py-2 px-3 align-middle">
+                              <span
+                                className={cx(
+                                  "inline-flex items-center px-2 py-0.5 rounded-full border text-[11px]",
+                                  member.status === "active"
+                                    ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-300"
+                                    : "border-slate-700 bg-slate-950/60 text-slate-300"
+                                )}
+                              >
+                                {member.status || "unknown"}
+                              </span>
+                            </td>
+                            <td className="py-2 px-3 align-middle">
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleToggleAiRecs(member)}
+                                className={cx(
+                                  "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] transition",
+                                  enabled
+                                    ? "border-emerald-500/70 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20"
+                                    : "border-slate-700 bg-slate-950/60 text-slate-300 hover:bg-slate-900/80",
+                                  busy && "opacity-70 cursor-wait"
+                                )}
+                              >
+                                {busy ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : enabled ? (
+                                  <ToggleRight className="w-3.5 h-3.5" />
+                                ) : (
+                                  <ToggleLeft className="w-3.5 h-3.5" />
+                                )}
+                                <span>{enabled ? "Enabled" : "Disabled"}</span>
+                              </button>
+                            </td>
+                            <td className="py-2 px-3 align-middle text-slate-400">
+                              {fmtDate(member.created_at)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>

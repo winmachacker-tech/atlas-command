@@ -1,1700 +1,2702 @@
 ﻿// FILE: src/pages/LoadDetails.jsx
 // Purpose:
-// - Load details UI
-// - Lane-based AI recommendations using rpc_ai_best_drivers_for_lane (via useBestDrivers)
-// - Fallback to global driver_fit_scores if lane-based list is empty
-// - Per-driver thumbs to train the AI live, plus Assign button
-// - "Train AI" button that runs backfill + retrain RPCs
+// - Load details UI with comprehensive enhancements
+// - Edit Load functionality
+// - Status Timeline/Progress Bar
+// - Quick Actions Menu
+// - Assigned Driver Info display
+// - Activity/History Log
+// - Inline editing for key fields
+// - Print/Export options
+// - Related Loads section
+// - Profitability metrics with REAL DIESEL PRICES from EIA API
+// - Stop status tracking
+// - Keyboard shortcuts
+// - Dark Google Map with multi-stop route + GREEN polyline (collapsible)
+// - AI Recommendations section (collapsible)
+// - TEMP: Best-Fit Drivers card is static (no hook) to avoid crashes while AI stack is under diagnostics
+// - "Train AI" button placeholder (calls RPC – you can wire to your real one)
 // - "Load Documents" buttons (Upload/Refresh/Open/Delete)
-// - "Best-Fit → View" opens the top driver's detail page
-// - NEW: "Send Instructions" modal to text/email load info to drivers / O/O via Twilio (SMS) + Resend (Email)
+// - "Send Instructions" button with email/SMS capabilities
+// - AUTO-CALCULATE MILES using Google Distance Matrix API (WITH FALLBACK TO LOADS.ORIGIN/DESTINATION)
+// - RATE PER MILE display in profitability metrics
 
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  useCallback,
+  useRef,
+} from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { ArrowLeft, RefreshCw, Trash2, Upload, Eye, PlayCircle, Send } from "lucide-react";
-import useBestDrivers from "../hooks/useBestDrivers";
-import AIThumbs from "../components/AIThumbs.jsx";
+import { calculateFuelCost } from "../services/fuelPriceService";
+import {
+  ArrowLeft,
+  RefreshCw,
+  Trash2,
+  Upload,
+  Eye,
+  PlayCircle,
+  Send,
+  Loader2,
+  FileText,
+  Map as MapIcon,
+  ChevronDown,
+  Copy,
+  Edit,
+  MoreVertical,
+  CheckCircle2,
+  Clock,
+  TrendingUp,
+  DollarSign,
+  Printer,
+  Download,
+  Save,
+  X,
+  User,
+  Truck,
+  Phone,
+  Mail,
+  History,
+  Package,
+  MapPin,
+  Calculator,
+} from "lucide-react";
 import AiRecommendationsForLoad from "../components/AiRecommendationsForLoad.jsx";
+import {
+  GoogleMap,
+  Marker,
+  Polyline,
+  useJsApiLoader,
+} from "@react-google-maps/api";
 
 /* ------------------------- config ------------------------- */
+
 const DOC_BUCKET = "load_docs";
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+
+const LOAD_STATUSES = [
+  "AVAILABLE",
+  "DISPATCHED",
+  "IN_TRANSIT",
+  "DELIVERED",
+  "CANCELLED",
+];
+
+const STOP_STATUSES = [
+  "PENDING",
+  "EN_ROUTE",
+  "ARRIVED",
+  "COMPLETED",
+];
 
 /* ------------------------- helpers ------------------------- */
+
 function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
-function toUSD(v) {
-  if (v == null || v === "") return "—";
-  const n = Number(v);
-  if (!Number.isFinite(n)) return String(v);
-  return n.toLocaleString(undefined, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 2,
-  });
-}
-function fmtDateTime(d) {
-  if (!d) return "—";
+
+function formatDateTime(dt) {
+  if (!dt) return "—";
   try {
-    return new Date(d).toLocaleString();
+    const d = new Date(dt);
+    return d.toLocaleString();
   } catch {
-    return String(d ?? "—");
-  }
-}
-function firstKey(obj, keys) {
-  if (!obj) return undefined;
-  for (const k of keys) {
-    if (k in obj && obj[k] != null && obj[k] !== "") return obj[k];
-  }
-  return undefined;
-}
-function smallId(s) {
-  if (!s) return "—";
-  const t = String(s);
-  return t.length > 8 ? `${t.slice(0, 6)}…${t.slice(-2)}` : t;
-}
-
-/** Merge separate date + time into ISO string, else pass-through existing datetime if present */
-function mergeDateTime({ date, time, direct }) {
-  if (direct) return direct;
-  if (!date && !time) return undefined;
-  try {
-    const d = date ? new Date(date) : new Date();
-    if (typeof time === "string") {
-      const [hh = "00", mm = "00"] = time.split(":");
-      d.setHours(Number(hh), Number(mm), 0, 0);
-    } else {
-      d.setHours(0, 0, 0, 0);
-    }
-    return d.toISOString();
-  } catch {
-    return date || time || undefined;
+    return dt;
   }
 }
 
-/* ---------------------- lightweight toast ----------------------- */
-function useToast() {
-  const [msg, setMsg] = useState("");
-  const [tone, setTone] = useState("ok");
-  const t = useRef(null);
-  const show = useCallback((m, _tone = "ok") => {
-    setMsg(m);
-    setTone(_tone);
-    clearTimeout(t.current);
-    t.current = setTimeout(() => setMsg(""), 3000);
-  }, []);
-  const View = useMemo(() => {
-    if (!msg) return null;
-    return (
-      <div
-        className={cx(
-          "fixed z-50 bottom-16 left-1/2 -translate-x-1/2 px-3.5 py-2 rounded-xl text-sm shadow-lg border",
-          tone === "ok" && "bg-emerald-500/10 text-emerald-200 border-emerald-500/30",
-          tone === "err" && "bg-rose-500/10 text-rose-200 border-rose-500/30",
-          tone === "info" && "bg-sky-500/10 text-sky-200 border-sky-500/30"
-        )}
-        role="status"
-      >
-        {msg}
-      </div>
-    );
-  }, [msg, tone]);
-  return { show, ToastView: View };
+function buildStopAddress(stop) {
+  if (!stop) return "";
+  const parts = [];
+  if (stop.address_line1) parts.push(stop.address_line1);
+  if (stop.city) parts.push(stop.city);
+  if (stop.state) parts.push(stop.state);
+  if (stop.postal_code) parts.push(stop.postal_code);
+  if (stop.country) parts.push(stop.country);
+  return parts.join(", ");
 }
 
-/* --------------------------- Page ------------------------------- */
-export default function LoadDetails() {
-  const { id } = useParams();
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [load, setLoad] = useState(null);
-  const [assigningId, setAssigningId] = useState("");
-  const { show, ToastView } = useToast();
+function parseCityState(text) {
+  if (!text) return { city: "", state: "" };
+  const [cityPart, rest] = text.split(",");
+  const city = (cityPart || "").trim();
+  const state = (rest || "").trim().split(/\s+/)[0] || "";
+  return { city, state };
+}
 
-  // cache of driver meta so we can show names instead of UUIDs
-  const [driverMeta, setDriverMeta] = useState({}); // { [id]: { full_name, phone } }
+/* ------------------------- Status Timeline Component ------------------------- */
 
-  // documents state
-  const [docs, setDocs] = useState([]);
-  const [docsBusy, setDocsBusy] = useState(false);
-  const [selectedDoc, setSelectedDoc] = useState(null);
-  const fileInputRef = useRef(null);
+function StatusTimeline({ status }) {
+  const statuses = ["AVAILABLE", "DISPATCHED", "IN_TRANSIT", "DELIVERED"];
+  const currentIndex = statuses.indexOf(status || "AVAILABLE");
 
-  // Fallback AI list (when lane-based results are empty)
-  const [fallbackDrivers, setFallbackDrivers] = useState([]);
-  const [fallbackBusy, setFallbackBusy] = useState(false);
-
-  useEffect(() => {
-    if (!id) show("Missing load id in the URL.", "err");
-  }, [id, show]);
-
-  const refresh = useCallback(async () => {
-    if (!id) return;
-    setLoading(true);
-    try {
-      const { data, error } = await supabase.from("loads").select("*").eq("id", id).single();
-      if (error) throw error;
-      setLoad(data ?? null);
-    } catch (err) {
-      console.error(err);
-      show(`Failed to load data: ${err.message}`, "err");
-    } finally {
-      setLoading(false);
-    }
-  }, [id, show]);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  // Detect assignable columns; we'll update BOTH if they exist.
-  const assignCols = useMemo(() => {
-    const cols = [];
-    if (load) {
-      if ("assigned_driver_id" in load) cols.push("assigned_driver_id");
-      if ("driver_id" in load) cols.push("driver_id");
-    }
-    return cols;
-  }, [load]);
-
-  /* ----------------- Map your fields ------------------ */
-  const status = firstKey(load, ["status"]) ?? "ACTIVE";
-  const reference = firstKey(load, [
-    "ref_no",
-    "reference_no",
-    "ref",
-    "load_ref",
-    "customer_ref",
-    "customer_ref_no",
-  ]);
-  const equipment = firstKey(load, ["equipment_type", "equipment", "equip", "equip_type"]);
-
-  const puCity = firstKey(load, ["origin_city", "pickup_city", "pu_city", "origin"]);
-  const puState = firstKey(load, ["origin_state", "pickup_state", "pu_state"]);
-  const delCity = firstKey(load, ["destination_city", "delivery_city", "del_city", "destination"]);
-  const delState = firstKey(load, ["destination_state", "delivery_state", "del_state"]);
-
-  const puAt = mergeDateTime({
-    date: firstKey(load, ["pickup_date", "pu_date"]),
-    time: firstKey(load, ["pickup_time", "pu_time"]),
-    direct: firstKey(load, ["pu_at", "pickup_at", "pickup_datetime"]),
-  });
-  const delAt = mergeDateTime({
-    date: firstKey(load, ["delivery_date", "del_date"]),
-    time: firstKey(load, ["delivery_time", "del_time"]),
-    direct: firstKey(load, ["del_at", "delivery_at", "delivery_datetime"]),
-  });
-
-  const miles = firstKey(load, ["miles", "distance", "est_miles"]);
-  const totalRate = firstKey(load, ["total_rate", "rate", "amount"]);
-
-  const bolNumber = firstKey(load, ["bol_number", "bol_no", "bol"]);
-  const loadNumber = firstKey(load, ["load_number", "load_no", "tms_load_id"]);
-
-  // Assigned driver (for autofill phone)
-  const assignedDriverId = useMemo(() => {
-    if (!load) return null;
-    const v = firstKey(load, ["assigned_driver_id", "driver_id"]);
-    return v || null;
-  }, [load]);
-
-  // Build laneKey EXACTLY like your Customers page expects.
-  const laneKey = useMemo(() => {
-    const oc = (puCity || "").trim();
-    const os = (puState || "").trim();
-    const dc = (delCity || "").trim();
-    const ds = (delState || "").trim();
-    if (!oc || !os || !dc || !ds) return null;
-    // NOTE: keep this format in sync with your lane trainer page
-    return `LANE ${oc}, ${os} → ${dc}, ${ds}`;
-  }, [puCity, puState, delCity, delState]);
-
-  // Pull AI recommendations for this lane
-  const {
-    data: bestDrivers,
-    loading: aiLoading,
-    error: aiError,
-    refetch: refetchAI,
-  } = useBestDrivers(laneKey, { limit: 10 });
-
-  // Fallback recommendations: top global by fit_score (when lane has no rows)
-  const fetchFallbackDrivers = useCallback(async () => {
-    setFallbackBusy(true);
-    setFallbackDrivers([]);
-    try {
-      const { data, error } = await supabase
-        .from("driver_fit_scores")
-        .select("driver_id, fit_score, up_events, down_events, last_feedback_at")
-        .order("fit_score", { ascending: false })
-        .limit(10);
-
-      if (error) throw error;
-
-      const mapped = (data || []).map((r) => ({
-        driver_id: r.driver_id,
-        score: r.fit_score ?? 0,
-        up_events: r.up_events ?? 0,
-        down_events: r.down_events ?? 0,
-        last_positive_at: r.last_feedback_at ?? null,
-        __fallback: true,
-      }));
-
-      setFallbackDrivers(mapped);
-    } catch (err) {
-      console.error(err);
-      setFallbackDrivers([]);
-    } finally {
-      setFallbackBusy(false);
-    }
-  }, []);
-
-  // When lane-based list changes, decide if we should load fallback
-  useEffect(() => {
-    if (!laneKey) {
-      setFallbackDrivers([]);
-      return;
-    }
-    if (Array.isArray(bestDrivers) && bestDrivers.length > 0) {
-      setFallbackDrivers([]); // we have lane-based results; clear fallback
-      return;
-    }
-    // only fetch fallback if lane is valid and lane list is empty
-    fetchFallbackDrivers();
-  }, [laneKey, bestDrivers, fetchFallbackDrivers]);
-
-  // Fetch driver names/phones for display (includes assigned driver if present)
-  const allShownDriverIds = useMemo(() => {
-    const ids = [];
-    if (assignedDriverId) ids.push(assignedDriverId);
-    const laneIds = (bestDrivers || []).map((r) => r.driver_id).filter(Boolean);
-    const fbIds = (fallbackDrivers || []).map((r) => r.driver_id).filter(Boolean);
-    for (const v of laneIds) ids.push(v);
-    for (const v of fbIds) ids.push(v);
-    return Array.from(new Set(ids));
-  }, [assignedDriverId, bestDrivers, fallbackDrivers]);
-
-  useEffect(() => {
-    const missing = allShownDriverIds.filter((did) => !driverMeta[did]);
-    if (!missing.length) return;
-
-    (async () => {
-      const { data, error } = await supabase
-        .from("drivers")
-        .select("id, full_name, phone")
-        .in("id", missing);
-
-      if (!error && Array.isArray(data)) {
-        setDriverMeta((prev) => {
-          const next = { ...prev };
-          for (const r of data) next[r.id] = { full_name: r.full_name || "", phone: r.phone || "" };
-          return next;
-        });
-      }
-    })();
-  }, [allShownDriverIds, driverMeta]);
-
-  const assignedDriverPhone =
-    assignedDriverId && driverMeta[assignedDriverId]?.phone
-      ? driverMeta[assignedDriverId].phone
-      : "";
-
-  // Helper: try a list of RPC names until one succeeds (for backfill only)
-  const callAnyRpc = useCallback(async (candidates, args = {}) => {
-    let lastErr;
-    for (const fn of candidates) {
-      try {
-        const { error } = await supabase.rpc(fn, args);
-        if (!error) return { ok: true, name: fn };
-        lastErr = error;
-      } catch (e) {
-        lastErr = e;
-      }
-    }
-    return { ok: false, error: lastErr };
-  }, []);
-
-  // Train AI: backfill then retrain (with your real retrain func)
-  const [training, setTraining] = useState(false);
-  const trainAI = useCallback(
-    async () => {
-      setTraining(true);
-      try {
-        // 1) Backfill (optional)
-        const backfill = await callAnyRpc(
-          [
-            "rpc_ai_backfill_examples_from_raw",
-            "ai_backfill_examples_from_raw",
-            "rpc_ai_backfill",
-            "ai_backfill",
-          ],
-          { lane_key: laneKey ?? null }
+  return (
+    <div className="flex items-center gap-2">
+      {statuses.map((s, idx) => {
+        const isActive = idx <= currentIndex;
+        const isCurrent = idx === currentIndex;
+        return (
+          <div key={s} className="flex items-center">
+            <div
+              className={cx(
+                "flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                isCurrent
+                  ? "bg-emerald-500/20 text-emerald-200 border border-emerald-500/60"
+                  : isActive
+                  ? "bg-slate-700/60 text-slate-300 border border-slate-600"
+                  : "bg-slate-900/60 text-slate-500 border border-slate-700"
+              )}
+            >
+              {isActive && (
+                <CheckCircle2
+                  className={cx(
+                    "h-3 w-3",
+                    isCurrent ? "text-emerald-300" : "text-slate-400"
+                  )}
+                />
+              )}
+              {!isActive && <Clock className="h-3 w-3" />}
+              <span>{s.replace("_", " ")}</span>
+            </div>
+            {idx < statuses.length - 1 && (
+              <div
+                className={cx(
+                  "w-8 h-0.5 mx-1",
+                  isActive ? "bg-emerald-500/60" : "bg-slate-700"
+                )}
+              />
+            )}
+          </div>
         );
-        if (!backfill.ok && backfill.error) {
-          console.warn("Backfill RPC not available:", backfill.error?.message || backfill.error);
-        }
+      })}
+    </div>
+  );
+}
 
-        // 2) Retrain using your actual function rpc_ai_retrain_model('v1')
-        const { error: retrainErr } = await supabase.rpc("rpc_ai_retrain_model", {
-          p_model_version: "v1",
-        });
-        if (retrainErr) throw retrainErr;
+/* ------------------------- Map component ------------------------- */
 
-        show("AI retrained successfully.");
-        await refetchAI();
-        await fetchFallbackDrivers();
-      } catch (err) {
-        console.error(err);
-        show(`Train failed: ${err.message}`, "err");
-      } finally {
-        setTraining(false);
-      }
-    },
-    [laneKey, callAnyRpc, show, refetchAI, fetchFallbackDrivers]
+function RouteMap({ stops }) {
+  const [coords, setCoords] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const activeStops = useMemo(
+    () => (stops || []).filter((s) => s && (s.city || s.address_line1 || s.location_name)),
+    [stops]
   );
 
-  // Assign handler (no more status changes, to avoid loads_status_check)
-  const assignDriver = useCallback(
-    async (driverId) => {
-      if (!driverId || !id) return;
-      setAssigningId(driverId);
+  const { isLoaded, loadError } = useJsApiLoader({
+    googleMapsApiKey: GOOGLE_MAPS_API_KEY || "",
+  });
+
+  useEffect(() => {
+    if (!GOOGLE_MAPS_API_KEY || !activeStops.length) {
+      setCoords([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function geocodeStops() {
       try {
-        let updated = false;
+        setLoading(true);
+        setError("");
+        const results = [];
 
-        // If the loads table has direct columns, update them (both if present)
-        if (assignCols.length > 0) {
-          const payload = assignCols.reduce((acc, c) => {
-            acc[c] = driverId;
-            return acc;
-          }, {});
-          // DO NOT touch status here; your check constraint controls that.
-          payload.updated_at = new Date().toISOString();
+        for (const stop of activeStops) {
+          let addr = buildStopAddress(stop);
+          
+          // If buildStopAddress returns empty, use location_name as fallback
+          if (!addr && stop.location_name) {
+            addr = stop.location_name;
+          }
+          
+          if (!addr) continue;
 
-          const { error } = await supabase.from("loads").update(payload).eq("id", id);
-          if (error) throw error;
-          updated = true;
-        }
+          const url =
+            "https://maps.googleapis.com/maps/api/geocode/json?address=" +
+            encodeURIComponent(addr) +
+            `&key=${GOOGLE_MAPS_API_KEY}`;
 
-        // Try to also record in a junction table if it exists
-        try {
-          await supabase
-            .from("load_driver_assignments")
-            .insert({ load_id: id, driver_id: driverId, assigned_at: new Date().toISOString() });
-        } catch {
-          /* ignore if table doesn't exist */
-        }
+          const res = await fetch(url);
+          const data = await res.json();
 
-        if (!updated) {
-          // Neither column existed; require the junction table to be present
-          const { error: insErr } = await supabase
-            .from("load_driver_assignments")
-            .insert({ load_id: id, driver_id: driverId, assigned_at: new Date().toISOString() });
-          if (insErr) {
-            throw new Error(
-              "Add loads.driver_id OR loads.assigned_driver_id OR create load_driver_assignments(load_id, driver_id)."
-            );
+          if (data.status === "OK" && data.results?.[0]) {
+            const { lat, lng } = data.results[0].geometry.location;
+            results.push({ lat, lng });
           }
         }
 
-        show("Driver assigned to load.");
-        await refresh();
-        refetchAI();
-      } catch (err) {
-        console.error(err);
-        show(`Assign failed: ${err.message}`, "err");
-      } finally {
-        setAssigningId("");
-      }
-    },
-    [id, assignCols, refresh, refetchAI, show]
-  );
-
-  /* ---------------------- Documents logic ---------------------- */
-  const listDocs = useCallback(
-    async () => {
-      if (!id) return;
-      setDocsBusy(true);
-      try {
-        const prefix = `${id}/`;
-        const { data, error } = await supabase.storage.from(DOC_BUCKET).list(prefix, {
-          limit: 100,
-          offset: 0,
-        });
-        if (error) throw error;
-        const items = (data || []).map((f) => ({ name: f.name, path: prefix + f.name }));
-        setDocs(items);
-        if (!items.length) setSelectedDoc(null);
-        show("Documents refreshed.", "info");
-      } catch (err) {
-        console.error(err);
-        show(`Docs error: ${err.message}`, "err");
-      } finally {
-        setDocsBusy(false);
-      }
-    },
-    [id, show]
-  );
-
-  const handleUploadClick = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
-
-  const onChooseFile = useCallback(
-    async (e) => {
-      if (!id) return;
-      const file = e.target.files?.[0];
-      if (!file) return;
-      setDocsBusy(true);
-      try {
-        const path = `${id}/${file.name}`;
-        const { error } = await supabase.storage.from(DOC_BUCKET).upload(path, file, { upsert: true });
-        if (error) throw error;
-        show("Upload complete.");
-        await listDocs();
-      } catch (err) {
-        console.error(err);
-        show(`Upload failed: ${err.message}`, "err");
-      } finally {
-        if (fileInputRef.current) fileInputRef.current.value = "";
-        setDocsBusy(false);
-      }
-    },
-    [id, show, listDocs]
-  );
-
-  const handleOpen = useCallback(
-    async () => {
-      console.log("handleOpen called, selectedDoc:", selectedDoc);
-      if (!selectedDoc) {
-        show("Select a document first.", "info");
-        return;
-      }
-      try {
-        const { data, error } = await supabase.storage
-          .from(DOC_BUCKET)
-          .createSignedUrl(selectedDoc.path, 60);
-        if (error) throw error;
-        if (data?.signedUrl) {
-          window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+        if (!cancelled) {
+          setCoords(results);
         }
       } catch (err) {
-        console.error(err);
-        show(`Open failed: ${err.message}`, "err");
-      }
-    },
-    [selectedDoc, show]
-  );
-
-  const handleDelete = useCallback(
-    async () => {
-      console.log("handleDelete called, selectedDoc:", selectedDoc);
-      if (!selectedDoc) {
-        show("Select a document first.", "info");
-        return;
-      }
-      setDocsBusy(true);
-      try {
-        const { error } = await supabase.storage.from(DOC_BUCKET).remove([selectedDoc.path]);
-        if (error) throw error;
-        show("Deleted.");
-        setSelectedDoc(null);
-        await listDocs();
-      } catch (err) {
-        console.error(err);
-        show(`Delete failed: ${err.message}`, "err");
+        console.error("[RouteMap] geocode error", err);
+        if (!cancelled) setError("Could not load map for this route.");
       } finally {
-        setDocsBusy(false);
+        if (!cancelled) setLoading(false);
       }
+    }
+
+    geocodeStops();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeStops]);
+
+  const center = useMemo(() => {
+    if (!coords.length) {
+      return { lat: 39.5, lng: -98.35 };
+    }
+    const lat =
+      coords.reduce((sum, c) => sum + c.lat, 0) / coords.length;
+    const lng =
+      coords.reduce((sum, c) => sum + c.lng, 0) / coords.length;
+    return { lat, lng };
+  }, [coords]);
+
+  const containerStyle = {
+    width: "100%",
+    height: "320px",
+    borderRadius: "1rem",
+    overflow: "hidden",
+  };
+
+  const darkMapStyles = [
+    { elementType: "geometry", stylers: [{ color: "#020617" }] },
+    {
+      elementType: "labels.text.fill",
+      stylers: [{ color: "#e5e7eb" }],
     },
-    [selectedDoc, show, listDocs]
-  );
-
-  // Extraction state
-  const [extracting, setExtracting] = useState(false);
-  const [extractionResult, setExtractionResult] = useState(null);
-  const [showExtractionModal, setShowExtractionModal] = useState(false);
-
-  const handleExtract = useCallback(
-    async () => {
-      console.log("handleExtract called, selectedDoc:", selectedDoc);
-      if (!selectedDoc) {
-        show("Select a document first.", "info");
-        return;
-      }
-
-      setExtracting(true);
-      try {
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || supabase.supabaseUrl;
-        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || supabase.supabaseKey;
-
-        const response = await fetch(`${supabaseUrl}/functions/v1/extract-document`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${anonKey}`,
-          },
-          body: JSON.stringify({
-            filePath: selectedDoc.path,
-            loadId: id,
-            extractionType: "auto",
-          }),
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || "Extraction failed");
-        }
-
-        const result = await response.json();
-
-        if (result.success) {
-          setExtractionResult(result.data);
-          setShowExtractionModal(true);
-          show(`Extracted ${result.data.documentType} with ${result.data.confidence}% confidence.`);
-
-          // Refresh load data to show auto-populated fields
-          await refresh();
-        } else {
-          throw new Error(result.error || "Extraction failed");
-        }
-      } catch (err) {
-        console.error("Extraction error:", err);
-        show(`Extraction failed: ${err.message}`, "err");
-      } finally {
-        setExtracting(false);
-      }
+    {
+      elementType: "labels.text.stroke",
+      stylers: [{ color: "#020617" }],
     },
-    [selectedDoc, show, id, refresh]
-  );
-
-  // Auto-load doc list when page mounts/changes id
-  useEffect(() => {
-    listDocs();
-  }, [listDocs]);
-
-  /* ---------------------- Instructions text builder ---------------------- */
-  const buildInstructionsText = useCallback(
-    (includeRate) => {
-      if (!load) return "";
-      const parts = [];
-
-      // Header
-      const header = `LOAD INSTRUCTIONS${
-        loadNumber ? ` - ${loadNumber}` : ""
-      }${reference ? ` (Ref: ${reference})` : ""}`;
-      parts.push(header);
-
-      // Pickup
-      const puLine = [`PICKUP: ${puCity || "—"}, ${puState || "—"}`];
-      if (puAt) puLine.push(`@ ${fmtDateTime(puAt)}`);
-      parts.push(puLine.join(" "));
-
-      // Delivery
-      const delLine = [`DELIVERY: ${delCity || "—"}, ${delState || "—"}`];
-      if (delAt) delLine.push(`@ ${fmtDateTime(delAt)}`);
-      parts.push(delLine.join(" "));
-
-      // BOL / refs
-      if (bolNumber) parts.push(`BOL: ${bolNumber}`);
-      if (reference) parts.push(`Customer Ref: ${reference}`);
-      if (id) parts.push(`Internal Load ID: ${smallId(id)}`);
-
-      // Miles / equipment
-      if (equipment) parts.push(`Equipment: ${equipment}`);
-      if (miles) parts.push(`Miles: ${miles}`);
-
-      // Rate only for O/O
-      if (includeRate && totalRate != null && totalRate !== "") {
-        parts.push(`Rate: ${toUSD(totalRate)} (to truck)`);
-      }
-
-      parts.push("");
-      parts.push('Reply with ETA and "ON SITE" at pickup/delivery.');
-
-      return parts.join("\n");
+    {
+      featureType: "road",
+      elementType: "geometry",
+      stylers: [{ color: "#0f172a" }],
     },
-    [
-      load,
-      loadNumber,
-      reference,
-      puCity,
-      puState,
-      puAt,
-      delCity,
-      delState,
-      delAt,
-      bolNumber,
-      id,
-      equipment,
-      miles,
-      totalRate,
-    ]
-  );
-
-  /* ---------------------- Send Instructions modal state ---------------------- */
-  const [showInstrModal, setShowInstrModal] = useState(false);
-  const [instrChannel, setInstrChannel] = useState("sms"); // "sms" | "email"
-  const [instrMode, setInstrMode] = useState("driver"); // "driver" | "owner"
-  const [instrTo, setInstrTo] = useState("");
-  const [instrBody, setInstrBody] = useState("");
-  const [instrSending, setInstrSending] = useState(false);
-
-  const openInstrModal = useCallback(() => {
-    setInstrChannel("sms");
-    setInstrMode("driver");
-    const initialTo = assignedDriverPhone || "";
-    setInstrTo(initialTo);
-    const text = buildInstructionsText(false);
-    setInstrBody(text);
-    setShowInstrModal(true);
-  }, [assignedDriverPhone, buildInstructionsText]);
-
-  // Regenerate body when recipient mode changes while modal is open
-  useEffect(() => {
-    if (!showInstrModal) return;
-    const text = buildInstructionsText(instrMode === "owner");
-    setInstrBody(text);
-  }, [showInstrModal, instrMode, buildInstructionsText]);
-
-  const handleSendInstructions = useCallback(
-    async () => {
-      const to = (instrTo || "").trim();
-      const body = (instrBody || "").trim();
-
-      if (!to) {
-        show(instrChannel === "sms" ? "Enter a phone number." : "Enter an email address.", "err");
-        return;
-      }
-      if (!body) {
-        show("Message is empty.", "err");
-        return;
-      }
-
-      setInstrSending(true);
-      try {
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || supabase.supabaseUrl;
-        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || supabase.supabaseKey;
-
-        // Subject for email (not used for SMS)
-        const subject = `Load Instructions${
-          loadNumber ? ` - ${loadNumber}` : ""
-        }${reference ? ` (Ref: ${reference})` : ""}`;
-
-        const endpoint =
-          instrChannel === "sms"
-            ? "send-load-instructions-sms"
-            : "send-load-instructions-email";
-
-        const payload =
-          instrChannel === "sms"
-            ? {
-                to,
-                body,
-                loadId: id,
-                mode: instrMode,
-              }
-            : {
-                to,
-                subject,
-                body,
-                loadId: id,
-                mode: instrMode,
-              };
-
-        const resp = await fetch(`${supabaseUrl}/functions/v1/${endpoint}`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${anonKey}`,
-          },
-          body: JSON.stringify(payload),
-        });
-
-        const data = await resp.json().catch(() => null);
-
-        if (!resp.ok || !data || data.success !== true) {
-          const msg = (data && data.error) || `status ${resp.status}`;
-          show(
-            `${instrChannel === "sms" ? "SMS" : "Email"} failed: ${msg}`,
-            "err"
-          );
-          return;
-        }
-
-        show(
-          instrChannel === "sms"
-            ? "Text sent (queued with SMS provider)."
-            : "Email sent (queued with provider).",
-          "ok"
-        );
-        setShowInstrModal(false);
-      } catch (err) {
-        console.error("Send instructions error:", err);
-        show(
-          `${instrChannel === "sms" ? "SMS" : "Email"} failed: ${err.message}`,
-          "err"
-        );
-      } finally {
-        setInstrSending(false);
-      }
+    {
+      featureType: "road",
+      elementType: "labels.text.fill",
+      stylers: [{ color: "#d1d5db" }],
     },
-    [instrTo, instrBody, instrChannel, instrMode, id, loadNumber, reference, show]
-  );
+    {
+      featureType: "water",
+      elementType: "geometry",
+      stylers: [{ color: "#0b1120" }],
+    },
+    {
+      featureType: "poi",
+      elementType: "geometry",
+      stylers: [{ color: "#020617" }],
+    },
+  ];
 
-  /* --------------------------- render --------------------------- */
-  const combinedList = bestDrivers && bestDrivers.length > 0 ? bestDrivers : fallbackDrivers;
-  const usingFallback = combinedList === fallbackDrivers && fallbackDrivers.length > 0;
+  if (!GOOGLE_MAPS_API_KEY) {
+    return (
+      <div className="text-sm text-amber-300/80">
+        Google Maps API key is not configured. Set
+        <span className="font-mono px-2">
+          VITE_GOOGLE_MAPS_API_KEY
+        </span>
+        in your <code>.env</code>.
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="text-sm text-rose-300/80">
+        Error loading Google Maps script.
+      </div>
+    );
+  }
+
+  if (!activeStops.length) {
+    return (
+      <div className="text-sm text-slate-300/80">
+        No stops found for this load yet. Add at least one pickup
+        and one delivery to see the route.
+      </div>
+    );
+  }
 
   return (
-    <div className="p-4 md:p-6">
-      {ToastView}
-
-      {/* hidden file input for uploads */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        className="hidden"
-        onChange={onChooseFile}
-        accept="image/*,application/pdf"
-      />
-
-      {/* Top bar */}
-      <div className="mb-4 flex items-center gap-2">
-        <button
-          onClick={() => navigate(-1)}
-          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60"
-          title="Back"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back
-        </button>
-
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            onClick={openInstrModal}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/10"
-            title="Send load instructions via SMS or Email"
-          >
-            <Send className="w-4 h-4" />
-            Send Instructions
-          </button>
-
-          <button
-            onClick={trainAI}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-pink-500/40 text-pink-200 hover:bg-pink-500/10"
-            title="Train AI"
-            disabled={training}
-          >
-            <PlayCircle className={cx("w-4 h-4", training && "animate-pulse")} />
-            {training ? "Training…" : "Train AI"}
-          </button>
-
-          <button
-            onClick={() => {
-              refresh();
-              refetchAI();
-              listDocs();
-              fetchFallbackDrivers();
-            }}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60"
-            title="Refresh"
-          >
-            <RefreshCw
-              className={cx(
-                "w-4 h-4",
-                (loading || aiLoading || docsBusy || fallbackBusy) && "animate-spin"
-              )}
-            />
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      {/* Header strip */}
-      <div className="mb-5 rounded-2xl border border-pink-500/30 bg-zinc-900/40 p-4">
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-          <div>
-            <span className="text-zinc-400 mr-1">Load:</span>
-            <span className="font-medium text-zinc-100">{smallId(id)}</span>
-          </div>
-          <div>
-            <span className="text-zinc-400 mr-1">Ref:</span>
-            <span className="font-semibold tracking-wide">{reference ?? "—"}</span>
-          </div>
-          <div className="hidden md:block text-zinc-500">•</div>
-          <div>
-            <span className="text-zinc-400 mr-1">PU:</span>
-            <span className="text-zinc-100">{fmtDateTime(puAt)}</span>
-          </div>
-          <div className="hidden md:block text-zinc-500">•</div>
-          <div>
-            <span className="text-zinc-400 mr-1">DEL:</span>
-            <span className="text-zinc-100">{fmtDateTime(delAt)}</span>
-          </div>
-          <div className="hidden md:block text-zinc-500">•</div>
-          <div>
-            <span className="text-zinc-400 mr-1">Equip:</span>
-            <span className="text-zinc-100">{equipment ?? "—"}</span>
-          </div>
-          {laneKey && (
-            <>
-              <div className="hidden md:block text-zinc-500">•</div>
-              <div>
-                <span className="text-zinc-400 mr-1">Lane:</span>
-                <span className="text-zinc-100">{laneKey}</span>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        {/* LEFT */}
-        <div className="lg:col-span-7 space-y-5">
-          {/* Load Summary */}
-          <section className="rounded-2xl border border-zinc-700/60 bg-zinc-900/40">
-            <header className="px-4 py-3 border-b border-zinc-700/60 flex items-center justify-between">
-              <h2 className="text-zinc-100 font-semibold">Load Summary</h2>
-              <span
-                className={cx(
-                  "text-xs px-2 py-0.5 rounded-full border",
-                  (status || "").toUpperCase() === "ASSIGNED"
-                    ? "text-amber-200 border-amber-500/40 bg-amber-500/10"
-                    : "text-emerald-200 border-emerald-500/40 bg-emerald-500/10"
-                )}
-              >
-                {(status || "ACTIVE").toUpperCase().replaceAll(" ", "_")}
-              </span>
-            </header>
-
-            <div className="p-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                <Info
-                  label="PICKUP"
-                  value={`${puCity ?? "—"}, ${puState ?? "—"}`}
-                  sub={fmtDateTime(puAt)}
-                />
-                <Info
-                  label="DELIVERY"
-                  value={`${delCity ?? "—"}, ${delState ?? "—"}`}
-                  sub={fmtDateTime(delAt)}
-                />
-                <Info label="EQUIPMENT" value={equipment ?? "—"} />
-                <Info label="MILES" value={miles ?? "—"} />
-                <Info label="RATE" value={toUSD(totalRate)} />
-                <Info label="REFERENCE" value={reference ?? "—"} />
-              </div>
-            </div>
-          </section>
-
-          {/* AI Recommendations */}
-          <section className="rounded-2xl border border-pink-500/30 bg-zinc-900/40">
-            <header className="px-4 py-3 border-b border-pink-500/30 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-pink-400/80" />
-                <h2 className="text-zinc-100 font-semibold">
-                  {usingFallback ? "AI Recommendations (Global Fallback)" : "AI Recommendations"}
-                </h2>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    refetchAI();
-                    fetchFallbackDrivers();
-                  }}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-pink-500/30 text-zinc-100 hover:bg-zinc-900"
-                >
-                  <RefreshCw
-                    className={cx("w-4 h-4", (aiLoading || fallbackBusy) && "animate-spin")}
-                  />
-                  Refresh
-                </button>
-              </div>
-            </header>
-
-            {!laneKey && (
-              <div className="p-4 text-sm text-zinc-400">
-                No lane detected for this load. Add origin/destination city &amp; state to see
-                recommendations.
-              </div>
-            )}
-
-            {laneKey && (
-              <div className="divide-y divide-zinc-800/80">
-                {(!combinedList || combinedList.length === 0) && (
-                  <div className="p-4 text-sm text-zinc-400">
-                    No training signals yet. Use 👍/👎 to start teaching, or click{" "}
-                    <span className="text-pink-200">Train AI</span>.
-                  </div>
-                )}
-
-                {(combinedList || []).map((row, idx) => {
-                  const meta = driverMeta[row.driver_id] || {};
-                  const displayName = meta.full_name || smallId(row.driver_id);
-                  return (
-                    <div key={row.driver_id} className="p-3 flex items-center gap-3">
-                      <div className="w-6 text-zinc-500 text-sm tabular-nums">{idx + 1}</div>
-
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-full border border-pink-400/60" />
-                          <div className="text-zinc-100 font-medium truncate">{displayName}</div>
-                          {row.__fallback && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-zinc-700/60 text-zinc-400">
-                              global
-                            </span>
-                          )}
-                        </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400">
-                          <span>
-                            Score:{" "}
-                            <span className="text-zinc-100 font-medium">{row.score}</span>
-                          </span>
-                          <span>👍 {row.up_events ?? 0}</span>
-                          <span>👎 {row.down_events ?? 0}</span>
-                          <span>last +: {fmtDateTime(row.last_positive_at)}</span>
-                        </div>
-                      </div>
-
-                      <div className="text-right mr-2">
-                        <div className="text-xs text-zinc-400">score</div>
-                        <div className="text-base font-semibold">{row.score}</div>
-                      </div>
-
-                      <AIThumbs
-                        driverId={row.driver_id}
-                        laneKey={laneKey}
-                        // After each thumb: retrain + refresh so score / last+ update
-                        onAfterChange={trainAI}
-                        size="sm"
-                      />
-
-                      <button
-                        onClick={() => assignDriver(row.driver_id)}
-                        disabled={assigningId === row.driver_id}
-                        className={cx(
-                          "ml-3 inline-flex items-center gap-2 px-3.5 py-1.5 rounded-2xl border",
-                          "border-zinc-700/70 text-emerald-200 hover:bg-zinc-800/60",
-                          assigningId === row.driver_id && "opacity-60 cursor-not-allowed"
-                        )}
-                        title="Assign this driver to the load"
-                      >
-                        {assigningId === row.driver_id ? "Assigning…" : "Assign"}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {aiError && (
-              <div className="p-4 text-sm text-rose-400">
-                {String(aiError.message || aiError)}
-              </div>
-            )}
-          </section>
-        </div>
-
-        {/* RIGHT */}
-        <div className="lg:col-span-5 space-y-5">
-          {/* Best-Fit snapshot */}
-          <section className="rounded-2xl border border-pink-500/30 bg-zinc-900/40">
-            <header className="px-4 py-3 border-b border-pink-500/30 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-pink-400/80" />
-                <h2 className="text-zinc-100 font-semibold">Best-Fit Drivers</h2>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    refetchAI();
-                    fetchFallbackDrivers();
-                  }}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60"
-                >
-                  <RefreshCw
-                    className={cx("w-4 h-4", (aiLoading || fallbackBusy) && "animate-spin")}
-                  />
-                  Refresh
-                </button>
-                <button
-                  onClick={() => {
-                    const top = combinedList && combinedList[0] ? combinedList[0].driver_id : null;
-                    if (!top) return show("No best-fit driver yet.", "info");
-                    navigate(`/drivers/${top}`);
-                  }}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60"
-                >
-                  <Eye className="w-4 h-4" />
-                  View
-                </button>
-              </div>
-            </header>
-
-            {laneKey && combinedList && combinedList[0] && (
-              <div className="p-4">
-                <div className="rounded-xl border border-zinc-800/80 p-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full border border-pink-400/60" />
-                      <div className="font-medium text-zinc-100">
-                        {driverMeta[combinedList[0].driver_id]?.full_name ||
-                          smallId(combinedList[0].driver_id)}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm text-zinc-400">top score</div>
-                      <div className="text-lg font-semibold">
-                        {combinedList[0].score ?? 0}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-center">
-                    <div className="rounded-lg border border-zinc-800/70 py-2">
-                      <div className="text-xs text-zinc-400">up events</div>
-                      <div className="font-semibold">
-                        {combinedList[0].up_events ?? 0}
-                      </div>
-                    </div>
-                    <div className="rounded-lg border border-zinc-800/70 py-2">
-                      <div className="text-xs text-zinc-400">down events</div>
-                      <div className="font-semibold">
-                        {combinedList[0].down_events ?? 0}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </section>
-
-          {/* Documents */}
-          <section className="rounded-2xl border border-zinc-700/60 bg-zinc-900/40">
-            <header className="px-4 py-3 border-b border-zinc-700/60">
-              <h2 className="text-zinc-100 font-semibold">Load Documents</h2>
-            </header>
-
-            <div className="p-4 space-y-3">
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={handleUploadClick}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60"
-                  disabled={!id || docsBusy}
-                  title="Upload a file to this load"
-                >
-                  <Upload className={cx("w-4 h-4", docsBusy && "opacity-50")} />
-                  Upload
-                </button>
-
-                <button
-                  onClick={listDocs}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60"
-                  disabled={docsBusy}
-                  title="Refresh document list"
-                >
-                  <RefreshCw className={cx("w-4 h-4", docsBusy && "animate-spin")} />
-                  Refresh
-                </button>
-              </div>
-
-              <div className="rounded-xl border border-zinc-800/70 p-3">
-                {docs.length === 0 ? (
-                  <div className="text-sm text-zinc-400">No documents yet.</div>
-                ) : (
-                  <div className="space-y-2">
-                    {docs.map((f) => {
-                      const isSelected = selectedDoc?.path === f.path;
-                      return (
-                        <div
-                          key={f.path}
-                          onClick={() => setSelectedDoc(f)}
-                          className={cx(
-                            "flex items-center justify-between gap-3 rounded-lg border p-2 cursor-pointer transition-colors",
-                            "border-zinc-800/70 hover:bg-zinc-800/40",
-                            isSelected && "border-pink-500/40 bg-zinc-800/50"
-                          )}
-                        >
-                          <div className="text-sm text-zinc-200 truncate">{f.name}</div>
-                          <div
-                            className={cx(
-                              "w-4 h-4 rounded-full border-2 flex items-center justify-center",
-                              isSelected ? "border-pink-400 bg-pink-400" : "border-zinc-600"
-                            )}
-                          >
-                            {isSelected && <div className="w-2 h-2 rounded-full bg-zinc-900" />}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <button
-                    onClick={handleExtract}
-                    className="px-3 py-1.5 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60 disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={!selectedDoc || docsBusy || extracting}
-                  >
-                    {extracting ? "Extracting..." : "Extract Text"}
-                  </button>
-
-                  <button
-                    onClick={handleOpen}
-                    className="px-3 py-1.5 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60 disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={!selectedDoc || docsBusy}
-                  >
-                    Open
-                  </button>
-
-                  <button
-                    onClick={handleDelete}
-                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-rose-500/40 text-rose-200 hover:bg-rose-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={!selectedDoc || docsBusy}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Delete
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>
-      </div>
-
-      {/* Send Instructions Modal (SMS + Email) */}
-      {showInstrModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-zinc-900 rounded-2xl border border-zinc-700/60 w-full max-w-xl max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="px-6 py-4 border-b border-zinc-700/60 flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-zinc-100">Send Load Instructions</h2>
-                <p className="text-xs text-zinc-400 mt-1">
-                  Send concise pickup / delivery instructions directly to the driver or owner-operator
-                  via SMS or Email.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              {/* Channel toggle: SMS vs Email */}
-              <div>
-                <div className="text-xs font-medium text-zinc-400 mb-1.5">Channel</div>
-                <div className="inline-flex rounded-xl border border-zinc-700/70 bg-zinc-900/80 overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setInstrChannel("sms")}
-                    className={cx(
-                      "px-3 py-1.5 text-xs font-medium",
-                      instrChannel === "sms"
-                        ? "bg-emerald-500/20 text-emerald-200"
-                        : "text-zinc-400 hover:bg-zinc-800/80"
-                    )}
-                  >
-                    SMS
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInstrChannel("email")}
-                    className={cx(
-                      "px-3 py-1.5 text-xs font-medium",
-                      instrChannel === "email"
-                        ? "bg-sky-500/20 text-sky-200"
-                        : "text-zinc-400 hover:bg-zinc-800/80"
-                    )}
-                  >
-                    Email
-                  </button>
-                </div>
-              </div>
-
-              {/* Recipient type: driver vs owner-O/O */}
-              <div>
-                <div className="text-xs font-medium text-zinc-400 mb-1.5">Recipient Type</div>
-                <div className="inline-flex rounded-xl border border-zinc-700/70 bg-zinc-900/80 overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setInstrMode("driver")}
-                    className={cx(
-                      "px-3 py-1.5 text-xs font-medium",
-                      instrMode === "driver"
-                        ? "bg-emerald-500/20 text-emerald-200"
-                        : "text-zinc-400 hover:bg-zinc-800/80"
-                    )}
-                  >
-                    Company Driver (no rate)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInstrMode("owner")}
-                    className={cx(
-                      "px-3 py-1.5 text-xs font-medium",
-                      instrMode === "owner"
-                        ? "bg-sky-500/20 text-sky-200"
-                        : "text-zinc-400 hover:bg-zinc-800/80"
-                    )}
-                  >
-                    Owner-Operator (show rate)
-                  </button>
-                </div>
-              </div>
-
-              {/* To: phone or email */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-xs font-medium text-zinc-400">
-                    {instrChannel === "sms" ? "Phone number" : "Email address"}
-                  </span>
-                  {instrChannel === "sms" && assignedDriverPhone && (
-                    <button
-                      type="button"
-                      onClick={() => setInstrTo(assignedDriverPhone)}
-                      className="text-[11px] text-emerald-300 hover:text-emerald-200"
-                    >
-                      Use assigned driver phone
-                    </button>
-                  )}
-                </div>
-                <input
-                  type={instrChannel === "sms" ? "tel" : "email"}
-                  className="w-full rounded-lg border border-zinc-700/70 bg-zinc-900/80 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
-                  placeholder={instrChannel === "sms" ? "+1 555 555 5555" : "driver@example.com"}
-                  value={instrTo}
-                  onChange={(e) => setInstrTo(e.target.value)}
-                />
-                <p className="text-[11px] text-zinc-500 mt-1">
-                  {instrChannel === "sms"
-                    ? "Use full number with country code for best results (e.g. +1 555 555 5555)."
-                    : "Use a valid email address. The rate is only included for Owner-Operators."}
-                </p>
-              </div>
-
-              {/* Message body */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-xs font-medium text-zinc-400">Message</span>
-                  <span className="text-[11px] text-zinc-500">{instrBody.length} chars</span>
-                </div>
-                <textarea
-                  className="w-full min-h-[160px] rounded-lg border border-zinc-700/70 bg-zinc-900/80 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
-                  value={instrBody}
-                  onChange={(e) => setInstrBody(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="px-6 py-4 border-t border-zinc-700/60 flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setShowInstrModal(false)}
-                className="px-4 py-2 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60 text-sm"
-                disabled={instrSending}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSendInstructions}
-                className={cx(
-                  "inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm",
-                  "border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/10",
-                  instrSending && "opacity-60 cursor-not-allowed"
-                )}
-                disabled={instrSending}
-              >
-                <Send className={cx("w-4 h-4", instrSending && "animate-spin")} />
-                {instrSending
-                  ? instrChannel === "sms"
-                    ? "Sending SMS…"
-                    : "Sending Email…"
-                  : instrChannel === "sms"
-                  ? "Send Text"
-                  : "Send Email"}
-              </button>
-            </div>
-          </div>
+    <div className="space-y-3">
+      {loading && (
+        <div className="flex items-center gap-2 text-xs text-slate-300/80">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Geocoding stops and loading the map…
         </div>
       )}
+      {error && (
+        <div className="text-xs text-rose-300/80">{error}</div>
+      )}
 
-      {/* Extraction Results Modal */}
-      {showExtractionModal && extractionResult && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-zinc-900 rounded-2xl border border-zinc-700/60 w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-            {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-zinc-700/60 flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-semibold text-zinc-100">AI Document Extraction</h2>
-                <div className="mt-1 flex items-center gap-3 text-sm">
-                  <span className="text-zinc-400">
-                    Type:{" "}
-                    <span className="text-zinc-200 font-medium">
-                      {extractionResult.documentType}
-                    </span>
-                  </span>
-                  <span className="text-zinc-500">•</span>
-                  <span className="text-zinc-400">
-                    Confidence:{" "}
-                    <span
-                      className={cx(
-                        "font-medium",
-                        extractionResult.confidence >= 80
-                          ? "text-emerald-400"
-                          : extractionResult.confidence >= 60
-                          ? "text-amber-400"
-                          : "text-rose-400"
-                      )}
-                    >
-                      {extractionResult.confidence}%
-                    </span>
-                  </span>
-                  <span className="text-zinc-500">•</span>
-                  <span className="text-zinc-400">
-                    Quality:{" "}
-                    <span className="text-zinc-200 font-medium">
-                      {extractionResult.aiInsights.qualityScore}%
-                    </span>
-                  </span>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowExtractionModal(false)}
-                className="text-zinc-400 hover:text-zinc-200"
-              >
-                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
+      {isLoaded && !!coords.length && (
+        <GoogleMap
+          mapContainerStyle={containerStyle}
+          center={center}
+          zoom={coords.length === 1 ? 10 : 7}
+          options={{
+            styles: darkMapStyles,
+            disableDefaultUI: true,
+            zoomControl: true,
+            fullscreenControl: false,
+            gestureHandling: "greedy",
+          }}
+        >
+          {coords.length > 1 && (
+            <Polyline
+              path={coords}
+              options={{
+                strokeColor: "#22c55e",
+                strokeOpacity: 0.95,
+                strokeWeight: 4,
+              }}
+            />
+          )}
 
-            {/* Modal Body - Scrollable */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {/* AI Insights */}
-              {extractionResult.aiInsights && (
-                <div className="rounded-xl border border-pink-500/30 bg-pink-500/5 p-4">
-                  <h3 className="text-sm font-semibold text-pink-200 mb-3">AI Insights</h3>
-
-                  <div className="grid grid-cols-2 gap-3 mb-3">
-                    <div>
-                      <div className="text-xs text-zinc-400">Completeness</div>
-                      <div className="text-lg font-semibold text-zinc-100">
-                        {extractionResult.aiInsights.completeness}%
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-zinc-400">Processing Time</div>
-                      <div className="text-lg font-semibold text-zinc-100">
-                        {extractionResult.processingTime}ms
-                      </div>
-                    </div>
-                  </div>
-
-                  {extractionResult.aiInsights.riskFlags &&
-                    extractionResult.aiInsights.riskFlags.length > 0 && (
-                      <div className="mb-3">
-                        <div className="text-xs font-semibold text-rose-300 mb-1">
-                          ⚠️ Risk Flags
-                        </div>
-                        <div className="space-y-1">
-                          {extractionResult.aiInsights.riskFlags.map((flag, i) => (
-                            <div
-                              key={i}
-                              className="text-xs text-rose-200 bg-rose-500/10 px-2 py-1 rounded"
-                            >
-                              {flag}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                  {extractionResult.aiInsights.recommendations &&
-                    extractionResult.aiInsights.recommendations.length > 0 && (
-                      <div>
-                        <div className="text-xs font-semibold text-sky-300 mb-1">
-                          💡 Recommendations
-                        </div>
-                        <div className="space-y-1">
-                          {extractionResult.aiInsights.recommendations.map((rec, i) => (
-                            <div
-                              key={i}
-                              className="text-xs text-sky-200 bg-sky-500/10 px-2 py-1 rounded"
-                            >
-                              {rec}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                </div>
-              )}
-
-              {/* Load Details */}
-              {extractionResult.loadDetails &&
-                Object.values(extractionResult.loadDetails).some((v) => v) && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-zinc-100 mb-3">Load Details</h3>
-                    <div className="grid grid-cols-2 gap-3">
-                      {Object.entries(extractionResult.loadDetails).map(
-                        ([key, value]) =>
-                          value && (
-                            <div
-                              key={key}
-                              className="rounded-lg border border-zinc-800/70 p-2"
-                            >
-                              <div className="text-xs text-zinc-400">
-                                {key.replace(/([A-Z])/g, " $1").trim()}
-                              </div>
-                              <div className="text-sm text-zinc-100 font-medium">{value}</div>
-                            </div>
-                          )
-                      )}
-                    </div>
-                  </div>
-                )}
-
-              {/* Origin & Destination */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {extractionResult.pickup &&
-                  Object.values(extractionResult.pickup).some((v) => v) && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-emerald-300 mb-3">📍 Pickup</h3>
-                      <div className="space-y-2">
-                        {Object.entries(extractionResult.pickup).map(
-                          ([key, value]) =>
-                            value && (
-                              <div
-                                key={key}
-                                className="rounded-lg border border-zinc-800/70 p-2"
-                              >
-                                <div className="text-xs text-zinc-400">
-                                  {key.replace(/([A-Z])/g, " $1").trim()}
-                                </div>
-                                <div className="text-sm text-zinc-100">{value}</div>
-                              </div>
-                            )
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                {extractionResult.delivery &&
-                  Object.values(extractionResult.delivery).some((v) => v) && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-sky-300 mb-3">📍 Delivery</h3>
-                      <div className="space-y-2">
-                        {Object.entries(extractionResult.delivery).map(
-                          ([key, value]) =>
-                            value && (
-                              <div
-                                key={key}
-                                className="rounded-lg border border-zinc-800/70 p-2"
-                              >
-                                <div className="text-xs text-zinc-400">
-                                  {key.replace(/([A-Z])/g, " $1").trim()}
-                                </div>
-                                <div className="text-sm text-zinc-100">{value}</div>
-                              </div>
-                            )
-                        )}
-                      </div>
-                    </div>
-                  )}
-              </div>
-
-              {/* Shipment Details */}
-              {extractionResult.shipment &&
-                Object.values(extractionResult.shipment).some(
-                  (v) => v !== null && v !== undefined
-                ) && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-zinc-100 mb-3">
-                      📦 Shipment Details
-                    </h3>
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                      {Object.entries(extractionResult.shipment).map(([key, value]) => (
-                        <div
-                          key={key}
-                          className="rounded-lg border border-zinc-800/70 p-2"
-                        >
-                          <div className="text-xs text-zinc-400">
-                            {key.replace(/([A-Z])/g, " $1").trim()}
-                          </div>
-                          <div className="text-sm text-zinc-100 font-medium">
-                            {typeof value === "boolean" ? (value ? "Yes" : "No") : value}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-              {/* Financial Information */}
-              {extractionResult.charges &&
-                Object.values(extractionResult.charges).some((v) => v) && (
-                  <div>
-                    <h3 className="text-sm font-semibold text-zinc-100 mb-3">💰 Charges</h3>
-                    <div className="rounded-xl border border-zinc-800/70 p-3 space-y-2">
-                      {extractionResult.charges.linehaul && (
-                        <div className="flex justify-between">
-                          <span className="text-zinc-400">Linehaul</span>
-                          <span className="text-zinc-100 font-medium">
-                            {toUSD(extractionResult.charges.linehaul)}
-                          </span>
-                        </div>
-                      )}
-                      {extractionResult.charges.fuelSurcharge && (
-                        <div className="flex justify-between">
-                          <span className="text-zinc-400">Fuel Surcharge</span>
-                          <span className="text-zinc-100 font-medium">
-                            {toUSD(extractionResult.charges.fuelSurcharge)}
-                          </span>
-                        </div>
-                      )}
-                      {extractionResult.charges.accessorials &&
-                        extractionResult.charges.accessorials.length > 0 && (
-                          <div className="border-t border-zinc-800/50 pt-2 mt-2">
-                            <div className="text-xs text-zinc-400 mb-1">Accessorials</div>
-                            {extractionResult.charges.accessorials.map((acc, i) => (
-                              <div key={i} className="flex justify-between text-sm">
-                                <span className="text-zinc-300">{acc.description}</span>
-                                <span className="text-zinc-100">{toUSD(acc.amount)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      {extractionResult.charges.totalCharges && (
-                        <div className="flex justify-between border-t border-zinc-700/50 pt-2 mt-2">
-                          <span className="text-zinc-100 font-semibold">Total</span>
-                          <span className="text-emerald-400 font-bold text-lg">
-                            {toUSD(extractionResult.charges.totalCharges)}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-              {/* Parties, Driver, Equipment */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {extractionResult.parties &&
-                  Object.values(extractionResult.parties).some((v) => v) && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-zinc-100 mb-3">👥 Parties</h3>
-                      <div className="space-y-2 text-sm">
-                        {Object.entries(extractionResult.parties).map(
-                          ([key, value]) =>
-                            value &&
-                            value.name && (
-                              <div
-                                key={key}
-                                className="rounded-lg border border-zinc-800/70 p-2"
-                              >
-                                <div className="text-xs text-zinc-400">{key}</div>
-                                <div className="text-zinc-100 font-medium">
-                                  {value.name}
-                                </div>
-                                {value.mcNumber && (
-                                  <div className="text-xs text-zinc-400">
-                                    MC: {value.mcNumber}
-                                  </div>
-                                )}
-                              </div>
-                            )
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                {extractionResult.driver &&
-                  Object.values(extractionResult.driver).some((v) => v) && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-zinc-100 mb-3">🚚 Driver</h3>
-                      <div className="space-y-2 text-sm">
-                        {Object.entries(extractionResult.driver).map(
-                          ([key, value]) =>
-                            value && (
-                              <div
-                                key={key}
-                                className="rounded-lg border border-zinc-800/70 p-2"
-                              >
-                                <div className="text-xs text-zinc-400">
-                                  {key.replace(/([A-Z])/g, " $1").trim()}
-                                </div>
-                                <div className="text-zinc-100">{value}</div>
-                              </div>
-                            )
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                {extractionResult.equipment &&
-                  Object.values(extractionResult.equipment).some((v) => v) && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-zinc-100 mb-3">
-                        🚛 Equipment
-                      </h3>
-                      <div className="space-y-2 text-sm">
-                        {Object.entries(extractionResult.equipment).map(
-                          ([key, value]) =>
-                            value && (
-                              <div
-                                key={key}
-                                className="rounded-lg border border-zinc-800/70 p-2"
-                              >
-                                <div className="text-xs text-zinc-400">
-                                  {key.replace(/([A-Z])/g, " $1").trim()}
-                                </div>
-                                <div className="text-zinc-100">{value}</div>
-                              </div>
-                            )
-                        )}
-                      </div>
-                    </div>
-                  )}
-              </div>
-            </div>
-
-            {/* Modal Footer */}
-            <div className="px-6 py-4 border-t border-zinc-700/60 flex justify-end gap-3">
-              <button
-                onClick={() => setShowExtractionModal(false)}
-                className="px-4 py-2 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60"
-              >
-                Close
-              </button>
-              <button
-                onClick={async () => {
-                  // Copy extracted data to clipboard
-                  await navigator.clipboard.writeText(
-                    JSON.stringify(extractionResult, null, 2)
-                  );
-                  show("Copied to clipboard!");
-                }}
-                className="px-4 py-2 rounded-lg border border-pink-500/40 text-pink-200 hover:bg-pink-500/10"
-              >
-                Copy JSON
-              </button>
-            </div>
-          </div>
-        </div>
+          {coords.map((c, idx) => (
+            <Marker
+              key={`${c.lat}-${c.lng}-${idx}`}
+              position={c}
+              label={`${idx + 1}`}
+            />
+          ))}
+        </GoogleMap>
       )}
     </div>
   );
 }
 
-/* ----------------------- sub-components ------------------------ */
-function Info({ label, value, sub }) {
+/* ------------------------- Main page ------------------------- */
+
+export default function LoadDetails() {
+  const { id: loadId } = useParams();
+  const navigate = useNavigate();
+
+  const [load, setLoad] = useState(null);
+  const [stops, setStops] = useState([]);
+  const [docs, setDocs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingDocs, setLoadingDocs] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+
+  // driver info
+  const [assignedDriver, setAssignedDriver] = useState(null);
+  const [loadingDriver, setLoadingDriver] = useState(false);
+
+  // activity log
+  const [activityLog, setActivityLog] = useState([]);
+  const [loadingActivity, setLoadingActivity] = useState(false);
+
+  // related loads
+  const [relatedLoads, setRelatedLoads] = useState([]);
+  const [loadingRelated, setLoadingRelated] = useState(false);
+
+  // edit modal
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editForm, setEditForm] = useState({});
+  const [saving, setSaving] = useState(false);
+
+  // inline editing
+  const [inlineEditing, setInlineEditing] = useState(null); // field name
+  const [inlineValue, setInlineValue] = useState("");
+
+  // quick actions menu
+  const [showQuickActions, setShowQuickActions] = useState(false);
+
+  // instructions modal + email/SMS state
+  const [showInstructions, setShowInstructions] = useState(false);
+  const [instructionsText, setInstructionsText] = useState("");
+  const [driverView, setDriverView] = useState("company");
+  const [emailTo, setEmailTo] = useState("");
+  const [emailSending, setEmailSending] = useState(false);
+  const [smsTo, setSmsTo] = useState("");
+  const [smsSending, setSmsSending] = useState(false);
+  const [instructionStatus, setInstructionStatus] = useState("");
+
+  // stop status editing
+  const [editingStopStatus, setEditingStopStatus] = useState(null);
+
+  // miles calculation
+  const [calculatingMiles, setCalculatingMiles] = useState(false);
+
+  // fuel calculation with real diesel prices
+  const [fuelCalculation, setFuelCalculation] = useState({
+    fuelCost: 0,
+    gallons: 0,
+    pricePerGallon: 3.87, // Default fallback
+  });
+
+  const fileInputRef = useRef(null);
+  const quickActionsRef = useRef(null);
+
+  // collapse state
+  const [showRouteMap, setShowRouteMap] = useState(true);
+  const [showAiSection, setShowAiSection] = useState(true);
+  const [showActivityLog, setShowActivityLog] = useState(false);
+  const [showRelatedLoads, setShowRelatedLoads] = useState(false);
+
+  const loadKey = load?.id?.slice(0, 6) ?? "—";
+
+  /* -------- keyboard shortcuts -------- */
+  useEffect(() => {
+    const handleKeyPress = (e) => {
+      // Only trigger if not in an input/textarea
+      if (
+        e.target.tagName === "INPUT" ||
+        e.target.tagName === "TEXTAREA"
+      ) {
+        return;
+      }
+
+      switch (e.key.toLowerCase()) {
+        case "e":
+          setShowEditModal(true);
+          break;
+        case "i":
+          handleOpenInstructionsModal();
+          break;
+        case "r":
+          fetchData();
+          break;
+        case "p":
+          handlePrintRateConfirmation();
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyPress);
+    return () => window.removeEventListener("keydown", handleKeyPress);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load]);
+
+  /* -------- click outside for quick actions -------- */
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (
+        quickActionsRef.current &&
+        !quickActionsRef.current.contains(e.target)
+      ) {
+        setShowQuickActions(false);
+      }
+    };
+
+    if (showQuickActions) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () =>
+      document.removeEventListener("mousedown", handleClickOutside);
+  }, [showQuickActions]);
+
+  /* -------- Calculate fuel cost when load miles change -------- */
+  useEffect(() => {
+    const fetchFuelCost = async () => {
+      if (load?.miles) {
+        const calculation = await calculateFuelCost(load.miles);
+        setFuelCalculation(calculation);
+        console.log('[LoadDetails] Fuel calculation updated:', calculation);
+      }
+    };
+
+    fetchFuelCost();
+  }, [load?.miles]);
+
+  /* -------- fetch load + stops + driver + activity + related -------- */
+
+  const fetchData = useCallback(async () => {
+    if (!loadId) return;
+    try {
+      setLoading(true);
+      setError("");
+
+      const { data: loadRow, error: loadErr } = await supabase
+        .from("loads")
+        .select("*")
+        .eq("id", loadId)
+        .single();
+
+      if (loadErr) throw loadErr;
+
+      const { data: stopRows, error: stopErr } = await supabase
+        .from("load_stops")
+        .select("*")
+        .eq("load_id", loadId)
+        .order("sequence", { ascending: true });
+
+      if (stopErr) throw stopErr;
+
+      setLoad(loadRow);
+      setStops(stopRows || []);
+
+      // Fetch assigned driver if driver_id exists
+      if (loadRow.driver_id) {
+        fetchAssignedDriver(loadRow.driver_id);
+      }
+
+      // Fetch activity log
+      fetchActivityLog(loadRow.id);
+
+      // Fetch related loads (same customer)
+      if (loadRow.customer_id) {
+        fetchRelatedLoads(loadRow.customer_id, loadRow.id);
+      }
+
+      await refreshDocuments(loadRow);
+    } catch (err) {
+      console.error("[LoadDetails] fetch error", err);
+      setError("Could not load this load. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, [loadId]);
+
+  const fetchAssignedDriver = async (driverId) => {
+    try {
+      setLoadingDriver(true);
+      const { data, error: driverErr } = await supabase
+        .from("drivers")
+        .select("*")
+        .eq("id", driverId)
+        .single();
+
+      if (driverErr) throw driverErr;
+      setAssignedDriver(data);
+    } catch (err) {
+      console.error("[LoadDetails] fetch driver error", err);
+    } finally {
+      setLoadingDriver(false);
+    }
+  };
+
+  const fetchActivityLog = async (loadIdParam) => {
+    try {
+      setLoadingActivity(true);
+      // Try to fetch from load_activity table if it exists
+      // Otherwise create a synthetic log from load metadata
+      const { data, error: activityErr } = await supabase
+        .from("load_activity")
+        .select("*")
+        .eq("load_id", loadIdParam)
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      if (activityErr) {
+        // Table might not exist yet, create synthetic log
+        setActivityLog([
+          {
+            id: "synthetic-1",
+            action: "Load created",
+            timestamp: load?.created_at,
+            user: "System",
+          },
+        ]);
+      } else {
+        setActivityLog(data || []);
+      }
+    } catch (err) {
+      console.error("[LoadDetails] fetch activity error", err);
+      setActivityLog([]);
+    } finally {
+      setLoadingActivity(false);
+    }
+  };
+
+  const fetchRelatedLoads = async (customerId, currentLoadId) => {
+    try {
+      setLoadingRelated(true);
+      const { data, error: relatedErr } = await supabase
+        .from("loads")
+        .select("id, load_number, status, pickup_at, delivery_at")
+        .eq("customer_id", customerId)
+        .neq("id", currentLoadId)
+        .order("created_at", { ascending: false })
+        .limit(5);
+
+      if (relatedErr) throw relatedErr;
+      setRelatedLoads(data || []);
+    } catch (err) {
+      console.error("[LoadDetails] fetch related loads error", err);
+      setRelatedLoads([]);
+    } finally {
+      setLoadingRelated(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchData]);
+
+  /* -------- documents -------- */
+
+  const refreshDocuments = useCallback(
+    async (loadRowOverride) => {
+      const activeLoad = loadRowOverride || load;
+      if (!activeLoad || !activeLoad.org_id) return;
+
+      try {
+        setLoadingDocs(true);
+        const folder = `${activeLoad.org_id}/${activeLoad.id}`;
+
+        const { data, error: listErr } = await supabase.storage
+          .from(DOC_BUCKET)
+          .list(folder, { limit: 100 });
+
+        if (listErr) throw listErr;
+
+        setDocs(
+          (data || []).map((d) => ({
+            name: d.name,
+            path: `${folder}/${d.name}`,
+            updated_at: d.updated_at,
+          }))
+        );
+      } catch (err) {
+        console.error("[LoadDetails] docs list error", err);
+      } finally {
+        setLoadingDocs(false);
+      }
+    },
+    [load]
+  );
+
+  const handleUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !load?.org_id || !load?.id) return;
+
+    try {
+      setUploading(true);
+      const folder = `${load.org_id}/${load.id}`;
+      const filePath = `${folder}/${file.name}`;
+
+      const { error: uploadErr } = await supabase.storage
+        .from(DOC_BUCKET)
+        .upload(filePath, file, {
+          upsert: true,
+        });
+
+      if (uploadErr) throw uploadErr;
+
+      await refreshDocuments();
+
+      // Log activity
+      await logActivity("Document uploaded", file.name);
+    } catch (err) {
+      console.error("[LoadDetails] upload error", err);
+      alert("Upload failed. Check console for details.");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const handleOpenDoc = async (doc) => {
+    try {
+      const { data, error: urlErr } = await supabase.storage
+        .from(DOC_BUCKET)
+        .createSignedUrl(doc.path, 60 * 10);
+
+      if (urlErr) throw urlErr;
+      window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      console.error("[LoadDetails] open doc error", err);
+      alert("Could not open document.");
+    }
+  };
+
+  const handleDeleteDoc = async (doc) => {
+    if (
+      !window.confirm(
+        `Delete document "${doc.name}" from this load?`
+      )
+    )
+      return;
+
+    try {
+      const { error: delErr } = await supabase.storage
+        .from(DOC_BUCKET)
+        .remove([doc.path]);
+
+      if (delErr) throw delErr;
+      await refreshDocuments();
+      await logActivity("Document deleted", doc.name);
+    } catch (err) {
+      console.error("[LoadDetails] delete doc error", err);
+      alert("Could not delete document.");
+    }
+  };
+
+  /* -------- activity logging helper -------- */
+
+  const logActivity = async (action, details = "") => {
+    try {
+      // Try to insert into load_activity if table exists
+      await supabase.from("load_activity").insert({
+        load_id: load.id,
+        action,
+        details,
+        user: "Current User", // Replace with actual user from auth
+      });
+    } catch (err) {
+      // Table might not exist yet, silently fail
+      console.log("[LoadDetails] activity log insert skipped", err);
+    }
+  };
+
+  /* -------- edit load handlers -------- */
+
+  const handleOpenEditModal = () => {
+    setEditForm({
+      load_number: load.load_number || "",
+      status: load.status || "AVAILABLE",
+      equipment_type: load.equipment_type || "DRY_VAN",
+      rate: load.rate || "",
+      miles: load.miles || "",
+      reference: load.reference || "",
+      commodity: load.commodity || "",
+      pickup_at: load.pickup_at || "",
+      delivery_at: load.delivery_at || "",
+    });
+    setShowEditModal(true);
+  };
+
+  const handleSaveEdit = async () => {
+    try {
+      setSaving(true);
+
+      const { error: updateErr } = await supabase
+        .from("loads")
+        .update({
+          load_number: editForm.load_number,
+          status: editForm.status,
+          equipment_type: editForm.equipment_type,
+          rate: parseFloat(editForm.rate) || null,
+          miles: parseInt(editForm.miles) || null,
+          reference: editForm.reference,
+          commodity: editForm.commodity,
+          pickup_at: editForm.pickup_at,
+          delivery_at: editForm.delivery_at,
+        })
+        .eq("id", load.id);
+
+      if (updateErr) throw updateErr;
+
+      await logActivity("Load details updated");
+      await fetchData();
+      setShowEditModal(false);
+    } catch (err) {
+      console.error("[LoadDetails] save edit error", err);
+      alert("Could not save changes. Check console for details.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /* -------- inline editing handlers -------- */
+
+  const handleInlineEdit = (field, currentValue) => {
+    setInlineEditing(field);
+    setInlineValue(currentValue);
+  };
+
+  const handleInlineSave = async () => {
+    if (!inlineEditing) return;
+
+    try {
+      const updateData = { [inlineEditing]: inlineValue };
+
+      // Handle numeric fields
+      if (inlineEditing === "rate" || inlineEditing === "miles") {
+        updateData[inlineEditing] = parseFloat(inlineValue) || null;
+      }
+
+      const { error: updateErr } = await supabase
+        .from("loads")
+        .update(updateData)
+        .eq("id", load.id);
+
+      if (updateErr) throw updateErr;
+
+      await logActivity(`Updated ${inlineEditing}`, inlineValue);
+      await fetchData();
+      setInlineEditing(null);
+    } catch (err) {
+      console.error("[LoadDetails] inline save error", err);
+      alert("Could not save change.");
+    }
+  };
+
+  const handleInlineCancel = () => {
+    setInlineEditing(null);
+    setInlineValue("");
+  };
+
+  /* -------- stop status update -------- */
+
+  const handleUpdateStopStatus = async (stopId, newStatus) => {
+    try {
+      const { error: updateErr } = await supabase
+        .from("load_stops")
+        .update({ status: newStatus })
+        .eq("id", stopId);
+
+      if (updateErr) throw updateErr;
+
+      await logActivity("Stop status updated", `Stop ${stopId}: ${newStatus}`);
+      await fetchData();
+      setEditingStopStatus(null);
+    } catch (err) {
+      console.error("[LoadDetails] update stop status error", err);
+      alert("Could not update stop status.");
+    }
+  };
+
+  /* -------- print/export handlers -------- */
+
+  const handlePrintRateConfirmation = () => {
+    const printWindow = window.open("", "_blank");
+    const pickupStop = stops[0];
+    const deliveryStop = stops[stops.length - 1];
+
+    const content = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Rate Confirmation - ${load.load_number || loadKey}</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 40px; }
+          h1 { color: #059669; }
+          .section { margin-bottom: 20px; }
+          .label { font-weight: bold; }
+        </style>
+      </head>
+      <body>
+        <h1>Rate Confirmation</h1>
+        <div class="section">
+          <div><span class="label">Load Number:</span> ${load.load_number || loadKey}</div>
+          <div><span class="label">Status:</span> ${load.status || "AVAILABLE"}</div>
+          <div><span class="label">Equipment:</span> ${load.equipment_type || "DRY_VAN"}</div>
+        </div>
+        <div class="section">
+          <div><span class="label">Pickup:</span> ${pickupStop ? buildStopAddress(pickupStop) : "TBD"}</div>
+          <div><span class="label">Pickup Time:</span> ${formatDateTime(pickupStop?.scheduled_start || load.pickup_at)}</div>
+        </div>
+        <div class="section">
+          <div><span class="label">Delivery:</span> ${deliveryStop ? buildStopAddress(deliveryStop) : "TBD"}</div>
+          <div><span class="label">Delivery Time:</span> ${formatDateTime(deliveryStop?.scheduled_end || load.delivery_at)}</div>
+        </div>
+        <div class="section">
+          <div><span class="label">Miles:</span> ${load.miles || "—"}</div>
+          <div><span class="label">Rate:</span> ${load.rate != null ? load.rate.toLocaleString("en-US", { style: "currency", currency: "USD" }) : "—"}</div>
+        </div>
+        <div class="section">
+          <div><span class="label">Reference:</span> ${load.reference || "—"}</div>
+          <div><span class="label">Commodity:</span> ${load.commodity || "—"}</div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.write(content);
+    printWindow.document.close();
+    printWindow.print();
+  };
+
+  const handleExportCSV = () => {
+    const csvData = [
+      ["Field", "Value"],
+      ["Load Number", load.load_number || loadKey],
+      ["Status", load.status || "AVAILABLE"],
+      ["Equipment", load.equipment_type || "DRY_VAN"],
+      ["Miles", load.miles || ""],
+      ["Rate", load.rate || ""],
+      ["Reference", load.reference || ""],
+      ["Commodity", load.commodity || ""],
+      ["Pickup Date", load.pickup_at || ""],
+      ["Delivery Date", load.delivery_at || ""],
+    ];
+
+    const csvContent =
+      "data:text/csv;charset=utf-8," +
+      csvData.map((e) => e.join(",")).join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute(
+      "download",
+      `load_${load.load_number || loadKey}.csv`
+    );
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  /* -------- quick actions handlers -------- */
+
+  const handleDuplicateLoad = async () => {
+    try {
+      const { data: newLoad, error: dupErr } = await supabase
+        .from("loads")
+        .insert({
+          org_id: load.org_id,
+          customer_id: load.customer_id,
+          equipment_type: load.equipment_type,
+          commodity: load.commodity,
+          miles: load.miles,
+          rate: load.rate,
+          status: "AVAILABLE",
+          origin: load.origin,
+          destination: load.destination,
+        })
+        .select()
+        .single();
+
+      if (dupErr) throw dupErr;
+
+      // Duplicate stops
+      if (stops.length > 0) {
+        const stopsToInsert = stops.map((s) => ({
+          load_id: newLoad.id,
+          sequence: s.sequence,
+          stop_type: s.stop_type,
+          location_name: s.location_name,
+          address_line1: s.address_line1,
+          city: s.city,
+          state: s.state,
+          postal_code: s.postal_code,
+          country: s.country,
+          scheduled_start: s.scheduled_start,
+          scheduled_end: s.scheduled_end,
+        }));
+
+        await supabase.from("load_stops").insert(stopsToInsert);
+      }
+
+      alert(`Load duplicated! New load ID: ${newLoad.id.slice(0, 6)}`);
+      setShowQuickActions(false);
+    } catch (err) {
+      console.error("[LoadDetails] duplicate load error", err);
+      alert("Could not duplicate load.");
+    }
+  };
+
+  const handleMarkDelivered = async () => {
+    if (!window.confirm("Mark this load as delivered?")) return;
+
+    try {
+      const { error: updateErr } = await supabase
+        .from("loads")
+        .update({ status: "DELIVERED" })
+        .eq("id", load.id);
+
+      if (updateErr) throw updateErr;
+
+      await logActivity("Load marked as delivered");
+      await fetchData();
+      setShowQuickActions(false);
+    } catch (err) {
+      console.error("[LoadDetails] mark delivered error", err);
+      alert("Could not mark as delivered.");
+    }
+  };
+
+  const handleCancelLoad = async () => {
+    if (!window.confirm("Cancel this load?")) return;
+
+    try {
+      const { error: updateErr } = await supabase
+        .from("loads")
+        .update({ status: "CANCELLED" })
+        .eq("id", load.id);
+
+      if (updateErr) throw updateErr;
+
+      await logActivity("Load cancelled");
+      await fetchData();
+      setShowQuickActions(false);
+    } catch (err) {
+      console.error("[LoadDetails] cancel load error", err);
+      alert("Could not cancel load.");
+    }
+  };
+
+  /* -------- AI train + instructions helpers -------- */
+
+  const handleTrainAI = async () => {
+    if (!load) return;
+    try {
+      const { error: rpcErr } = await supabase.rpc(
+        "rpc_ai_train_for_org_from_loads",
+        {}
+      );
+      if (rpcErr) throw rpcErr;
+      alert("AI training started for your org (stub RPC).");
+    } catch (err) {
+      console.error("[LoadDetails] train AI error", err);
+      alert("Could not start AI training. Check console for details.");
+    }
+  };
+
+  const handleBack = () => {
+    navigate(-1);
+  };
+
+  const buildInstructionsTemplate = (view = driverView) => {
+    if (!load) return "";
+
+    const pickupStop = stops[0];
+    const deliveryStop = stops[stops.length - 1];
+
+    const { city: fallbackPickupCity, state: fallbackPickupState } =
+      parseCityState(
+        load?.origin ||
+          [load?.origin_city, load?.origin_state]
+            .filter(Boolean)
+            .join(", ")
+      );
+
+    const {
+      city: fallbackDeliveryCity,
+      state: fallbackDeliveryState,
+    } = parseCityState(
+      load?.destination ||
+        [
+          load?.dest_city || load?.destination_city,
+          load?.dest_state || load?.destination_state,
+        ]
+          .filter(Boolean)
+          .join(", ")
+    );
+
+    const pickupAddress =
+      pickupStop && buildStopAddress(pickupStop)
+        ? buildStopAddress(pickupStop)
+        : [fallbackPickupCity, fallbackPickupState]
+            .filter(Boolean)
+            .join(", ") || "TBD";
+
+    const deliveryAddress =
+      deliveryStop && buildStopAddress(deliveryStop)
+        ? buildStopAddress(deliveryStop)
+        : [fallbackDeliveryCity, fallbackDeliveryState]
+            .filter(Boolean)
+            .join(", ") || "TBD";
+
+    const pickupDisplayDateTime =
+      pickupStop?.scheduled_start || load?.pickup_at;
+    const deliveryDisplayDateTime =
+      deliveryStop?.scheduled_end || load?.delivery_at;
+
+    const commodity =
+      load?.commodity ||
+      load?.commodity_description ||
+      load?.load_type ||
+      "General freight";
+
+    const lines = [];
+
+    lines.push(`Load ${load.load_number || loadKey}`);
+    lines.push(`Pickup: ${pickupAddress}`);
+    lines.push(`Pickup time: ${formatDateTime(pickupDisplayDateTime)}`);
+    lines.push(`Delivery: ${deliveryAddress}`);
+    lines.push(
+      `Delivery time: ${formatDateTime(deliveryDisplayDateTime)}`
+    );
+    lines.push(`Commodity: ${commodity}`);
+
+    if (view === "oo") {
+      const rateText =
+        load.rate != null
+          ? load.rate.toLocaleString("en-US", {
+              style: "currency",
+              currency: "USD",
+            })
+          : "TBD";
+      lines.push(`Rate: ${rateText}`);
+    }
+
+    lines.push(`Stops: ${stops.length}`);
+
+    return lines.join("\n");
+  };
+
+  const handleOpenInstructionsModal = () => {
+    setDriverView("company");
+    setInstructionsText(buildInstructionsTemplate("company"));
+    setEmailTo(assignedDriver?.email || "");
+    setSmsTo(assignedDriver?.phone || "");
+    setInstructionStatus("");
+    setShowInstructions(true);
+  };
+
+  const handleDriverViewChange = (view) => {
+    setDriverView(view);
+    setInstructionsText(buildInstructionsTemplate(view));
+    setInstructionStatus(
+      view === "company"
+        ? "Company driver view: rate is hidden."
+        : "Owner-Operator view: rate is included."
+    );
+  };
+
+  const handleCopyInstructions = async () => {
+    try {
+      await navigator.clipboard.writeText(instructionsText);
+      setInstructionStatus("Instructions copied to clipboard.");
+    } catch (err) {
+      console.error("[LoadDetails] copy instructions error", err);
+      setInstructionStatus(
+        "Could not copy to clipboard. Please copy manually."
+      );
+    }
+  };
+
+  const handleSendEmail = async () => {
+    if (!emailTo) {
+      setInstructionStatus("Add a recipient email first.");
+      return;
+    }
+    if (!instructionsText.trim()) {
+      setInstructionStatus("Instructions text is empty.");
+      return;
+    }
+
+    try {
+      setEmailSending(true);
+      setInstructionStatus("");
+
+      const subject = `Load ${
+        load.load_number || loadKey
+      } instructions`;
+
+      const { error: fnError } = await supabase.functions.invoke(
+        "send-load-instructions-email",
+        {
+          body: {
+            to: emailTo,
+            subject,
+            body: instructionsText,
+            loadId: load.id,
+            mode: "email",
+          },
+        }
+      );
+
+      if (fnError) {
+        console.error(
+          "[LoadDetails] send instructions email error",
+          fnError
+        );
+        setInstructionStatus(
+          "Could not send email. Check console and Supabase logs."
+        );
+      } else {
+        setInstructionStatus("Email sent successfully.");
+        await logActivity("Load instructions sent via email", emailTo);
+      }
+    } catch (err) {
+      console.error("[LoadDetails] send instructions email error", err);
+      setInstructionStatus(
+        "Could not send email. Check console and Supabase logs."
+      );
+    } finally {
+      setEmailSending(false);
+    }
+  };
+
+  const handleSendSms = () => {
+    if (!smsTo) {
+      setInstructionStatus("Add a phone number first.");
+      return;
+    }
+    if (!instructionsText.trim()) {
+      setInstructionStatus("Instructions text is empty.");
+      return;
+    }
+
+    setSmsSending(true);
+    setTimeout(() => {
+      setSmsSending(false);
+      setInstructionStatus(
+        "SMS option is ready in the UI. Once Twilio is approved, we'll wire this button to your SMS Edge Function. For now, copy/paste these instructions into a text."
+      );
+    }, 300);
+  };
+
+  /* -------------------- render helpers -------------------- */
+
+  const pickupStop = stops[0];
+  const deliveryStop = stops[stops.length - 1];
+
+  const { city: fallbackPickupCity, state: fallbackPickupState } =
+    parseCityState(
+      load?.origin ||
+        [load?.origin_city, load?.origin_state]
+          .filter(Boolean)
+          .join(", ")
+    );
+
+  const {
+    city: fallbackDeliveryCity,
+    state: fallbackDeliveryState,
+  } = parseCityState(
+    load?.destination ||
+      [
+        load?.dest_city || load?.destination_city,
+        load?.dest_state || load?.destination_state,
+      ]
+        .filter(Boolean)
+        .join(", ")
+  );
+
+  const pickupDisplayCity =
+    pickupStop?.city || fallbackPickupCity || "—";
+  const pickupDisplayState =
+    pickupStop?.state || fallbackPickupState || "";
+
+  const deliveryDisplayCity =
+    deliveryStop?.city || fallbackDeliveryCity || "—";
+  const deliveryDisplayState =
+    deliveryStop?.state || fallbackDeliveryState || "";
+
+  const pickupDisplayDateTime =
+    pickupStop?.scheduled_start || load?.pickup_at;
+  const deliveryDisplayDateTime =
+    deliveryStop?.scheduled_end || load?.delivery_at;
+
+  const displayStops = useMemo(() => {
+    if (stops && stops.length > 0) return stops;
+
+    if (!load) return [];
+
+    const virtual = [];
+
+    if (fallbackPickupCity || fallbackPickupState) {
+      virtual.push({
+        id: "virtual-pickup",
+        sequence: 1,
+        stop_type: "PICKUP",
+        location_name:
+          [fallbackPickupCity, fallbackPickupState]
+            .filter(Boolean)
+            .join(", ") || "Pickup",
+        city: fallbackPickupCity || "",
+        state: pickupDisplayState || fallbackPickupState || "",
+        scheduled_start: pickupDisplayDateTime || null,
+        scheduled_end: pickupDisplayDateTime || null,
+        address_line1: null,
+        postal_code: null,
+        country: null,
+        status: "PENDING",
+      });
+    }
+
+    if (fallbackDeliveryCity || fallbackDeliveryState) {
+      virtual.push({
+        id: "virtual-delivery",
+        sequence: virtual.length + 1,
+        stop_type: "DELIVERY",
+        location_name:
+          [fallbackDeliveryCity, fallbackDeliveryState]
+            .filter(Boolean)
+            .join(", ") || "Delivery",
+        city: fallbackDeliveryCity || "",
+        state: deliveryDisplayState || fallbackDeliveryState || "",
+        scheduled_start: deliveryDisplayDateTime || null,
+        scheduled_end: deliveryDisplayDateTime || null,
+        address_line1: null,
+        postal_code: null,
+        country: null,
+        status: "PENDING",
+      });
+    }
+
+    return virtual;
+  }, [
+    stops,
+    load,
+    fallbackPickupCity,
+    fallbackPickupState,
+    fallbackDeliveryCity,
+    fallbackDeliveryState,
+    pickupDisplayDateTime,
+    deliveryDisplayDateTime,
+    pickupDisplayState,
+    deliveryDisplayState,
+  ]);
+
+  /* -------- AUTO-CALCULATE MILES (moved here to access displayStops) -------- */
+
+  const handleCalculateMiles = useCallback(async () => {
+    if (!GOOGLE_MAPS_API_KEY) {
+      alert("Google Maps API key is not configured. Set VITE_GOOGLE_MAPS_API_KEY in your .env file.");
+      return;
+    }
+
+    console.log('[Auto-Calculate Miles] displayStops:', displayStops);
+    console.log('[Auto-Calculate Miles] actual stops from DB:', stops);
+    
+    if (displayStops.length < 2) {
+      alert("You need at least 2 stops (pickup and delivery) to calculate miles.");
+      return;
+    }
+
+    try {
+      setCalculatingMiles(true);
+
+      // Build waypoints array
+      const waypoints = [];
+      
+      // Check if we have actual stops from load_stops table (not virtual stops)
+      const hasRealStops = stops && stops.length >= 2;
+      
+      if (hasRealStops) {
+        // Scenario 1: Use actual stops from load_stops table (manually created loads)
+        console.log('[Auto-Calculate Miles] Using load_stops records');
+        for (const stop of stops) {
+          let addr = buildStopAddress(stop);
+          console.log('[Auto-Calculate Miles] Stop:', stop.location_name, 'Address from fields:', addr);
+          
+          // If buildStopAddress returns empty, use location_name as fallback
+          if (!addr && stop.location_name) {
+            addr = stop.location_name;
+            console.log('[Auto-Calculate Miles] Using location_name fallback:', addr);
+          }
+          
+          if (addr) waypoints.push(addr);
+        }
+      } else {
+        // Scenario 2: Fallback to loads.origin and loads.destination (OCR loads)
+        console.log('[Auto-Calculate Miles] No load_stops found, using loads.origin and loads.destination');
+        
+        if (load.origin) {
+          waypoints.push(load.origin);
+          console.log('[Auto-Calculate Miles] Added origin:', load.origin);
+        }
+        
+        if (load.destination) {
+          waypoints.push(load.destination);
+          console.log('[Auto-Calculate Miles] Added destination:', load.destination);
+        }
+      }
+
+      console.log('[Auto-Calculate Miles] Final waypoints:', waypoints);
+
+      if (waypoints.length < 2) {
+        alert("Could not build addresses from stops. Please add city/state or location information to your stops.");
+        return;
+      }
+
+      // Use Google Maps DirectionsService (no CORS issues)
+      // @ts-ignore - google is loaded via script
+      const directionsService = new google.maps.DirectionsService();
+
+      // Build request for multi-stop route
+      const origin = waypoints[0];
+      const destination = waypoints[waypoints.length - 1];
+      const waypointsForApi = waypoints.slice(1, -1).map(location => ({
+        location,
+        stopover: true
+      }));
+
+      const request = {
+        origin,
+        destination,
+        waypoints: waypointsForApi,
+        travelMode: google.maps.TravelMode.DRIVING,
+        unitSystem: google.maps.UnitSystem.IMPERIAL
+      };
+
+      console.log('[Auto-Calculate Miles] Directions API request:', request);
+
+      directionsService.route(request, async (result, status) => {
+        try {
+          if (status === 'OK' && result) {
+            // Calculate total distance from all legs
+            let totalMiles = 0;
+            const route = result.routes[0];
+            
+            if (route && route.legs) {
+              for (const leg of route.legs) {
+                if (leg.distance) {
+                  // Distance is in meters, convert to miles
+                  const miles = leg.distance.value * 0.000621371;
+                  totalMiles += miles;
+                  console.log(`[Auto-Calculate Miles] Leg: ${leg.start_address} → ${leg.end_address}: ${miles.toFixed(2)} miles`);
+                }
+              }
+            }
+
+            console.log('[Auto-Calculate Miles] Total miles:', totalMiles);
+
+            if (totalMiles > 0) {
+              const roundedMiles = Math.round(totalMiles);
+              
+              // Update the load with calculated miles
+              const { error: updateErr } = await supabase
+                .from("loads")
+                .update({ miles: roundedMiles })
+                .eq("id", load.id);
+
+              if (updateErr) throw updateErr;
+
+              await logActivity("Miles auto-calculated", `${roundedMiles} miles via Google Maps`);
+              await fetchData(); // Refresh the load data
+              
+              alert(`Miles calculated: ${roundedMiles} miles`);
+            } else {
+              alert("Could not calculate miles. Please check your stops and try again.");
+            }
+          } else {
+            console.error('[Auto-Calculate Miles] Directions API error:', status, result);
+            alert(`Could not calculate route: ${status}. Please check that your addresses are valid.`);
+          }
+        } catch (err) {
+          console.error("[LoadDetails] calculate miles error", err);
+          alert("Error calculating miles. Check console for details.");
+        } finally {
+          setCalculatingMiles(false);
+        }
+      });
+    } catch (err) {
+      console.error("[LoadDetails] calculate miles error", err);
+      alert("Error calculating miles. Check console for details.");
+      setCalculatingMiles(false);
+    }
+  }, [stops, displayStops, load, GOOGLE_MAPS_API_KEY, fetchData, logActivity]);
+
+  // Calculate profitability using REAL diesel prices
+  const driverPay = assignedDriver?.rate || 0;
+  const estimatedFuel = fuelCalculation.fuelCost; // Using real diesel prices from EIA
+  const profit = (load?.rate || 0) - driverPay - estimatedFuel;
+  const profitMargin =
+    load?.rate > 0 ? ((profit / load.rate) * 100).toFixed(1) : 0;
+  
+  // Calculate rate per mile
+  const ratePerMile = (load?.rate && load?.miles) ? (load.rate / load.miles).toFixed(2) : null;
+
+  if (loading) {
+    return (
+      <div className="p-6 flex items-center justify-center">
+        <div className="flex items-center gap-3 text-slate-200">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          <span>Loading load details…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !load) {
+    return (
+      <div className="p-6 space-y-4">
+        <button
+          onClick={handleBack}
+          className="inline-flex items-center gap-2 text-sm text-slate-200 hover:text-emerald-300"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Loads
+        </button>
+        <div className="bg-rose-950/60 border border-rose-500/40 rounded-2xl p-4 text-rose-100">
+          {error || "Load not found."}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="rounded-xl border border-zinc-800/70 p-3">
-      <div className="text-xs uppercase tracking-wide text-zinc-400">{label}</div>
-      <div className="text-zinc-100 font-medium">{value ?? "—"}</div>
-      {sub && <div className="text-xs text-zinc-400 mt-0.5">{sub}</div>}
+    <div className="px-4 py-4 md:px-6 md:py-6 max-w-7xl mx-auto space-y-6">
+      {/* Header bar */}
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleBack}
+              className="inline-flex items-center gap-2 text-sm text-slate-200 hover:text-emerald-300"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back
+            </button>
+            <div>
+              <div className="text-xs uppercase tracking-wide text-slate-400">
+                Load
+              </div>
+              <div className="text-lg font-semibold text-slate-50">
+                {load.load_number || loadKey}
+              </div>
+              <div className="text-xs text-slate-400">
+                PU:{" "}
+                {pickupStop
+                  ? formatDateTime(pickupStop.scheduled_start)
+                  : formatDateTime(load.pickup_at)}{" "}
+                · DEL:{" "}
+                {deliveryStop
+                  ? formatDateTime(deliveryStop.scheduled_end)
+                  : formatDateTime(load.delivery_at)}{" "}
+                · Equip: {load.equipment_type || "—"}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleOpenEditModal}
+              className="inline-flex items-center gap-2 rounded-full border border-blue-500/60 bg-blue-500/10 px-3 py-1.5 text-xs font-medium text-blue-100 hover:bg-blue-500/20"
+            >
+              <Edit className="h-4 w-4" />
+              Edit Load
+            </button>
+            <button
+              onClick={handleOpenInstructionsModal}
+              className="inline-flex items-center gap-2 rounded-full border border-emerald-500/60 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-100 hover:bg-emerald-500/20"
+            >
+              <Send className="h-4 w-4" />
+              Send Instructions
+            </button>
+            <button
+              onClick={handleTrainAI}
+              className="inline-flex items-center gap-2 rounded-full border border-pink-500/60 bg-pink-500/10 px-3 py-1.5 text-xs font-medium text-pink-100 hover:bg-pink-500/20"
+            >
+              <PlayCircle className="h-4 w-4" />
+              Train AI
+            </button>
+            <button
+              onClick={fetchData}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-600 bg-slate-900/60 px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-slate-800"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Refresh
+            </button>
+            <div className="relative" ref={quickActionsRef}>
+              <button
+                onClick={() => setShowQuickActions(!showQuickActions)}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-600 bg-slate-900/60 px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-slate-800"
+              >
+                <MoreVertical className="h-4 w-4" />
+              </button>
+              {showQuickActions && (
+                <div className="absolute right-0 mt-2 w-48 rounded-xl bg-slate-900 border border-slate-700 shadow-xl z-50">
+                  <div className="py-1">
+                    <button
+                      onClick={handlePrintRateConfirmation}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-xs text-slate-100 hover:bg-slate-800"
+                    >
+                      <Printer className="h-3 w-3" />
+                      Print Rate Confirmation
+                    </button>
+                    <button
+                      onClick={handleExportCSV}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-xs text-slate-100 hover:bg-slate-800"
+                    >
+                      <Download className="h-3 w-3" />
+                      Export CSV
+                    </button>
+                    <button
+                      onClick={handleDuplicateLoad}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-xs text-slate-100 hover:bg-slate-800"
+                    >
+                      <Copy className="h-3 w-3" />
+                      Duplicate Load
+                    </button>
+                    <button
+                      onClick={handleMarkDelivered}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-xs text-emerald-100 hover:bg-slate-800"
+                    >
+                      <CheckCircle2 className="h-3 w-3" />
+                      Mark as Delivered
+                    </button>
+                    <button
+                      onClick={handleCancelLoad}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-xs text-rose-100 hover:bg-slate-800"
+                    >
+                      <X className="h-3 w-3" />
+                      Cancel Load
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Status Timeline */}
+        <div className="overflow-x-auto">
+          <StatusTimeline status={load.status} />
+        </div>
+
+        {/* Keyboard shortcuts hint */}
+        <div className="text-[10px] text-slate-500">
+          Keyboard shortcuts: <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">E</kbd> Edit · <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">I</kbd> Instructions · <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">R</kbd> Refresh · <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">P</kbd> Print
+        </div>
+      </div>
+
+      {/* Top grid */}
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)] gap-6">
+        {/* Load summary */}
+        <section className="bg-slate-900/70 border border-emerald-500/30 rounded-2xl p-5 space-y-4">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-base font-semibold text-slate-50">
+              Load Summary
+            </h2>
+            <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-200 border border-emerald-500/40">
+              {load.status || "AVAILABLE"}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+            <div className="rounded-xl bg-slate-950/60 border border-slate-700/60 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                Pickup
+              </div>
+              <div className="text-slate-50">
+                {pickupDisplayCity}, {pickupDisplayState}
+              </div>
+              <div className="text-xs text-slate-400 mt-0.5">
+                {formatDateTime(pickupDisplayDateTime)}
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-slate-950/60 border border-slate-700/60 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                Delivery
+              </div>
+              <div className="text-slate-50">
+                {deliveryDisplayCity}, {deliveryDisplayState}
+              </div>
+              <div className="text-xs text-slate-400 mt-0.5">
+                {formatDateTime(deliveryDisplayDateTime)}
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-slate-950/60 border border-slate-700/60 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                Equipment
+              </div>
+              <div className="text-slate-50">
+                {load.equipment_type || "DRY_VAN"}
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-slate-950/60 border border-slate-700/60 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-slate-400 mb-1">
+                Miles
+              </div>
+              {inlineEditing === "miles" ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    value={inlineValue}
+                    onChange={(e) => setInlineValue(e.target.value)}
+                    className="w-20 rounded bg-slate-900 border border-slate-700 px-2 py-0.5 text-xs text-slate-100"
+                    autoFocus
+                  />
+                  <button
+                    onClick={handleInlineSave}
+                    className="p-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30"
+                  >
+                    <Save className="h-3 w-3 text-emerald-300" />
+                  </button>
+                  <button
+                    onClick={handleInlineCancel}
+                    className="p-1 rounded bg-slate-800 hover:bg-slate-700"
+                  >
+                    <X className="h-3 w-3 text-slate-300" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <div
+                    className="flex items-center gap-2 cursor-pointer group"
+                    onClick={() =>
+                      handleInlineEdit("miles", load.miles || "")
+                    }
+                  >
+                    <div className="text-slate-50">{load.miles || "—"}</div>
+                    <Edit className="h-3 w-3 text-slate-500 group-hover:text-emerald-400" />
+                  </div>
+                  <button
+                    onClick={handleCalculateMiles}
+                    disabled={calculatingMiles}
+                    className="inline-flex items-center gap-1 rounded-full border border-emerald-500/50 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title="Auto-calculate miles from stops using Google Maps"
+                  >
+                    {calculatingMiles ? (
+                      <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                    ) : (
+                      <Calculator className="h-2.5 w-2.5" />
+                    )}
+                    Auto
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl bg-slate-950/60 border border-slate-700/60 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-slate-400 mb-1">
+                Rate
+              </div>
+              {inlineEditing === "rate" ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    value={inlineValue}
+                    onChange={(e) => setInlineValue(e.target.value)}
+                    className="w-24 rounded bg-slate-900 border border-slate-700 px-2 py-0.5 text-xs text-slate-100"
+                    autoFocus
+                  />
+                  <button
+                    onClick={handleInlineSave}
+                    className="p-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30"
+                  >
+                    <Save className="h-3 w-3 text-emerald-300" />
+                  </button>
+                  <button
+                    onClick={handleInlineCancel}
+                    className="p-1 rounded bg-slate-800 hover:bg-slate-700"
+                  >
+                    <X className="h-3 w-3 text-slate-300" />
+                  </button>
+                </div>
+              ) : (
+                <div
+                  className="flex items-center gap-2 cursor-pointer group"
+                  onClick={() =>
+                    handleInlineEdit("rate", load.rate || "")
+                  }
+                >
+                  <div className="text-slate-50">
+                    {load.rate != null
+                      ? load.rate.toLocaleString("en-US", {
+                          style: "currency",
+                          currency: "USD",
+                        })
+                      : "—"}
+                  </div>
+                  <Edit className="h-3 w-3 text-slate-500 group-hover:text-emerald-400" />
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl bg-slate-950/60 border border-slate-700/60 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-slate-400 mb-1">
+                Reference
+              </div>
+              {inlineEditing === "reference" ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={inlineValue}
+                    onChange={(e) => setInlineValue(e.target.value)}
+                    className="w-24 rounded bg-slate-900 border border-slate-700 px-2 py-0.5 text-xs text-slate-100"
+                    autoFocus
+                  />
+                  <button
+                    onClick={handleInlineSave}
+                    className="p-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30"
+                  >
+                    <Save className="h-3 w-3 text-emerald-300" />
+                  </button>
+                  <button
+                    onClick={handleInlineCancel}
+                    className="p-1 rounded bg-slate-800 hover:bg-slate-700"
+                  >
+                    <X className="h-3 w-3 text-slate-300" />
+                  </button>
+                </div>
+              ) : (
+                <div
+                  className="flex items-center gap-2 cursor-pointer group"
+                  onClick={() =>
+                    handleInlineEdit("reference", load.reference || "")
+                  }
+                >
+                  <div className="text-slate-50 truncate">
+                    {load.reference || "—"}
+                  </div>
+                  <Edit className="h-3 w-3 text-slate-500 group-hover:text-emerald-400" />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Profitability Metrics with Real Diesel Prices */}
+          <div className="pt-3 border-t border-slate-700/60">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp className="h-4 w-4 text-emerald-300" />
+              <h3 className="text-sm font-semibold text-slate-50">
+                Profitability
+              </h3>
+              <span className="text-[10px] text-emerald-300/60">
+                (Live diesel: ${fuelCalculation.pricePerGallon}/gal)
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-sm">
+              <div className="rounded-lg bg-slate-950/40 border border-slate-700/60 p-2">
+                <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                  Revenue
+                </div>
+                <div className="text-slate-50 font-medium">
+                  {load.rate != null
+                    ? load.rate.toLocaleString("en-US", {
+                        style: "currency",
+                        currency: "USD",
+                      })
+                    : "—"}
+                </div>
+              </div>
+              <div className="rounded-lg bg-slate-950/40 border border-slate-700/60 p-2">
+                <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                  Rate/Mile
+                </div>
+                <div className="text-slate-50 font-medium">
+                  {ratePerMile ? `$${ratePerMile}` : "—"}
+                </div>
+              </div>
+              <div className="rounded-lg bg-slate-950/40 border border-slate-700/60 p-2">
+                <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                  Est. Profit
+                </div>
+                <div
+                  className={cx(
+                    "font-medium",
+                    profit > 0 ? "text-emerald-300" : "text-rose-300"
+                  )}
+                >
+                  {profit.toLocaleString("en-US", {
+                    style: "currency",
+                    currency: "USD",
+                  })}
+                </div>
+              </div>
+              <div className="rounded-lg bg-slate-950/40 border border-slate-700/60 p-2">
+                <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                  Margin
+                </div>
+                <div
+                  className={cx(
+                    "font-medium",
+                    profitMargin > 15
+                      ? "text-emerald-300"
+                      : profitMargin > 5
+                      ? "text-amber-300"
+                      : "text-rose-300"
+                  )}
+                >
+                  {profitMargin}%
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Right column: Driver + Best-Fit + docs */}
+        <div className="space-y-4">
+          {/* Assigned Driver Info */}
+          {assignedDriver && (
+            <section className="bg-slate-900/70 border border-blue-500/30 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <User className="h-4 w-4 text-blue-300" />
+                <h2 className="text-sm font-semibold text-slate-50">
+                  Assigned Driver
+                </h2>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Truck className="h-3 w-3 text-slate-400" />
+                  <span className="text-xs text-slate-100">
+                    {assignedDriver.first_name} {assignedDriver.last_name}
+                  </span>
+                </div>
+                {assignedDriver.phone && (
+                  <div className="flex items-center gap-2">
+                    <Phone className="h-3 w-3 text-slate-400" />
+                    <span className="text-xs text-slate-100">
+                      {assignedDriver.phone}
+                    </span>
+                  </div>
+                )}
+                {assignedDriver.email && (
+                  <div className="flex items-center gap-2">
+                    <Mail className="h-3 w-3 text-slate-400" />
+                    <span className="text-xs text-slate-100 truncate">
+                      {assignedDriver.email}
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <DollarSign className="h-3 w-3 text-slate-400" />
+                  <span className="text-xs text-slate-100">
+                    Rate: {assignedDriver.rate?.toLocaleString("en-US", {
+                      style: "currency",
+                      currency: "USD",
+                    }) || "—"}
+                  </span>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* TEMP static Best-Fit Drivers card */}
+          <section className="bg-slate-900/70 border border-pink-500/30 rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-fuchsia-400 shadow shadow-fuchsia-500/60" />
+                <h2 className="text-sm font-semibold text-slate-50">
+                  Best-Fit Drivers
+                </h2>
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                <span>AI lane matching is being tuned</span>
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-300 leading-relaxed">
+              Best-fit driver suggestions are temporarily paused on
+              this page while we stabilize the AI engine. You can
+              still assign drivers from the Loads and Drivers pages,
+              and your feedback there will continue training Atlas
+              AI in the background.
+            </div>
+          </section>
+
+          {/* Load documents */}
+          <section className="bg-slate-900/70 border border-emerald-500/30 rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <FileText className="h-4 w-4 text-emerald-300" />
+                <h2 className="text-sm font-semibold text-slate-50">
+                  Load Documents
+                </h2>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1 rounded-full border border-emerald-500/50 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] text-emerald-100 hover:bg-emerald-500/20"
+                  disabled={uploading}
+                >
+                  {uploading ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Upload className="h-3 w-3" />
+                  )}
+                  Upload
+                </button>
+                <button
+                  onClick={() => refreshDocuments()}
+                  className="inline-flex items-center gap-1 rounded-full border border-slate-600 px-2.5 py-0.5 text-[11px] text-slate-100 hover:bg-slate-800"
+                  disabled={loadingDocs}
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  Refresh
+                </button>
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                onChange={handleUpload}
+              />
+            </div>
+
+            {loadingDocs && (
+              <div className="flex items-center gap-2 text-xs text-slate-300">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Loading documents…
+              </div>
+            )}
+
+            {!loadingDocs && docs.length === 0 && (
+              <div className="border-2 border-dashed border-slate-700/60 rounded-xl p-6 text-center">
+                <Upload className="h-8 w-8 mx-auto mb-2 text-slate-500" />
+                <div className="text-xs text-slate-400 mb-2">
+                  No documents yet
+                </div>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-xs text-emerald-300 hover:text-emerald-200"
+                >
+                  Upload your first document
+                </button>
+              </div>
+            )}
+
+            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+              {docs.map((doc) => (
+                <div
+                  key={doc.path}
+                  className="flex items-center justify-between gap-2 rounded-lg bg-slate-950/60 border border-slate-700/70 px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-xs text-slate-50 truncate">
+                      {doc.name}
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      Updated {formatDateTime(doc.updated_at)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => handleOpenDoc(doc)}
+                      className="inline-flex items-center justify-center rounded-full border border-slate-600 bg-slate-900/80 p-1.5 hover:bg-slate-800"
+                    >
+                      <Eye className="h-3 w-3 text-slate-100" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteDoc(doc)}
+                      className="inline-flex items-center justify-center rounded-full border border-rose-600/70 bg-rose-950/80 p-1.5 hover:bg-rose-900"
+                    >
+                      <Trash2 className="h-3 w-3 text-rose-200" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      </div>
+
+      {/* Route & Stops with status tracking */}
+      <section className="bg-slate-900/70 border border-emerald-500/30 rounded-2xl p-5 space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-base font-semibold text-slate-50">
+            Route &amp; Stops
+          </h2>
+          <div className="text-xs text-slate-400">
+            {displayStops.length} stop
+            {displayStops.length === 1 ? "" : "s"}
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {displayStops.map((stop) => (
+            <div
+              key={stop.id}
+              className="rounded-xl bg-slate-950/60 border border-slate-700/70 p-3 space-y-2"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                    Stop {stop.sequence} · {stop.stop_type || "STOP"}
+                  </div>
+                  <div className="text-sm font-medium text-slate-50">
+                    {stop.location_name || buildStopAddress(stop) || "—"}
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    {buildStopAddress(stop)}
+                  </div>
+                </div>
+                <div className="text-right text-xs text-slate-400">
+                  <div>
+                    Start: {formatDateTime(stop.scheduled_start)}
+                  </div>
+                  <div>End: {formatDateTime(stop.scheduled_end)}</div>
+                </div>
+              </div>
+
+              {/* Stop status */}
+              <div className="flex items-center gap-2">
+                <MapPin className="h-3 w-3 text-slate-400" />
+                {editingStopStatus === stop.id ? (
+                  <div className="flex items-center gap-1">
+                    <select
+                      className="rounded bg-slate-900 border border-slate-700 px-2 py-0.5 text-xs text-slate-100"
+                      defaultValue={stop.status || "PENDING"}
+                      onChange={(e) =>
+                        handleUpdateStopStatus(stop.id, e.target.value)
+                      }
+                      autoFocus
+                    >
+                      {STOP_STATUSES.map((s) => (
+                        <option key={s} value={s}>
+                          {s.replace("_", " ")}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => setEditingStopStatus(null)}
+                      className="p-1 rounded bg-slate-800 hover:bg-slate-700"
+                    >
+                      <X className="h-3 w-3 text-slate-300" />
+                    </button>
+                  </div>
+                ) : (
+                  <div
+                    className="flex items-center gap-2 cursor-pointer group"
+                    onClick={() => setEditingStopStatus(stop.id)}
+                  >
+                    <span
+                      className={cx(
+                        "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium",
+                        stop.status === "COMPLETED"
+                          ? "bg-emerald-500/20 text-emerald-200 border border-emerald-500/40"
+                          : stop.status === "ARRIVED"
+                          ? "bg-blue-500/20 text-blue-200 border border-blue-500/40"
+                          : stop.status === "EN_ROUTE"
+                          ? "bg-amber-500/20 text-amber-200 border border-amber-500/40"
+                          : "bg-slate-700/60 text-slate-300 border border-slate-600"
+                      )}
+                    >
+                      {(stop.status || "PENDING").replace("_", " ")}
+                    </span>
+                    <Edit className="h-3 w-3 text-slate-500 group-hover:text-emerald-400" />
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {displayStops.length === 0 && (
+            <div className="text-sm text-slate-300">
+              No stops yet. Add pickups and deliveries for this load.
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Route Map (collapsible) */}
+      <section className="bg-slate-900/70 border border-emerald-500/30 rounded-2xl p-5 space-y-4">
+        <button
+          type="button"
+          onClick={() => setShowRouteMap((v) => !v)}
+          className="w-full flex items-center justify-between gap-2 mb-1 text-left"
+        >
+          <div className="flex items-center gap-2">
+            <MapIcon className="h-4 w-4 text-emerald-300" />
+            <h2 className="text-base font-semibold text-slate-50">
+              Route Map
+            </h2>
+          </div>
+          <div className="flex items-center gap-2 text-[11px] text-slate-400">
+            <span>
+              {showRouteMap ? "Collapse" : "Expand"} · Multi-stop · Dark
+              mode
+            </span>
+            <ChevronDown
+              className={cx(
+                "h-4 w-4 transition-transform",
+                showRouteMap ? "rotate-0" : "-rotate-90"
+              )}
+            />
+          </div>
+        </button>
+
+        {showRouteMap && <RouteMap stops={displayStops} />}
+      </section>
+
+      {/* AI Recommendations (collapsible) */}
+      <section className="bg-slate-900/70 border border-pink-500/30 rounded-2xl p-5">
+        <button
+          type="button"
+          onClick={() => setShowAiSection((v) => !v)}
+          className="w-full flex items-center justify-between gap-2 mb-4 text-left"
+        >
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-fuchsia-400 shadow shadow-fuchsia-500/60" />
+            <h2 className="text-base font-semibold text-slate-50">
+              AI Recommendations
+            </h2>
+          </div>
+          <div className="flex items-center gap-2 text-[11px] text-slate-400">
+            <span>{showAiSection ? "Collapse" : "Expand"}</span>
+            <ChevronDown
+              className={cx(
+                "h-4 w-4 transition-transform",
+                showAiSection ? "rotate-0" : "-rotate-90"
+              )}
+            />
+          </div>
+        </button>
+
+        {showAiSection && <AiRecommendationsForLoad loadId={load.id} />}
+      </section>
+
+      {/* Activity Log (collapsible) */}
+      <section className="bg-slate-900/70 border border-purple-500/30 rounded-2xl p-5">
+        <button
+          type="button"
+          onClick={() => setShowActivityLog((v) => !v)}
+          className="w-full flex items-center justify-between gap-2 mb-4 text-left"
+        >
+          <div className="flex items-center gap-2">
+            <History className="h-4 w-4 text-purple-300" />
+            <h2 className="text-base font-semibold text-slate-50">
+              Activity Log
+            </h2>
+          </div>
+          <div className="flex items-center gap-2 text-[11px] text-slate-400">
+            <span>{showActivityLog ? "Collapse" : "Expand"}</span>
+            <ChevronDown
+              className={cx(
+                "h-4 w-4 transition-transform",
+                showActivityLog ? "rotate-0" : "-rotate-90"
+              )}
+            />
+          </div>
+        </button>
+
+        {showActivityLog && (
+          <div className="space-y-2">
+            {loadingActivity && (
+              <div className="flex items-center gap-2 text-xs text-slate-300">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Loading activity…
+              </div>
+            )}
+            {!loadingActivity && activityLog.length === 0 && (
+              <div className="text-xs text-slate-400">
+                No activity recorded yet.
+              </div>
+            )}
+            {activityLog.map((entry) => (
+              <div
+                key={entry.id}
+                className="flex items-start gap-3 text-xs rounded-lg bg-slate-950/40 border border-slate-700/60 p-2"
+              >
+                <div className="flex-shrink-0 mt-0.5">
+                  <div className="h-2 w-2 rounded-full bg-purple-400" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-slate-100">{entry.action}</div>
+                  {entry.details && (
+                    <div className="text-slate-400 text-[10px] mt-0.5">
+                      {entry.details}
+                    </div>
+                  )}
+                  <div className="text-slate-500 text-[10px] mt-0.5">
+                    {formatDateTime(entry.timestamp || entry.created_at)}{" "}
+                    · {entry.user || "System"}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Related Loads (collapsible) */}
+      {relatedLoads.length > 0 && (
+        <section className="bg-slate-900/70 border border-amber-500/30 rounded-2xl p-5">
+          <button
+            type="button"
+            onClick={() => setShowRelatedLoads((v) => !v)}
+            className="w-full flex items-center justify-between gap-2 mb-4 text-left"
+          >
+            <div className="flex items-center gap-2">
+              <Package className="h-4 w-4 text-amber-300" />
+              <h2 className="text-base font-semibold text-slate-50">
+                Related Loads
+              </h2>
+              <span className="text-xs text-slate-400">
+                ({relatedLoads.length})
+              </span>
+            </div>
+            <div className="flex items-center gap-2 text-[11px] text-slate-400">
+              <span>{showRelatedLoads ? "Collapse" : "Expand"}</span>
+              <ChevronDown
+                className={cx(
+                  "h-4 w-4 transition-transform",
+                  showRelatedLoads ? "rotate-0" : "-rotate-90"
+                )}
+              />
+            </div>
+          </button>
+
+          {showRelatedLoads && (
+            <div className="space-y-2">
+              {relatedLoads.map((rel) => (
+                <button
+                  key={rel.id}
+                  onClick={() => navigate(`/loads/${rel.id}`)}
+                  className="w-full flex items-center justify-between gap-2 text-left rounded-lg bg-slate-950/40 border border-slate-700/60 p-3 hover:bg-slate-950/60 hover:border-amber-500/40 transition-colors"
+                >
+                  <div>
+                    <div className="text-sm font-medium text-slate-100">
+                      {rel.load_number || rel.id.slice(0, 6)}
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      PU: {formatDateTime(rel.pickup_at)} · DEL:{" "}
+                      {formatDateTime(rel.delivery_at)}
+                    </div>
+                  </div>
+                  <span
+                    className={cx(
+                      "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium",
+                      rel.status === "DELIVERED"
+                        ? "bg-emerald-500/20 text-emerald-200 border border-emerald-500/40"
+                        : rel.status === "IN_TRANSIT"
+                        ? "bg-blue-500/20 text-blue-200 border border-blue-500/40"
+                        : "bg-slate-700/60 text-slate-300 border border-slate-600"
+                    )}
+                  >
+                    {rel.status}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Edit Load Modal */}
+      {showEditModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-2xl rounded-2xl bg-slate-950 border border-slate-700 p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Edit className="h-5 w-5 text-blue-300" />
+                <h2 className="text-lg font-semibold text-slate-50">
+                  Edit Load
+                </h2>
+              </div>
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="rounded-full bg-slate-900/80 border border-slate-700 p-2 hover:bg-slate-800"
+              >
+                <X className="h-4 w-4 text-slate-200" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+                  Load Number
+                </label>
+                <input
+                  type="text"
+                  className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
+                  value={editForm.load_number}
+                  onChange={(e) =>
+                    setEditForm({ ...editForm, load_number: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+                  Status
+                </label>
+                <select
+                  className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
+                  value={editForm.status}
+                  onChange={(e) =>
+                    setEditForm({ ...editForm, status: e.target.value })
+                  }
+                >
+                  {LOAD_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {s.replace("_", " ")}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+                  Equipment Type
+                </label>
+                <input
+                  type="text"
+                  className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
+                  value={editForm.equipment_type}
+                  onChange={(e) =>
+                    setEditForm({
+                      ...editForm,
+                      equipment_type: e.target.value,
+                    })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+                  Miles
+                </label>
+                <input
+                  type="number"
+                  className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
+                  value={editForm.miles}
+                  onChange={(e) =>
+                    setEditForm({ ...editForm, miles: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+                  Rate
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
+                  value={editForm.rate}
+                  onChange={(e) =>
+                    setEditForm({ ...editForm, rate: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+                  Reference
+                </label>
+                <input
+                  type="text"
+                  className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
+                  value={editForm.reference}
+                  onChange={(e) =>
+                    setEditForm({ ...editForm, reference: e.target.value })
+                  }
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+                  Commodity
+                </label>
+                <input
+                  type="text"
+                  className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
+                  value={editForm.commodity}
+                  onChange={(e) =>
+                    setEditForm({ ...editForm, commodity: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+                  Pickup Date/Time
+                </label>
+                <input
+                  type="datetime-local"
+                  className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
+                  value={
+                    editForm.pickup_at
+                      ? new Date(editForm.pickup_at)
+                          .toISOString()
+                          .slice(0, 16)
+                      : ""
+                  }
+                  onChange={(e) =>
+                    setEditForm({ ...editForm, pickup_at: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+                  Delivery Date/Time
+                </label>
+                <input
+                  type="datetime-local"
+                  className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
+                  value={
+                    editForm.delivery_at
+                      ? new Date(editForm.delivery_at)
+                          .toISOString()
+                          .slice(0, 16)
+                      : ""
+                  }
+                  onChange={(e) =>
+                    setEditForm({ ...editForm, delivery_at: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-4">
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900/80 px-4 py-2 text-sm text-slate-100 hover:bg-slate-800"
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveEdit}
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-full border border-blue-500/70 bg-blue-500/20 px-4 py-2 text-sm font-medium text-blue-100 hover:bg-blue-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
+                type="button"
+              >
+                {saving ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Send Instructions modal */}
+      {showInstructions && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-slate-950 border border-slate-700 p-5 space-y-4 shadow-xl shadow-black/40 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Send className="h-4 w-4 text-emerald-300" />
+                <h2 className="text-sm font-semibold text-slate-50">
+                  Send Load Instructions
+                </h2>
+              </div>
+              <button
+                onClick={() => setShowInstructions(false)}
+                className="rounded-full bg-slate-900/80 border border-slate-700 p-1.5 hover:bg-slate-800"
+              >
+                <X className="h-3 w-3 text-slate-200" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300">
+              Generate a clean set of instructions for this load and
+              share them with your driver. Choose{" "}
+              <span className="font-semibold text-emerald-200">
+                Company
+              </span>{" "}
+              to hide the rate, or{" "}
+              <span className="font-semibold text-emerald-200">
+                Owner-Operator
+              </span>{" "}
+              to include it.
+            </p>
+
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[11px] text-slate-400">
+                Driver view
+              </div>
+              <div className="inline-flex rounded-full bg-slate-900 border border-slate-700 p-1">
+                <button
+                  type="button"
+                  onClick={() => handleDriverViewChange("company")}
+                  className={cx(
+                    "px-3 py-1 text-[11px] rounded-full transition-colors",
+                    driverView === "company"
+                      ? "bg-emerald-500/20 text-emerald-100"
+                      : "text-slate-300"
+                  )}
+                >
+                  Company
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDriverViewChange("oo")}
+                  className={cx(
+                    "px-3 py-1 text-[11px] rounded-full transition-colors",
+                    driverView === "oo"
+                      ? "bg-emerald-500/20 text-emerald-100"
+                      : "text-slate-300"
+                  )}
+                >
+                  Owner-Operator
+                </button>
+              </div>
+            </div>
+
+            <textarea
+              className="w-full rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-100 p-3 resize-none h-40"
+              value={instructionsText}
+              onChange={(e) => setInstructionsText(e.target.value)}
+            />
+
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <label className="block text-[11px] uppercase tracking-wide text-slate-400">
+                  Recipient Email
+                </label>
+                <input
+                  type="email"
+                  placeholder="driver@example.com"
+                  className="w-full rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-100 px-3 py-2 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  value={emailTo}
+                  onChange={(e) => setEmailTo(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-[11px] uppercase tracking-wide text-slate-400">
+                  SMS Number
+                </label>
+                <input
+                  type="tel"
+                  placeholder="+1 555 123 4567"
+                  className="w-full rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-100 px-3 py-2 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  value={smsTo}
+                  onChange={(e) => setSmsTo(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={handleCopyInstructions}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-600 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-100 hover:bg-slate-800"
+              >
+                <Copy className="h-3 w-3" />
+                Copy to Clipboard
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowInstructions(false)}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-100 hover:bg-slate-800"
+                  type="button"
+                >
+                  Close
+                </button>
+                <button
+                  onClick={handleSendEmail}
+                  disabled={emailSending}
+                  className="inline-flex items-center gap-2 rounded-full border border-emerald-500/70 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-60 disabled:cursor-not-allowed"
+                  type="button"
+                >
+                  {emailSending ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Send className="h-3 w-3" />
+                  )}
+                  Send via Email
+                </button>
+                <button
+                  onClick={handleSendSms}
+                  disabled={smsSending}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-600 bg-slate-900/80 px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
+                  type="button"
+                >
+                  {smsSending ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Send className="h-3 w-3" />
+                  )}
+                  Send via SMS (soon)
+                </button>
+              </div>
+            </div>
+
+            {instructionStatus && (
+              <div className="text-[11px] text-slate-300 pt-1">
+                {instructionStatus}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

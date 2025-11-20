@@ -2,7 +2,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import AiLearningCard from "../components/AiLearningCard.jsx";
 import AiAccuracyTrend from "../components/AiAccuracyTrend.jsx";
 import {
   LayoutDashboard,
@@ -22,19 +21,79 @@ import {
 } from "lucide-react";
 
 /**
- * Atlas Command — Dashboard (Enterprise v1)
- * - Theme-matched styling
- * - Real-time data updates
- * - Interactive stat cards
- * - KPI metrics with trends
- * - Alerts & warnings
+ * Atlas Command — Dashboard (Enterprise v2, compact middle row)
+ * - Theme-matched styling (dark Atlas shell)
+ * - Real-time data (loads + drivers)
+ * - Top metric row with "sparkline" visuals
+ * - On-time performance, alerts, and trendlines
+ * - Middle cards are visually shorter / less tall
  */
 
 function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
 
-function StatCard({ icon: Icon, label, value, hint, tone = "zinc", loading = false, onClick, trend }) {
+/* -------------------- Shared helper components -------------------- */
+
+function Sparkline() {
+  // Simple visual "trend" bar (decorative; numeric values are real).
+  return (
+    <div className="mt-3 h-10 w-full rounded-xl bg-gradient-to-r from-emerald-500/20 via-sky-500/10 to-emerald-500/30 border border-[var(--border-subtle)]" />
+  );
+}
+
+function MetricChartCard({
+  label,
+  value,
+  subtitle,
+  tone = "default",
+  loading = false,
+}) {
+  const toneMap = {
+    default: "border-[var(--border)] bg-[var(--bg-panel)]",
+    green: "border-emerald-500/20 bg-emerald-500/5",
+    blue: "border-sky-500/20 bg-sky-500/5",
+    purple: "border-violet-500/20 bg-violet-500/5",
+    amber: "border-amber-500/20 bg-amber-500/5",
+  };
+
+  return (
+    <div
+      className={cx(
+        "rounded-2xl p-4 backdrop-blur-md shadow-sm flex flex-col justify-between min-h-[120px]",
+        toneMap[tone] || toneMap.default
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col">
+          <span className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
+            {label}
+          </span>
+          <span className="mt-1 text-2xl md:text-3xl font-semibold tabular-nums text-[var(--text-base)]">
+            {loading ? "—" : value}
+          </span>
+        </div>
+        {subtitle && (
+          <span className="text-xs text-[var(--text-muted)] text-right">
+            {subtitle}
+          </span>
+        )}
+      </div>
+      <Sparkline />
+    </div>
+  );
+}
+
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  hint,
+  tone = "zinc",
+  loading = false,
+  onClick,
+  trend,
+}) {
   const toneMap = {
     zinc: "border-[var(--border)] bg-[var(--bg-panel)]",
     blue: "border-blue-500/20 bg-blue-500/10",
@@ -63,7 +122,8 @@ function StatCard({ icon: Icon, label, value, hint, tone = "zinc", loading = fal
       className={cx(
         "rounded-2xl border p-4 backdrop-blur-md shadow-sm transition-all",
         toneMap[tone] || toneMap.zinc,
-        onClick && "cursor-pointer hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] text-left w-full"
+        onClick &&
+          "cursor-pointer hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] text-left w-full"
       )}
     >
       <div className="flex items-start justify-between">
@@ -75,9 +135,6 @@ function StatCard({ icon: Icon, label, value, hint, tone = "zinc", loading = fal
             {label}
           </div>
         </div>
-        {loading ? (
-          <RefreshCcw className="h-4 w-4 animate-spin text-[var(--text-muted)]" />
-        ) : null}
       </div>
 
       <div className="mt-3 flex items-end justify-between">
@@ -85,9 +142,17 @@ function StatCard({ icon: Icon, label, value, hint, tone = "zinc", loading = fal
           {loading ? "—" : value}
         </div>
         {trend && !loading && (
-          <div className={cx("flex items-center gap-1 text-sm font-medium", getTrendColor())}>
+          <div
+            className={cx(
+              "flex items-center gap-1 text-sm font-medium",
+              getTrendColor()
+            )}
+          >
             <TrendIcon className="h-4 w-4" />
-            <span>{Math.abs(trend.change)}{trend.isPercentage ? "%" : ""}</span>
+            <span>
+              {Math.abs(trend.change)}
+              {trend.isPercentage ? "%" : ""}
+            </span>
           </div>
         )}
       </div>
@@ -95,23 +160,6 @@ function StatCard({ icon: Icon, label, value, hint, tone = "zinc", loading = fal
         <div className="mt-1 text-xs text-[var(--text-muted)]">{hint}</div>
       ) : null}
     </Component>
-  );
-}
-
-function KPICard({ icon: Icon, label, value, subtitle, loading = false }) {
-  return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-panel)] p-4 backdrop-blur-md">
-      <div className="flex items-center gap-2 mb-2">
-        <Icon className="h-4 w-4 text-[var(--text-muted)]" />
-        <span className="text-xs font-medium text-[var(--text-muted)]">{label}</span>
-      </div>
-      <div className="text-2xl font-semibold text-[var(--text-base)]">
-        {loading ? "—" : value}
-      </div>
-      {subtitle && (
-        <div className="text-xs text-[var(--text-muted)] mt-1">{subtitle}</div>
-      )}
-    </div>
   );
 }
 
@@ -150,6 +198,96 @@ function AlertItem({ icon: Icon, title, message, severity = "warning", onClick }
   );
 }
 
+/* --------- COMPACT: shorter on-time / alerts / trendlines cards ---------- */
+
+function OnTimePerformanceCard({ rate, deliveredCount, loading }) {
+  const displayRate = rate === null ? "—" : `${rate}%`;
+  const subtitle =
+    rate === null
+      ? "No delivered loads yet"
+      : `Based on ${deliveredCount} delivered load${
+          deliveredCount === 1 ? "" : "s"
+        }`;
+
+  return (
+    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-panel)] p-4 flex flex-col gap-3 max-h-[260px]">
+      <div>
+        <h2 className="text-sm font-semibold text-[var(--text-base)]">
+          Delivery performance across all completed loads.
+        </h2>
+        <p className="text-xs text-[var(--text-muted)] mt-1">
+          On-time delivery rate
+        </p>
+      </div>
+      <div className="flex items-center gap-3">
+        <div className="relative h-16 w-16">
+          <div className="absolute inset-0 rounded-full border-4 border-[var(--border-subtle)]" />
+          <div className="absolute inset-1 rounded-full border-4 border-emerald-500/60 shadow-[0_0_16px_rgba(16,185,129,0.4)]" />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-lg font-semibold text-[var(--text-base)]">
+              {loading ? "—" : displayRate}
+            </span>
+          </div>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-xs text-[var(--text-muted)]">
+            {subtitle}
+          </span>
+          {rate !== null && (
+            <span className="mt-2 inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs font-medium text-emerald-300">
+              <TrendingUp className="mr-1 h-3 w-3" />
+              Target: 90%+
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AlertsPanel({ alerts }) {
+  return (
+    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-panel)] p-4 flex flex-col gap-3 max-h-[260px]">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-[var(--text-base)]">On-Time Delivery Below Target</h2>
+        <span className="text-xs text-[var(--text-muted)]">
+          {alerts.length === 0 ? "All clear" : `${alerts.length} active`}
+        </span>
+      </div>
+      <div className="flex-1 overflow-y-auto space-y-2">
+        {alerts.length === 0 ? (
+          <div className="mt-1 text-xs text-[var(--text-muted)]">
+            No active alerts. Keep an eye on loads, drivers, and documents here.
+          </div>
+        ) : (
+          alerts.map((alert) => <AlertItem key={alert.id} {...alert} />)
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TrendlinesPanel() {
+  return (
+    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-panel)] p-4 flex flex-col gap-3 max-h-[260px]">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-[var(--text-base)]">
+          AI Accuracy Trend
+        </h2>
+        <span className="text-xs text-[var(--text-muted)]">
+          Last 8 weeks
+        </span>
+      </div>
+      <div className="mt-1 h-40 overflow-hidden">
+        {/* AiAccuracyTrend will respect its own internals; parent height keeps card compact */}
+        <AiAccuracyTrend weeks={8} />
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------- Main page ----------------------------- */
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
@@ -161,9 +299,10 @@ export default function Dashboard() {
     problem: 0,
   });
   const [kpis, setKpis] = useState({
-    onTimeRate: 0,
+    onTimeRate: null, // null = no data yet
     revenue: 0,
     activeDrivers: 0,
+    deliveredCount: 0,
   });
   const [alerts, setAlerts] = useState([]);
   const [error, setError] = useState(null);
@@ -235,19 +374,20 @@ export default function Dashboard() {
     setKpiLoading(true);
 
     try {
-      // Fetch delivered loads to calculate on-time rate
+      // Delivered loads (case-insensitive status)
       const { data: deliveredLoads, error: deliveredError } = await supabase
         .from("loads")
         .select("*")
-        .eq("status", "delivered");
+        .ilike("status", "delivered");
 
-      console.log("[Dashboard] Delivered loads:", deliveredLoads);
-      console.log("[Dashboard] Delivered error:", deliveredError);
-      console.log("[Dashboard] Sample load:", deliveredLoads?.[0]);
+      if (deliveredError) {
+        console.error("[Dashboard] Delivered error:", deliveredError);
+      }
 
-      // Calculate on-time delivery rate
+      const deliveredCount = deliveredLoads?.length || 0;
+
+      // On-time delivery rate
       let onTimeCount = 0;
-      const total = deliveredLoads?.length || 0;
 
       for (const load of deliveredLoads || []) {
         if (load.expected_delivery && load.delivered_at) {
@@ -257,18 +397,24 @@ export default function Dashboard() {
         }
       }
 
-      const onTimeRate = total > 0 ? Math.round((onTimeCount / total) * 100) : 0;
+      const onTimeRate =
+        deliveredCount > 0 ? Math.round((onTimeCount / deliveredCount) * 100) : null;
 
-      // Get active drivers count
-      const { count: driverCount } = await supabase
+      // Active drivers (case-insensitive status)
+      const { count: driverCount, error: driverErr } = await supabase
         .from("drivers")
         .select("*", { count: "exact", head: true })
-        .eq("status", "active");
+        .ilike("status", "active");
 
-      // Calculate revenue (fallback across possible fields)
+      if (driverErr) {
+        console.error("[Dashboard] Active drivers error:", driverErr);
+      }
+
+      // Revenue from delivered loads
       let revenue = 0;
       for (const load of deliveredLoads || []) {
-        const amount = load.rate || load.price || load.revenue || load.amount || 0;
+        const amount =
+          load.rate || load.price || load.revenue || load.amount || 0;
         revenue += parseFloat(amount) || 0;
       }
 
@@ -276,28 +422,31 @@ export default function Dashboard() {
         onTimeRate,
         revenue,
         activeDrivers: driverCount || 0,
+        deliveredCount,
       });
 
-      // Generate alerts based on data
+      // Alerts based on data
       const generatedAlerts = [];
 
       if (counts.problem > 0) {
         generatedAlerts.push({
           id: "problem-loads",
           icon: AlertCircle,
-          title: `${counts.problem} Load${counts.problem > 1 ? "s" : ""} Need Attention`,
-          message: "Issues, holds, or exceptions require immediate action",
+          title: `${counts.problem} Load${
+            counts.problem > 1 ? "s" : ""
+          } Need Attention`,
+          message: "Issues, holds, or exceptions require immediate action.",
           severity: "error",
           onClick: () => navigate("/loads"),
         });
       }
 
-      if (onTimeRate < 90 && total > 0) {
+      if (onTimeRate !== null && onTimeRate < 90 && deliveredCount > 0) {
         generatedAlerts.push({
           id: "low-ontime",
           icon: Clock,
           title: "On-Time Delivery Below Target",
-          message: `Current rate: ${onTimeRate}% (Target: 90%+)`,
+          message: `Current rate: ${onTimeRate}% (Target: 90%+).`,
           severity: "warning",
         });
       }
@@ -374,7 +523,8 @@ export default function Dashboard() {
               Dashboard
             </h1>
             <p className="text-sm text-[var(--text-muted)]">
-              High-level view of current operations. Click any card to drill down.
+              High-level view of current operations. Click any tile to drill
+              down.
             </p>
           </div>
         </div>
@@ -393,50 +543,64 @@ export default function Dashboard() {
       {/* Error banner */}
       {error ? (
         <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3">
-          <div className="text-sm font-medium text-[var(--text-base)]">Some metrics may be unavailable.</div>
-          <div className="text-xs text-[var(--text-muted)] mt-0.5">{String(error)}</div>
+          <div className="text-sm font-medium text-[var(--text-base)]">
+            Some metrics may be unavailable.
+          </div>
+          <div className="text-xs text-[var(--text-muted)] mt-0.5">
+            {String(error)}
+          </div>
         </div>
       ) : null}
 
-      {/* Alerts */}
-      {alerts.length > 0 && (
-        <div className="space-y-2">
-          {alerts.map((alert) => (
-            <AlertItem key={alert.id} {...alert} />
-          ))}
-        </div>
-      )}
-
-      {/* KPIs Row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <KPICard
-          icon={TrendingUp}
-          label="On-Time Delivery Rate"
-          value={`${kpis.onTimeRate}%`}
-          subtitle={kpis.onTimeRate >= 90 ? "Target met ✓" : "Below target (90%)"}
-          loading={kpiLoading}
-        />
-        <KPICard
-          icon={DollarSign}
-          label="Total Revenue (Delivered)"
+      {/* Top metric row */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <MetricChartCard
+          label="Revenue (Delivered)"
           value={`$${kpis.revenue.toLocaleString()}`}
-          subtitle="From completed loads"
+          subtitle={
+            kpis.revenue > 0 ? "From completed loads" : "No delivered revenue yet"
+          }
+          tone="green"
           loading={kpiLoading}
         />
-        <KPICard
-          icon={Users}
+        <MetricChartCard
+          label="On-Time Delivery"
+          value={kpis.onTimeRate === null ? "—" : `${kpis.onTimeRate}%`}
+          subtitle={
+            kpis.onTimeRate === null ? "No delivered loads yet" : "Target 90%+"
+          }
+          tone="blue"
+          loading={kpiLoading}
+        />
+        <MetricChartCard
+          label="In-Transit Loads"
+          value={loading ? "—" : counts.in_transit}
+          subtitle="Currently on the road"
+          tone="purple"
+          loading={loading}
+        />
+        <MetricChartCard
           label="Active Drivers"
           value={kpis.activeDrivers}
-          subtitle="Currently available"
+          subtitle="Available in fleet"
+          tone="amber"
           loading={kpiLoading}
         />
       </div>
 
-      {/* NEW: AI Learning Proof — full width */}
-      <AiLearningCard />
+      {/* Middle row: shorter cards */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <OnTimePerformanceCard
+          rate={kpis.onTimeRate}
+          deliveredCount={kpis.deliveredCount}
+          loading={kpiLoading}
+        />
+        <AlertsPanel alerts={alerts} />
+        <TrendlinesPanel />
+      </div>
 
-      {/* Stats grid */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {/* Bottom row: operational stats */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
           icon={ClipboardList}
           label="All Loads"
@@ -474,14 +638,13 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* AI Accuracy Trend — full width at bottom */}
-      <AiAccuracyTrend weeks={8} />
-
       {/* Empty state helper */}
       {!loading && counts.all === 0 ? (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-panel)] p-6 text-center text-sm text-[var(--text-muted)]">
-          No loads visible. If you expect data, check RLS policies, your role, or the project's
-          table name (<span className="font-mono">loads</span>) and <span className="font-mono">status</span> values.
+          No loads visible. If you expect data, check RLS policies, your role,
+          or the project's table name (
+          <span className="font-mono">loads</span>) and{" "}
+          <span className="font-mono">status</span> values.
         </div>
       ) : null}
     </div>

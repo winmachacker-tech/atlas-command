@@ -27,7 +27,7 @@ import {
 import { supabase } from "../lib/supabase";
 import TruckDocumentsModal from "../components/TruckDocumentsModal.jsx";
 import PMSchedulerModal from "../components/PMSchedulerModal.jsx";
-import { Link } from "react-router-dom"; // 👈 ADDED
+import { Link } from "react-router-dom";
 
 /** Status options must match DB enum/check */
 const STATUS_CHOICES = ["ACTIVE", "INACTIVE", "MAINTENANCE"];
@@ -316,7 +316,6 @@ function AssignDriverModal({ open, onClose, truck, onSaved }) {
     async function load() {
       try {
         setErr(null);
-        // 🔧 swapped full_name -> first_name, last_name
         const { data, error } = await supabase
           .from("drivers")
           .select("id, first_name, last_name, status")
@@ -616,13 +615,18 @@ function AddTruckModal({ open, onClose, onSaved }) {
       setBusy(true);
       setErr(null);
 
-      // Validation
+      // Validation — this will also feed unit_number
       if (!form.truck_number?.trim()) {
-        throw new Error("Truck number is required.");
+        throw new Error("Truck / Unit number is required.");
       }
 
+      const trimmedNumber = form.truck_number.trim();
+
       const payload = {
-        truck_number: form.truck_number.trim(),
+        // IMPORTANT: satisfy NOT NULL constraint on unit_number
+        unit_number: trimmedNumber,
+        // Keep separate truck_number column populated too
+        truck_number: trimmedNumber,
         vin: form.vin?.trim() || null,
         make: form.make?.trim() || null,
         model: form.model?.trim() || null,
@@ -700,7 +704,7 @@ function AddTruckModal({ open, onClose, onSaved }) {
         <div className="grid md:grid-cols-2 gap-4">
           <div>
             <label className="text-sm block mb-1 opacity-80">
-              Truck Number <span className="text-red-400">*</span>
+              Truck / Unit Number <span className="text-red-400">*</span>
             </label>
             <input
               type="text"
@@ -1248,7 +1252,7 @@ export default function Trucks() {
   const [editOpen, setEditOpen] = useState(false);
   const [maintOpen, setMaintOpen] = useState(false);
   const [pmOpen, setPmOpen] = useState(false);
-  const [addOpen, setAddOpen] = useState(false); // 👈 NEW STATE
+  const [addOpen, setAddOpen] = useState(false);
 
   /** Alerts UI */
   const [alertsOpen, setAlertsOpen] = useState(false);
@@ -1266,6 +1270,7 @@ export default function Trucks() {
           .select(
             `
             id,
+            unit_number,
             truck_number,
             vin,
             make,
@@ -1289,7 +1294,6 @@ export default function Trucks() {
         );
         let map = {};
         if (ids.length) {
-          // 🔧 swapped full_name -> first_name,last_name
           const { data: dData, error: dErr } = await supabase
             .from("drivers")
             .select("id, first_name, last_name")
@@ -1345,6 +1349,7 @@ export default function Trucks() {
         .select(
           `
           id,
+          unit_number,
           truck_number,
           vin,
           make,
@@ -1367,7 +1372,6 @@ export default function Trucks() {
       );
       let map = {};
       if (ids.length) {
-        // 🔧 swapped full_name -> first_name,last_name
         const { data: dData, error: dErr } = await supabase
           .from("drivers")
           .select("id, first_name, last_name")
@@ -1408,7 +1412,6 @@ export default function Trucks() {
   async function fetchAlerts() {
     setAlertsLoading(true);
     try {
-      // Bring joined truck/policy names for display
       const { data, error } = await supabase
         .from("pm_alerts")
         .select(
@@ -1464,6 +1467,7 @@ export default function Trucks() {
           const hay =
             [
               t.truck_number,
+              t.unit_number,
               t.vin,
               t.make,
               t.model,
@@ -1494,8 +1498,8 @@ export default function Trucks() {
       })
       .sort((a, b) => {
         if (sortBy === "TRUCK_NUMBER") {
-          const A = (a.truck_number || "").toString().padStart(6, "0");
-          const B = (b.truck_number || "").toString().padStart(6, "0");
+          const A = (a.truck_number || a.unit_number || "").toString().padStart(6, "0");
+          const B = (b.truck_number || b.unit_number || "").toString().padStart(6, "0");
           return A.localeCompare(B);
         }
         const ea = earliestDue(a);
@@ -1535,6 +1539,7 @@ export default function Trucks() {
   /** Export CSV of filtered trucks */
   function exportCsv() {
     const headers = [
+      "unit_number",
       "truck_number",
       "vin",
       "make",
@@ -1551,6 +1556,7 @@ export default function Trucks() {
     const lines = [headers.join(",")];
     filtered.forEach((t) => {
       const row = [
+        t.unit_number ?? "",
         t.truck_number ?? "",
         t.vin ?? "",
         t.make ?? "",
@@ -1657,7 +1663,7 @@ export default function Trucks() {
               "inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-sm",
               "bg-[var(--bg-active)] hover:opacity-90 transition"
             )}
-            onClick={() => setAddOpen(true)} // 👈 UPDATED
+            onClick={() => setAddOpen(true)}
           >
             <Plus className="w-4 h-4" />
             Add Truck
@@ -1682,7 +1688,7 @@ export default function Trucks() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search truck #, VIN, make/model, driver…"
+            placeholder="Search truck/unit #, VIN, make/model, driver…"
             className="w-full pl-9 pr-3 py-2 rounded-xl border bg-transparent outline-none"
           />
         </div>
@@ -1816,7 +1822,6 @@ export default function Trucks() {
                 return (
                   <tr key={t.id} className={cx(zebra, "border-t relative")}>
                     <td className="px-3 py-3 whitespace-nowrap">
-                      {/* 👇 LINK to truck profile */}
                       {t.truck_number ? (
                         <Link
                           to={`/trucks/${t.id}`}
@@ -1836,7 +1841,6 @@ export default function Trucks() {
                       )}
                     </td>
                     <td className="px-3 py-3">
-                      {/* 👇 LINK to truck profile */}
                       {t.vin ? (
                         <Link
                           to={`/trucks/${t.id}`}
@@ -1876,7 +1880,7 @@ export default function Trucks() {
                       {t.driver_id ? (
                         <Link
                           className="underline underline-offset-2 hover:opacity-90"
-                          to={`/drivers/${t.driver_id}`} // 👈 LINK to driver profile
+                          to={`/drivers/${t.driver_id}`}
                           title="Open driver profile"
                         >
                           {driverNameFromMap(driversById, t.driver_id)}
@@ -2035,7 +2039,7 @@ export default function Trucks() {
         open={addOpen}
         onClose={() => setAddOpen(false)}
         onSaved={refetch}
-      /> 
+      />
       <MaintenanceModal
         open={maintOpen}
         onClose={() => setMaintOpen(false)}

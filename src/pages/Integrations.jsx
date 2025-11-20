@@ -15,7 +15,13 @@ import {
   Cloud,
   MessageSquare,
   Mail,
+  Receipt,
 } from "lucide-react";
+
+// Import logos for services without reliable CDN URLs
+import resendLogo from "../assets/logos/resend.png";
+import motiveLogo from "../assets/logos/motive.png";
+import eiaLogo from "../assets/logos/eia.png";
 
 function cx(...a) {
   return a.filter(Boolean).join(" ");
@@ -47,6 +53,7 @@ function IntegrationCard({
   onConfigure,
   onDisconnect,
   badge,
+  logo, // Optional logo URL or path
 }) {
   const isConnected = status === 'connected';
   const isPremium = status === 'premium';
@@ -65,7 +72,25 @@ function IntegrationCard({
             "inline-flex h-12 w-12 items-center justify-center rounded-xl",
             isConnected ? "bg-emerald-500/20" : "bg-white/5"
           )}>
-            <Icon className={cx("h-6 w-6", isConnected ? "text-emerald-400" : "text-white/70")} />
+            {logo ? (
+              <img 
+                src={logo} 
+                alt={`${name} logo`} 
+                className="h-7 w-7 object-contain"
+                onError={(e) => {
+                  // Fallback to icon if logo fails to load
+                  e.target.style.display = 'none';
+                  e.target.nextSibling.style.display = 'block';
+                }}
+              />
+            ) : null}
+            <Icon 
+              className={cx(
+                "h-6 w-6", 
+                isConnected ? "text-emerald-400" : "text-white/70",
+                logo && "hidden"
+              )} 
+            />
           </div>
           <div>
             <div className="flex items-center gap-2">
@@ -286,6 +311,7 @@ export default function Integrations() {
               badge={googleMapsConnected ? "Connected" : "Free"}
               onConfigure={handleGoogleMapsConfigure}
               onDisconnect={handleGoogleMapsDisconnect}
+              logo="https://www.gstatic.com/images/branding/product/1x/maps_48dp.png"
             />
           </div>
         </div>
@@ -309,6 +335,7 @@ export default function Integrations() {
               description="Automatically sync invoices, payments, and expense tracking"
               status="premium"
               badge="Premium"
+              logo="https://plugin.intuitcdn.net/designsystem/assets/2023/06/14134215/quickbooks-logo.svg"
             />
             <IntegrationCard
               icon={CreditCard}
@@ -316,6 +343,15 @@ export default function Integrations() {
               description="Accept credit card payments from customers instantly"
               status="premium"
               badge="Premium"
+              logo="https://images.ctfassets.net/fzn2n1nzq965/HTTOloNPhisV9P4hlMPNA/cacf1bb88b9fc492dfad34378d844280/Stripe_icon_-_square.svg"
+            />
+            <IntegrationCard
+              icon={Receipt}
+              name="EIA (Electronic Invoicing & Audit)"
+              description="Automate freight bill auditing and invoice processing with carrier compliance"
+              status="premium"
+              badge="Premium"
+              logo={eiaLogo}
             />
           </div>
         </div>
@@ -339,6 +375,7 @@ export default function Integrations() {
               description="Real-time GPS tracking, ELD compliance, and fleet management"
               status="premium"
               badge="Premium"
+              logo="https://cdn.samsara.com/wp-content/uploads/2021/08/samsara-logo-icon.png"
             />
             <IntegrationCard
               icon={Truck}
@@ -346,6 +383,7 @@ export default function Integrations() {
               description="ELD compliance, GPS tracking, and driver safety monitoring"
               status="premium"
               badge="Premium"
+              logo={motiveLogo}
             />
           </div>
         </div>
@@ -369,6 +407,7 @@ export default function Integrations() {
               description="E-signatures for rate confirmations, contracts, and BOLs"
               status="premium"
               badge="Premium"
+              logo="https://www.docusign.com/themes/custom/basic/images/logo/logo.svg"
             />
             <IntegrationCard
               icon={Cloud}
@@ -376,6 +415,7 @@ export default function Integrations() {
               description="Store and manage BOLs, PODs, and shipping documents"
               status="premium"
               badge="Premium"
+              logo="https://www.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png"
             />
           </div>
         </div>
@@ -401,6 +441,7 @@ export default function Integrations() {
               badge="Connected"
               onConfigure={() => setMsg({ kind: "info", text: "OpenAI integration is configured and active." })}
               onDisconnect={() => setMsg({ kind: "info", text: "OpenAI integration cannot be disconnected as it's a core feature." })}
+              logo="https://openai.com/favicon.ico"
             />
             
             <IntegrationCard
@@ -411,6 +452,7 @@ export default function Integrations() {
               badge="Connected"
               onConfigure={handleEmailConfigure}
               onDisconnect={handleEmailDisconnect}
+              logo={resendLogo}
             />
             
             <IntegrationCard
@@ -419,6 +461,7 @@ export default function Integrations() {
               description="Send SMS notifications to drivers and receive status updates"
               status="premium"
               badge="Premium"
+              logo="https://www.twilio.com/content/dam/twilio-com/global/en/products/twilio-logo-red.svg"
             />
           </div>
         </div>

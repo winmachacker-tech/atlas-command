@@ -1,8 +1,16 @@
-// supabase/functions/send-load-instructions-email/index.ts
+// FILE: supabase/functions/send-load-instructions-email/index.ts
 // Purpose: Send load instructions via Resend email with a clean HTML layout.
 // Expects JSON body: { to, subject, body, loadId, mode }
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+
+// CORS headers so your browser (localhost:5173, Vercel, etc.) can call this safely
+const corsHeaders: HeadersInit = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
 
 // Read env vars safely
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || "";
@@ -27,124 +35,127 @@ function escapeHtml(str: string): string {
 /**
  * Turn the plain-text body into a simple, professional HTML email.
  * - First line becomes the heading
- * - Remaining lines appear in a clean block with preserved line breaks
+ * - Remaining lines are rendered as paragraphs
  */
-function buildHtmlEmail(subject: string, textBody: string) {
-  const lines = textBody.split(/\r?\n/);
-  const titleLine = escapeHtml(lines[0] ?? subject);
-  const rest = lines.slice(1).join("\n");
-  const restEscaped = escapeHtml(rest).replace(/\r?\n/g, "<br />");
+function buildHtmlEmail(body: string): string {
+  const lines = body.split(/\r?\n/).map((l) => l.trim());
+  const heading = escapeHtml(lines[0] || "Load Instructions");
+  const rest = lines.slice(1).filter((l) => l.length > 0);
 
-  return `
+  const paragraphs =
+    rest.length > 0
+      ? rest
+          .map(
+            (line) =>
+              `<p style="margin: 0 0 4px 0; font-size: 14px; line-height: 1.4;">${escapeHtml(
+                line
+              )}</p>`
+          )
+          .join("")
+      : "";
+
+  return `<!doctype html>
 <html>
   <head>
-    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
-    <title>${escapeHtml(subject)}</title>
+    <meta charset="utf-8" />
+    <title>${heading}</title>
   </head>
-
-  <body style="margin:0; padding:0; background-color:#020617; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;">
-    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background-color:#020617; padding:32px 0;">
+  <body style="margin:0; padding:0; background-color:#020617; font-family:system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+    <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color:#020617; padding:24px 0;">
       <tr>
-        <td align="center" style="padding:0 16px;">
-          <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:640px; background-color:#020617;">
-
-            <!-- Header -->
+        <td align="center">
+          <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="max-width:640px; background-color:#020617; border-radius:16px; border:1px solid #1f2937; padding:24px;">
             <tr>
-              <td style="padding-bottom:20px; text-align:left;">
-                <div style="color:#12d6a7; font-size:11px; text-transform:uppercase; letter-spacing:0.08em; font-weight:700;">
-                  ATLAS COMMAND
-                </div>
-                <div style="color:#6b7280; font-size:11px; margin-top:2px;">
-                  Load Instructions
-                </div>
+              <td style="padding-bottom:16px;">
+                <h1 style="margin:0; font-size:18px; color:#e5e7eb;">${heading}</h1>
               </td>
             </tr>
-
-            <!-- Gradient Card -->
             <tr>
-              <td style="
-                background: linear-gradient(135deg, rgba(18,214,167,0.18), rgba(18,214,167,0.08));
-                border-radius:18px;
-                padding:28px;
-                border:1px solid rgba(18,214,167,0.25);
-              ">
-                <h1 style="
-                  margin:0 0 16px 0;
-                  font-size:20px;
-                  line-height:1.3;
-                  color:#ffffff;
-                  font-weight:700;
-                ">
-                  ${titleLine}
-                </h1>
-
-                <div style="font-size:14px; line-height:1.6; color:#e5e7eb;">
-                  ${restEscaped}
-                </div>
+              <td style="padding:12px 16px; border-radius:12px; background:linear-gradient(145deg, rgba(16,185,129,0.08), rgba(30,64,175,0.18)); border:1px solid rgba(16,185,129,0.5);">
+                <pre style="margin:0; font-size:13px; line-height:1.4; color:#e5e7eb; white-space:pre-wrap;">${escapeHtml(
+                  body
+                )}</pre>
               </td>
             </tr>
-
-            <!-- Footer -->
             <tr>
-              <td style="padding-top:20px;">
-                <div style="font-size:11px; line-height:1.6; color:#9ca3af;">
-                  This message was generated from <strong style="color:#12d6a7;">Atlas Command</strong> 
-                  to provide load instructions to your driver or carrier.  
-                  If anything looks incorrect, reply directly to your dispatcher before running the load.
-                </div>
+              <td style="padding-top:16px; font-size:11px; color:#9ca3af;">
+                Sent via Atlas Command • Automated load instructions email
               </td>
             </tr>
-
           </table>
         </td>
       </tr>
     </table>
   </body>
-</html>
-`.trim();
+</html>`;
 }
 
-
-serve(async (req: Request) => {
-  // Basic CORS handling
+serve(async (req: Request): Promise<Response> => {
+  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       status: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers":
-          "authorization, x-client-info, apikey, content-type",
-      },
+      headers: corsHeaders,
     });
-  }
-
-  if (req.method !== "POST") {
-    return json({ success: false, error: "Method not allowed" }, 405);
   }
 
   try {
-    const { to, subject, body, loadId, mode } = await req.json();
-
-    if (!to || !subject || !body) {
-      return json(
-        { success: false, error: "Missing to/subject/body" },
-        400,
+    if (req.method !== "POST") {
+      return new Response(
+        JSON.stringify({ error: "Method not allowed" }),
+        {
+          status: 405,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json",
+          },
+        }
       );
     }
 
-    const textBody = String(body);
-    const htmlBody = buildHtmlEmail(String(subject), textBody);
+    const payload = await req.json().catch(() => ({} as any));
+    const { to, subject, body, mode, loadId } = payload as {
+      to?: string;
+      subject?: string;
+      body?: string;
+      mode?: string;
+      loadId?: string;
+    };
 
-    console.log("[send-load-instructions-email] payload", {
-      to,
-      subject,
-      loadId,
-      mode,
-    });
+    if (!to || !subject || !body) {
+      return new Response(
+        JSON.stringify({
+          error: "Missing required fields",
+          details: "to, subject, and body are required",
+        }),
+        {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+    }
 
-    // Call Resend API
-    const resendResp = await fetch("https://api.resend.com/emails", {
+    if (!RESEND_API_KEY) {
+      return new Response(
+        JSON.stringify({
+          error: "Resend API key not configured",
+        }),
+        {
+          status: 500,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+    }
+
+    const html = buildHtmlEmail(body);
+
+    const resendRes = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${RESEND_API_KEY}`,
@@ -152,53 +163,64 @@ serve(async (req: Request) => {
       },
       body: JSON.stringify({
         from: EMAIL_FROM,
-        to: [to],
+        to,
         subject,
-        text: textBody,
-        html: htmlBody,
+        html,
+        text: body,
+        headers: {
+          "X-Atlas-Mode": mode || "email",
+          "X-Atlas-Load-Id": loadId || "",
+        },
       }),
     });
 
-    const resendData = await resendResp.json().catch(
-      () => ({} as unknown),
-    );
-
-    if (!resendResp.ok) {
-      console.error(
-        "[send-load-instructions-email] Resend error",
-        resendResp.status,
-        resendData,
-      );
-      return json(
+    if (!resendRes.ok) {
+      const text = await resendRes.text();
+      console.error("[send-load-instructions-email] Resend error:", text);
+      return new Response(
+        JSON.stringify({
+          error: "Resend API error",
+          details: text,
+        }),
         {
-          success: false,
-          error:
-            (resendData as any)?.error?.message ??
-            `Resend failed with status ${resendResp.status}`,
-        },
-        500,
+          status: 502,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json",
+          },
+        }
       );
     }
 
-    console.log("[send-load-instructions-email] Resend success", resendData);
+    const data = await resendRes.json();
 
-    return json({ success: true }, 200);
-  } catch (err: any) {
-    console.error("[send-load-instructions-email] handler error", err);
-    return json(
-      { success: false, error: err?.message ?? "Unknown error" },
-      500,
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        id: data?.id ?? null,
+      }),
+      {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+  } catch (err) {
+    console.error("[send-load-instructions-email] Unhandled error:", err);
+    return new Response(
+      JSON.stringify({
+        error: "Unhandled error",
+        details: err instanceof Error ? err.message : String(err),
+      }),
+      {
+        status: 500,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+        },
+      }
     );
   }
 });
-
-// Helper to return JSON with CORS
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-    },
-  });
-}

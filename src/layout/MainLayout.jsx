@@ -518,7 +518,11 @@ export default function MainLayout() {
 
   // Auto-open groups if a child route is active
   const activeGroupByPath = useMemo(() => {
-    if (pathname.startsWith("/billing")) return "accounting";
+    if (
+      pathname.startsWith("/billing") ||
+      pathname.startsWith("/driver-settlements")
+    )
+      return "accounting";
     if (
       [
         "/",
@@ -662,6 +666,9 @@ export default function MainLayout() {
                 >
                   <SideLink to="/billing" icon={CreditCard}>
                     Billing
+                  </SideLink>
+                  <SideLink to="/driver-settlements" icon={DollarSign}>
+                    Driver settlements
                   </SideLink>
                 </SideGroup>
 
