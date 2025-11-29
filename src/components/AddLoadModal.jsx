@@ -529,7 +529,7 @@ export default function AddLoadModal(props) {
       dispatcher_name: form.dispatcher_name || form.dispatcher || null,
       
       // FINANCIAL
-      rate: form.rate === "" ? null : Number(form.rate),
+      rate: form.rate === "" ? 0 : Number(form.rate),
       rate_per_mile: form.rate_per_mile === "" ? null : Number(form.rate_per_mile),
       fuel_surcharge: form.fuel_surcharge === "" ? null : Number(form.fuel_surcharge),
       detention_charges: form.detention_charges === "" ? null : Number(form.detention_charges),

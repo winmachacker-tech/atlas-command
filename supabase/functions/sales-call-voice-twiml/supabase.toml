@@ -1,0 +1,7 @@
+# FILE: supabase/functions/sales-call-voice-twiml/config.toml
+# Purpose:
+# - Make this function publicly callable (no Authorization header required).
+# - This is safe because it only returns TwiML and does NOT touch org data.
+
+[functions.sales-call-voice-twiml]
+verify_jwt = false

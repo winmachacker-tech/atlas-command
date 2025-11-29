@@ -1,0 +1,5 @@
+# FILE: supabase/functions/sales-call-audio/supabase.toml
+
+# Disable Supabase JWT verification because this function is secured 
+# using your own ?token= secret instead.
+verify_jwt = false

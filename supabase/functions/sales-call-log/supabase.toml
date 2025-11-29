@@ -1,0 +1,9 @@
+# FILE: supabase/functions/sales-call-log/supabase.toml
+#
+# IMPORTANT:
+# - DO NOT put env vars here.
+# - This file ONLY configures this function.
+# - verify_jwt = false must be here or Supabase will require a JWT.
+
+[functions]
+verify_jwt = false

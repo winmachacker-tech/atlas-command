@@ -1,0 +1,7 @@
+# FILE: supabase/functions/sales-call-recording/supabase.toml
+# Purpose:
+# - Configuration for the `sales-call-recording` Edge Function.
+# - Disable JWT verification because this endpoint is called only by Twilio
+#   and we already secure it with the ?token=TWILIO_RECORDING_WEBHOOK_TOKEN.
+
+verify_jwt = false

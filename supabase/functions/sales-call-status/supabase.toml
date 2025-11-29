@@ -1,0 +1,27 @@
+# FILE: supabase/functions/sales-call-status-webhook/supabase.toml
+#
+# Purpose:
+# - Allow Twilio to POST status callbacks to this Edge Function
+#   WITHOUT a Supabase JWT Authorization header.
+# - Still keep security by using our own shared secret (inbound secret)
+#   INSIDE the function.
+#
+# Important:
+# - If verify_jwt is true, Supabase will return:
+#     { "code": 401, "message": "Missing authorization header" }
+#   BEFORE your index.ts runs.
+# - Setting verify_jwt = false stops that behavior for THIS function only.
+
+[functions.sales-call-status-webhook]
+verify_jwt = false
+
+[env]
+# Standard Supabase admin access for this function (if your index.ts uses it):
+SUPABASE_URL="https://tnpesnohwbwpmakvyzpn.supabase.co"
+SUPABASE_SERVICE_ROLE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBlcmJhc2UiLCJpYXQiOjE2OT..."
+# ^ use your real service role key exactly as in sales-call-log/supabase.toml
+
+# Inbound secret for Twilio status callbacks.
+# 1) Pick any long random string (no spaces).
+# 2) Put the same value here AND in your Twilio Status Callback URL as ?secret=...
+TWILIO_STATUS_WEBHOOK_SECRET="put-a-long-random-string-here"

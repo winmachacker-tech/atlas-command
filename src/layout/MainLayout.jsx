@@ -1,3 +1,15 @@
+// FILE: src/layouts/MainLayout.jsx
+// Purpose:
+// - Main shell layout for Atlas Command.
+// - Provides sidebar navigation, top header, notifications, avatar menu.
+// - Hosts the Dipsy floating widget and AI quick launcher.
+// - Adds a simple OrgSwitcher pill in the desktop header
+//   so you can see which org you're managing.
+//
+// NOTE: This OrgSwitcher is READ-ONLY right now.
+// It shows the current org name (from public.orgs with RLS).
+// Later we can wire it to a secure RPC to actually switch orgs.
+
 import Sidebar from "../components/Sidebar.jsx";
 import {
   useEffect,
@@ -33,15 +45,19 @@ import {
   GraduationCap,
   Users,
   BarChart3,
-  FileCheck, // 👈 Added
-  Crown, // 👈 icon for Super Admin link
+  FileCheck,
+  Crown,
+  TrendingUp, // Sales
+  Building2,
+  MapPin, // 🌍 Fleet Map
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { trackLogout } from "../lib/activityTracker";
 import AIQuickLauncher from "../components/AIQuickLauncher";
 import { DipsyFloatingWidget } from "../components/DipsyFloating";
+import { Analytics } from "@vercel/analytics/react";
 
-/* Create context for Dipsy state that can be accessed from any page */
+/* ---------------------- Dipsy context (global) ---------------------- */
 export const DipsyContext = createContext();
 
 export function useDipsy() {
@@ -208,7 +224,6 @@ function AvatarMenu({ onSignOut }) {
         <div
           role="menu"
           className="absolute right-0 mt-2 w-56 rounded-xl border border-[var(--border)] bg-[var(--bg-panel)] shadow-2xl overflow-hidden z-50"
-          style={{ backgroundColor: "var(--bg-panel)" }}
         >
           <div className="px-3 py-2 text-xs text-[var(--text-muted)] bg-[var(--bg-surface)]">
             {email || "Signed in"}
@@ -451,6 +466,63 @@ function NotificationBell() {
   );
 }
 
+/* --------------------- Org Switcher (read-only) --------------------- */
+function OrgSwitcher() {
+  const [loading, setLoading] = useState(true);
+  const [orgName, setOrgName] = useState("Current org");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadOrg() {
+      try {
+        const { data, error } = await supabase
+          .from("orgs")
+          .select("name")
+          .limit(1)
+          .single();
+
+        if (cancelled) return;
+
+        if (error) {
+          console.error("[OrgSwitcher] error loading org:", error);
+          setOrgName("Current org");
+        } else {
+          setOrgName(data?.name || "Current org");
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.error("[OrgSwitcher] unexpected error:", e);
+          setOrgName("Current org");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadOrg();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <button
+      type="button"
+      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-xs text-[var(--text-base)] shadow-sm cursor-default"
+      title="Org switching will live here. Right now this shows the current org only."
+    >
+      <Building2 className="h-4 w-4 text-emerald-500" />
+      <span className="font-medium">
+        {loading ? "Loading org…" : orgName || "Current org"}
+      </span>
+      <ChevronDown className="h-3 w-3 opacity-60" />
+    </button>
+  );
+}
+
 /* ------------------------------- Layout -------------------------------- */
 export default function MainLayout() {
   const navigate = useNavigate();
@@ -494,29 +566,24 @@ export default function MainLayout() {
     };
   }, []);
 
-  // Dipsy state management - accessible to all child pages
+  // Dipsy state management
   const [dipsyState, setDipsyState] = useState("idle");
-
-  // AI Chat trigger - increment to open
   const [aiChatTrigger, setAiChatTrigger] = useState(0);
 
-  // Auto-sleep after 2 minutes of being idle
+  // Auto-sleep after 2 minutes idle
   useEffect(() => {
     let sleepTimer;
-
     if (dipsyState === "idle") {
-      // Set timer to go to sleep after 2 minutes
       sleepTimer = setTimeout(() => {
         setDipsyState("sleeping");
-      }, 120000); // 2 minutes
+      }, 120000);
     }
-
     return () => {
       if (sleepTimer) clearTimeout(sleepTimer);
     };
   }, [dipsyState]);
 
-  // Auto-open groups if a child route is active
+  // Auto-open sidebar groups
   const activeGroupByPath = useMemo(() => {
     if (
       pathname.startsWith("/billing") ||
@@ -533,6 +600,7 @@ export default function MainLayout() {
         "/drivers",
         "/trucks",
         "/customers",
+        "/sales",
       ].some((p) => (p === "/" ? pathname === "/" : pathname.startsWith(p)))
     )
       return "operations";
@@ -549,8 +617,8 @@ export default function MainLayout() {
         "/ai-proof",
         "/ai-lab-proof",
         "/customers",
-        "/trust-center", // Trust Center belongs to Admin group
-        "/super-admin", // Super Admin belongs to Admin group
+        "/trust-center",
+        "/super-admin",
       ].some((p) => pathname.startsWith(p))
     )
       return "admin";
@@ -585,12 +653,56 @@ export default function MainLayout() {
     }
   }, [navigate]);
 
+  // 🚚 Motive OAuth: start the OAuth flow
+  const handleConnectMotive = useCallback(() => {
+    try {
+      if (typeof window === "undefined") return;
+
+      const clientId = import.meta.env.VITE_MOTIVE_CLIENT_ID;
+      if (!clientId) {
+        console.error(
+          "[MainLayout] VITE_MOTIVE_CLIENT_ID not set; cannot start Motive OAuth."
+        );
+        alert("Motive client ID is not configured (VITE_MOTIVE_CLIENT_ID).");
+        return;
+      }
+
+      // 🔑 Allow explicit redirect via env, fallback to origin
+      const redirectUriEnv = import.meta.env.VITE_MOTIVE_REDIRECT_URI;
+      const redirectUri =
+        redirectUriEnv ||
+        `${window.location.origin}/integrations/motive/callback`;
+
+      // 🔑 Scopes - can be overridden via env, or use sensible defaults for fleet management
+      // Common scopes: companies.read, users.read, vehicles.read, drivers.read, hos_logs.read, locations.read
+      const scopeEnv = import.meta.env.VITE_MOTIVE_SCOPE;
+      const scope =
+        scopeEnv ||
+        "companies.read users.read vehicles.read drivers.read hos_logs.read locations.read";
+
+      console.log("[Motive OAuth] redirectUri =", redirectUri);
+      console.log("[Motive OAuth] scope =", scope);
+
+      const params = new URLSearchParams({
+        response_type: "code",
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        scope: scope,
+      });
+
+      alert("Scope: " + scope);
+      const authorizeUrl = `https://gomotive.com/oauth/authorize?${params.toString()}`;
+      window.location.href = authorizeUrl;
+    } catch (err) {
+      console.error("[MainLayout] Failed to start Motive OAuth:", err);
+    }
+  }, []);
+
   // Dipsy context value
   const dipsyContextValue = useMemo(
     () => ({
       state: dipsyState,
       setState: setDipsyState,
-      // Helper functions for common state changes
       setThinking: () => setDipsyState("thinking"),
       setConfident: () => setDipsyState("confident-victory"),
       setLightbulb: () => setDipsyState("confident-lightbulb"),
@@ -649,11 +761,18 @@ export default function MainLayout() {
                   <SideLink to="/customers" icon={Users}>
                     Customers
                   </SideLink>
+                  <SideLink to="/sales" icon={TrendingUp}>
+                    Sales
+                  </SideLink>
                   <SideLink to="/learning" icon={GraduationCap}>
                     Learning
                   </SideLink>
                   <SideLink to="/trucks" icon={Truck}>
                     Trucks
+                  </SideLink>
+                  {/* 🌍 Fleet Map – live Motive locations */}
+                  <SideLink to="/fleet-map" icon={MapPin}>
+                    Fleet Map
                   </SideLink>
                 </SideGroup>
 
@@ -666,6 +785,9 @@ export default function MainLayout() {
                 >
                   <SideLink to="/billing" icon={CreditCard}>
                     Billing
+                  </SideLink>
+                  <SideLink to="/billing/subscription" icon={CreditCard}>
+                    Subscription
                   </SideLink>
                   <SideLink to="/driver-settlements" icon={DollarSign}>
                     Driver settlements
@@ -694,11 +816,9 @@ export default function MainLayout() {
                   <SideLink to="/settings/security" icon={Shield}>
                     Security
                   </SideLink>
-                  {/* Trust & Security Center */}
                   <SideLink to="/trust-center" icon={ShieldCheck}>
                     Trust &amp; Security
                   </SideLink>
-                  {/* Privacy Policy */}
                   <SideLink to="/privacy" icon={ShieldCheck}>
                     Privacy Policy
                   </SideLink>
@@ -711,7 +831,6 @@ export default function MainLayout() {
                   >
                     Driver Learning Test
                   </SideLink>
-                  {/* Super Admin Panel (platform-level) – only for real super admins */}
                   {checkedSuperAdmin && isSuperAdmin && (
                     <SideLink to="/super-admin" icon={Crown}>
                       Super Admin
@@ -720,15 +839,7 @@ export default function MainLayout() {
                 </SideGroup>
 
                 {/* AI Tools */}
-                <SideGroup
-                  id="ai"
-                  title="AI Tools"
-                  icon={Bot}
-                  defaultOpen={true}
-                >
-                  <SideLink to="/dispatch-ai" icon={Bot}>
-                    Dispatch AI (Lab)
-                  </SideLink>
+                <SideGroup id="ai" title="AI Tools" icon={Bot} defaultOpen>
                   <SideLink to="/ai" icon={Sparkles}>
                     AI Recommendations
                   </SideLink>
@@ -740,7 +851,6 @@ export default function MainLayout() {
                   </SideLink>
                 </SideGroup>
 
-                {/* Standalone link (outside groups) */}
                 <SideLink to="/ai-insights" icon={Sparkles}>
                   AI Insights
                 </SideLink>
@@ -766,7 +876,7 @@ export default function MainLayout() {
               <div className="flex items-center justify-between px-3 py-2">
                 <button
                   onClick={() => {
-                    // Optional: hook up a mobile drawer in the future
+                    // future mobile drawer
                   }}
                   className="p-2 rounded-lg hover:bg-[var(--bg-hover)]"
                   aria-label="Open menu"
@@ -782,18 +892,39 @@ export default function MainLayout() {
 
             {/* Desktop top bar */}
             <div className="hidden md:block sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg-panel)] backdrop-blur-sm">
-              <div className="flex items-center justify-end px-6 py-3 gap-2">
-                <NotificationBell />
-                <AvatarMenu onSignOut={signOut} />
+              <div className="flex items-center justify-between px-6 py-3 gap-4">
+                {/* Left: brand + org pill + Motive */}
+                <div className="flex items-center gap-3">
+                  <span className="font-semibold text-sm text-[var(--text-muted)]">
+                    Atlas Command
+                  </span>
+                  <OrgSwitcher />
+                  <button
+                    type="button"
+                    onClick={handleConnectMotive}
+                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-xs text-[var(--text-muted)] hover:text-[var(--text-base)] hover:border-emerald-500/60 hover:bg-emerald-500/10 transition-colors"
+                    title="Connect your Motive account to Atlas Command"
+                  >
+                    <Plug className="h-4 w-4" />
+                    <span className="hidden sm:inline">Connect Motive</span>
+                    <span className="sm:hidden">Motive</span>
+                  </button>
+                </div>
+
+                {/* Right: notifications + avatar */}
+                <div className="flex items-center gap-2">
+                  <NotificationBell />
+                  <AvatarMenu onSignOut={signOut} />
+                </div>
               </div>
             </div>
 
             {/* Routed content */}
             <div className="p-4 md:p-6">
               <Outlet />
+
               <AIQuickLauncher openTrigger={aiChatTrigger} />
 
-              {/* Dipsy Floating Widget - visible on all pages */}
               <DipsyFloatingWidget
                 initialState={dipsyState}
                 defaultPosition={{
@@ -804,7 +935,6 @@ export default function MainLayout() {
                   y: 100,
                 }}
                 onAskDipsy={() => {
-                  // Wake Dipsy if sleeping, then show excitement
                   if (dipsyState === "sleeping") {
                     setDipsyState("idle");
                     setTimeout(() => {
@@ -815,8 +945,6 @@ export default function MainLayout() {
                     setDipsyState("confident-lightbulb");
                     setTimeout(() => setDipsyState("idle"), 1500);
                   }
-
-                  // Trigger AI chat opening
                   setAiChatTrigger((prev) => prev + 1);
                 }}
               />
@@ -824,6 +952,7 @@ export default function MainLayout() {
           </main>
         </div>
       </div>
+      <Analytics />
     </DipsyContext.Provider>
   );
 }

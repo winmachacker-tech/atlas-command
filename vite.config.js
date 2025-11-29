@@ -2,13 +2,6 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 
-// ---------------------------------------------------------------------------
-// Enterprise-grade Vite config for Atlas Command
-// - Enables "@" import alias that points to ./src
-// - Compatible with React + Supabase + Tailwind
-// - Removes duplicate React declaration
-// ---------------------------------------------------------------------------
-
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -22,6 +15,12 @@ export default defineConfig({
     hmr: {
       overlay: true,
     },
+    // 👇 Allow your ngrok domain so you can access Atlas via HTTPS tunnel
+    allowedHosts: [
+      "unconcernedly-unlarge-adaline.ngrok-free.dev",
+      "localhost",
+      "127.0.0.1",
+    ],
   },
   build: {
     outDir: "dist",

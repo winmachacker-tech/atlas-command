@@ -1,34 +1,72 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Minimize2, Maximize2, X } from 'lucide-react';
-import { DipsyStandalone } from './DipsyStandalone';
+import React, { useState, useRef, useEffect } from "react";
+import { Minimize2, Mic, MicOff } from "lucide-react";
+import { DipsyStandalone } from "./DipsyStandalone";
+import { useDipsyVoiceClient } from "../hooks/useDipsyVoiceClient";
 
-const DipsyFloatingWidget = ({ 
-  initialState = 'idle',
+// Floating Dipsy widget with built-in voice controls.
+//
+// What this file does (plain English):
+// - Shows the little draggable Dipsy bubble (minimized).
+// - When you click it, it expands into the full mini-panel.
+// - Adds a MIC button in the header that uses the shared voice hook:
+//     • startListening() when you click to talk
+//     • stopListening() when you click again
+// - Shows simple voice status: "Voice ready", "Listening…", "Speaking…", etc.
+// - Shows the latest Dipsy spoken reply text under the face.
+// - Keeps your existing "Ask Dipsy" button that opens the full chat panel.
+//
+// This does NOT touch any Supabase auth / RLS / security. It only talks to
+// your voice WebSocket URL from VITE_DIPSY_VOICE_WS_URL (frontend-safe).
+
+const DipsyFloatingWidget = ({
+  initialState = "idle",
   onStateChange,
-  defaultPosition = { x: window.innerWidth - 120, y: window.innerHeight - 120 },
-  onAskDipsy // 🎯 Callback for when user clicks "Ask Dipsy"
+  defaultPosition = {
+    x: window.innerWidth - 120,
+    y: window.innerHeight - 120,
+  },
+  onAskDipsy, // callback for full panel open
 }) => {
   const [position, setPosition] = useState(defaultPosition);
   const [isDragging, setIsDragging] = useState(false);
-  const [isMinimized, setIsMinimized] = useState(true); // 🎯 Start minimized
+  const [isMinimized, setIsMinimized] = useState(true); // start minimized
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [dipsyState, setDipsyState] = useState(initialState);
   const widgetRef = useRef(null);
 
-  // Handle state changes from parent
-  useEffect(() => {
-    setDipsyState(initialState);
-  }, [initialState]);
+  // 🔊 Voice hook: browser <-> voice server
+  const {
+    isSupported,
+    isConnected,
+    isListening,
+    isSpeaking,
+    lastTranscript,
+    error,
+    startListening,
+    stopListening,
+    playScript,
+    reloadBrain,
+  } = useDipsyVoiceClient();
 
-  // Mouse down - start dragging
+  // Keep local Dipsy animation state in sync with parent,
+  // but if she's actively speaking we force a "confident" pose.
+  useEffect(() => {
+    if (isSpeaking) {
+      setDipsyState("confident-lightbulb");
+    } else {
+      setDipsyState(initialState);
+    }
+  }, [initialState, isSpeaking]);
+
+  // Mouse down - start dragging (but not when clicking controls)
   const handleMouseDown = (e) => {
-    if (e.target.closest('.control-button')) return; // Don't drag when clicking controls
-    
+    if (e.target.closest(".control-button")) return;
+
     setIsDragging(true);
     const rect = widgetRef.current.getBoundingClientRect();
     setDragOffset({
       x: e.clientX - rect.left,
-      y: e.clientY - rect.top
+      y: e.clientY - rect.top,
     });
   };
 
@@ -40,13 +78,12 @@ const DipsyFloatingWidget = ({
       const newX = e.clientX - dragOffset.x;
       const newY = e.clientY - dragOffset.y;
 
-      // Keep within viewport bounds
-      const maxX = window.innerWidth - (isMinimized ? 60 : 200);
-      const maxY = window.innerHeight - (isMinimized ? 60 : 200);
+      const maxX = window.innerWidth - (isMinimized ? 60 : 260);
+      const maxY = window.innerHeight - (isMinimized ? 60 : 260);
 
       setPosition({
         x: Math.max(0, Math.min(newX, maxX)),
-        y: Math.max(0, Math.min(newY, maxY))
+        y: Math.max(0, Math.min(newY, maxY)),
       });
     };
 
@@ -55,19 +92,50 @@ const DipsyFloatingWidget = ({
     };
 
     if (isDragging) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
     }
 
     return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
     };
   }, [isDragging, dragOffset, isMinimized]);
 
   // Toggle minimize
   const toggleMinimize = () => {
-    setIsMinimized(!isMinimized);
+    setIsMinimized((prev) => !prev);
+  };
+
+  // Handle mic click: start/stop listening
+  const handleMicClick = (e) => {
+    e.stopPropagation();
+    if (!isSupported) return;
+
+    if (!isListening) {
+      startListening();
+    } else {
+      stopListening();
+    }
+  };
+
+  // Simple text for voice status pill
+  const getVoiceStatusLabel = () => {
+    if (!isSupported) return "Voice unavailable";
+    if (error) return "Voice error";
+    if (isListening) return "Listening…";
+    if (isSpeaking) return "Speaking…";
+    if (isConnected) return "Voice ready";
+    return "Connecting…";
+  };
+
+  const getVoiceStatusColor = () => {
+    if (error) return "bg-red-600";
+    if (!isSupported) return "bg-slate-600";
+    if (isListening) return "bg-pink-600";
+    if (isSpeaking) return "bg-indigo-600";
+    if (isConnected) return "bg-emerald-600";
+    return "bg-slate-600";
   };
 
   return (
@@ -75,9 +143,9 @@ const DipsyFloatingWidget = ({
       ref={widgetRef}
       className={`
         fixed z-50
-        ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}
+        ${isDragging ? "cursor-grabbing" : "cursor-grab"}
         transition-all duration-300 ease-out
-        ${isMinimized ? 'w-16 h-16' : 'w-auto'}
+        ${isMinimized ? "w-16 h-16" : "w-auto"}
       `}
       style={{
         left: `${position.x}px`,
@@ -87,14 +155,13 @@ const DipsyFloatingWidget = ({
     >
       {/* Minimized State - Just small Dipsy */}
       {isMinimized ? (
-        <div 
+        <div
           className="relative group cursor-pointer"
           onClick={(e) => {
             e.stopPropagation();
             toggleMinimize();
           }}
         >
-          {/* Small Dipsy */}
           <div className="hover:scale-110 transition-transform">
             <DipsyStandalone state={dipsyState} size="small" />
           </div>
@@ -108,25 +175,58 @@ const DipsyFloatingWidget = ({
         </div>
       ) : (
         /* Expanded State - Full Widget */
-        <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl shadow-2xl border-2 border-slate-700 overflow-hidden">
+        <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl shadow-2xl border border-slate-700/80 overflow-hidden min-w-[260px]">
           {/* Header */}
-          <div className="bg-gradient-to-r from-emerald-600 to-emerald-700 px-4 py-2 flex items-center justify-between">
+          <div className="bg-slate-900/80 px-4 py-2 flex items-center justify-between border-b border-slate-700/70">
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 bg-green-300 rounded-full animate-pulse"></div>
+              <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
               <span className="text-white font-semibold text-sm">Dipsy</span>
+
+              {/* Voice status pill */}
+              <span
+                className={`ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${getVoiceStatusColor()}`}
+              >
+                {getVoiceStatusLabel()}
+              </span>
             </div>
-            
-            <div className="flex gap-1">
+
+            <div className="flex items-center gap-1">
+              {/* Mic button */}
+              <button
+                className={`
+                  control-button rounded-full p-1.5 transition-colors border border-slate-600
+                  ${
+                    isListening
+                      ? "bg-pink-600 hover:bg-pink-500"
+                      : "bg-slate-800 hover:bg-slate-700"
+                  }
+                `}
+                onClick={handleMicClick}
+                title={
+                  !isSupported
+                    ? "Voice not supported in this browser"
+                    : isListening
+                    ? "Stop listening"
+                    : "Talk to Dipsy"
+                }
+              >
+                {isListening ? (
+                  <MicOff className="w-3.5 h-3.5 text-white" />
+                ) : (
+                  <Mic className="w-3.5 h-3.5 text-pink-300" />
+                )}
+              </button>
+
               {/* Minimize Button */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   toggleMinimize();
                 }}
-                className="control-button hover:bg-emerald-500 rounded p-1 transition-colors"
+                className="control-button hover:bg-slate-800 rounded-full p-1.5 transition-colors"
                 title="Minimize"
               >
-                <Minimize2 className="w-3 h-3 text-white" />
+                <Minimize2 className="w-3.5 h-3.5 text-slate-200" />
               </button>
             </div>
           </div>
@@ -139,7 +239,7 @@ const DipsyFloatingWidget = ({
             </div>
 
             {/* Status Text */}
-            <div className="text-center">
+            <div className="text-center mb-3">
               <p className="text-white text-sm font-medium mb-1">
                 {getStatusText(dipsyState)}
               </p>
@@ -148,33 +248,48 @@ const DipsyFloatingWidget = ({
               </p>
             </div>
 
-            {/* Action Buttons (optional) */}
-            <div className="mt-4 flex gap-2">
-              <button 
+            {/* Latest voice reply (if any) */}
+            {lastTranscript && (
+              <div className="mb-3 rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-200 text-left">
+                <span className="font-semibold text-emerald-300">Dipsy: </span>
+                <span>{lastTranscript}</span>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="mt-2 flex flex-col gap-2">
+              <button
                 onClick={() => {
                   if (onAskDipsy) {
                     onAskDipsy();
                   }
                 }}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs py-2 rounded-lg transition-colors font-medium"
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs py-2 rounded-lg transition-colors font-medium"
               >
                 Ask Dipsy
               </button>
             </div>
+
+            {/* Voice error message (if any) */}
+            {error && (
+              <p className="mt-2 text-[11px] text-red-400 text-center">
+                {error}
+              </p>
+            )}
           </div>
 
           {/* Drag Handle Indicator */}
           <div className="absolute top-1/2 left-2 -translate-y-1/2 flex flex-col gap-0.5 opacity-30 pointer-events-none">
-            <div className="w-1 h-1 bg-white rounded-full"></div>
-            <div className="w-1 h-1 bg-white rounded-full"></div>
-            <div className="w-1 h-1 bg-white rounded-full"></div>
+            <div className="w-1 h-1 bg-white rounded-full" />
+            <div className="w-1 h-1 bg-white rounded-full" />
+            <div className="w-1 h-1 bg-white rounded-full" />
           </div>
         </div>
       )}
 
       {/* Dragging indicator */}
       {isDragging && (
-        <div className="absolute -inset-2 border-2 border-emerald-400 rounded-2xl pointer-events-none animate-pulse"></div>
+        <div className="absolute -inset-2 border-2 border-emerald-400 rounded-2xl pointer-events-none animate-pulse" />
       )}
     </div>
   );
@@ -182,135 +297,38 @@ const DipsyFloatingWidget = ({
 
 // Helper functions for status text
 const getStatusText = (state) => {
-  switch(state) {
-    case 'thinking': return 'Analyzing loads...';
-    case 'confident-victory': return 'Perfect match found!';
-    case 'confident-lightbulb': return 'Great idea!';
-    case 'celebrating': return 'Awesome choice!';
-    case 'learning': return 'Learning from feedback...';
-    default: return 'Ready to help!';
+  switch (state) {
+    case "thinking":
+      return "Analyzing loads...";
+    case "confident-victory":
+      return "Perfect match found!";
+    case "confident-lightbulb":
+      return "Great idea!";
+    case "celebrating":
+      return "Awesome choice!";
+    case "learning":
+      return "Learning from feedback...";
+    default:
+      return "Ready to help!";
   }
 };
 
 const getStatusSubtext = (state) => {
-  switch(state) {
-    case 'thinking': return 'Checking driver availability';
-    case 'confident-victory': return 'High confidence recommendation';
-    case 'confident-lightbulb': return 'Smart suggestion detected';
-    case 'celebrating': return 'Thanks for the feedback!';
-    case 'learning': return 'Improving recommendations';
-    default: return 'Drag me anywhere you like';
+  switch (state) {
+    case "thinking":
+      return "Checking driver availability";
+    case "confident-victory":
+      return "High confidence recommendation";
+    case "confident-lightbulb":
+      return "Smart suggestion detected";
+    case "celebrating":
+      return "Thanks for the feedback!";
+    case "learning":
+      return "Improving recommendations";
+    default:
+      return "Drag me anywhere you like";
   }
 };
 
-// Demo component showing the widget in action
-const DipsyFloatingDemo = () => {
-  const [currentState, setCurrentState] = useState('idle');
-
-  // Auto-cycle states for demo
-  useEffect(() => {
-    const states = ['idle', 'thinking', 'confident-victory', 'confident-lightbulb', 'celebrating', 'learning'];
-    let index = 0;
-    const interval = setInterval(() => {
-      index = (index + 1) % states.length;
-      setCurrentState(states[index]);
-    }, 4000);
-    return () => clearInterval(interval);
-  }, []);
-
-  return (
-    <div className="relative w-full h-screen bg-slate-900">
-      {/* Demo Content */}
-      <div className="p-8">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-3xl font-bold text-white mb-4">
-            Draggable Dipsy Widget Demo
-          </h1>
-          <div className="bg-slate-800 rounded-xl p-6 mb-6">
-            <h2 className="text-xl font-semibold text-white mb-3">Features:</h2>
-            <ul className="space-y-2 text-slate-300">
-              <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
-                <span><strong>Draggable:</strong> Click and drag Dipsy anywhere on screen</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
-                <span><strong>Minimizable:</strong> Collapse to small icon when not needed</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
-                <span><strong>Boundary Detection:</strong> Stays within viewport</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
-                <span><strong>Smooth Animations:</strong> Transitions between all states</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-emerald-400">✓</span>
-                <span><strong>Status Updates:</strong> Shows what Dipsy is doing</span>
-              </li>
-            </ul>
-          </div>
-
-          <div className="bg-slate-800 rounded-xl p-6">
-            <h2 className="text-xl font-semibold text-white mb-3">Current State:</h2>
-            <p className="text-emerald-400 text-lg font-mono">{currentState}</p>
-            
-            <div className="mt-4 flex flex-wrap gap-2">
-              {['idle', 'thinking', 'confident-victory', 'confident-lightbulb', 'celebrating', 'learning'].map(state => (
-                <button
-                  key={state}
-                  onClick={() => setCurrentState(state)}
-                  className={`
-                    px-3 py-1 rounded text-xs font-medium transition-all
-                    ${currentState === state 
-                      ? 'bg-emerald-600 text-white' 
-                      : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                    }
-                  `}
-                >
-                  {state.replace('-', ' ')}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="mt-6 bg-slate-800 rounded-xl p-6">
-            <h2 className="text-xl font-semibold text-white mb-3">Usage in Atlas Command:</h2>
-            <div className="bg-slate-900 p-4 rounded-lg">
-              <code className="text-sm text-cyan-300">
-                {`// Import the floating widget
-import { DipsyFloatingWidget } from './dipsy-floating';
-
-// In your app
-const [dipsyState, setDipsyState] = useState('idle');
-
-// Update state based on actions
-const handleLoadAnalysis = () => {
-  setDipsyState('thinking');
-  // ... after analysis
-  setDipsyState('confident-victory');
-};
-
-// Render
-<DipsyFloatingWidget 
-  initialState={dipsyState}
-  defaultPosition={{ x: 100, y: 100 }}
-/>`}
-              </code>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* The Floating Dipsy Widget */}
-      <DipsyFloatingWidget 
-        initialState={currentState}
-        defaultPosition={{ x: window.innerWidth - 250, y: 100 }}
-      />
-    </div>
-  );
-};
-
-export default DipsyFloatingDemo;
 export { DipsyFloatingWidget };
+export default DipsyFloatingWidget;

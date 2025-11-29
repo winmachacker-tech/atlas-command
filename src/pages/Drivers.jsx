@@ -1,9 +1,14 @@
 ﻿// FILE: src/pages/Drivers.jsx
-// Purpose: Drivers page with org-aware RLS-safe CRUD + Driver Pay Settings.
+// Purpose: Drivers page with org-aware RLS-safe CRUD + Driver Pay Settings + HOS snapshot + HOS simulation controls.
 // - Loads drivers for the current user's active org (from team_members).
 // - Creates drivers with org_id + created_by so RLS "WITH CHECK" passes.
 // - Adds pay configuration for each driver (percent / per-mile / per-load, escrow, advances).
-// - Simple inline table UI (you can enhance styling/columns as needed).
+// - Displays read-only HOS summary (status + remaining drive/shift/cycle) for each driver.
+// - Adds a small HOS Simulation panel (demo-only) that calls Supabase Edge Functions:
+//     • hos-sim-tick       → advance simulated HOS by X minutes
+//     • hos-sim-reset      → reset all drivers to a fresh day
+//     • hos-sim-randomize  → randomize fleet HOS for demo scenarios
+//   These simulations DO NOT use real ELD data; they are purely for demos/testing.
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { supabase } from "../lib/supabase";
@@ -17,6 +22,7 @@ import {
   Search as SearchIcon,
   Loader2,
   AlertTriangle,
+  Shuffle,
 } from "lucide-react";
 
 /* ---------------------------- helpers ---------------------------- */
@@ -40,6 +46,19 @@ function numOrNull(v) {
   if (!s) return null;
   const n = parseFloat(s);
   return Number.isFinite(n) ? n : null;
+}
+
+/* Format minutes -> "Xh Ym" */
+function formatMinutesToHm(min) {
+  if (min == null) return null;
+  const total = Number(min);
+  if (!Number.isFinite(total)) return null;
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  if (hours <= 0 && minutes <= 0) return "0h";
+  if (minutes === 0) return `${hours}h`;
+  if (hours === 0) return `${minutes}m`;
+  return `${hours}h ${minutes}m`;
 }
 
 /* Simple formatter for pay summary in the table (non-edit mode) */
@@ -83,7 +102,27 @@ function formatPaySummary(row) {
   };
 }
 
+/* Format HOS snapshot for display based only on *_min columns */
+function formatHosSummary(row) {
+  const drive = formatMinutesToHm(row.hos_drive_remaining_min);
+  const shift = formatMinutesToHm(row.hos_shift_remaining_min);
+  const cycle = formatMinutesToHm(row.hos_cycle_remaining_min);
+
+  if (!row.hos_status && !drive && !shift && !cycle) {
+    return null;
+  }
+
+  const parts = [];
+  if (drive) parts.push(`Drive ${drive}`);
+  if (shift) parts.push(`Shift ${shift}`);
+  if (cycle) parts.push(`Cycle ${cycle}`);
+
+  return parts.join(" · ");
+}
+
 /* ============================== PAGE ============================== */
+
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
 export default function Drivers() {
   /* --------- base state --------- */
@@ -122,6 +161,11 @@ export default function Drivers() {
 
   const [toastState, setToast] = useState(null);
   const [fatalError, setFatalError] = useState("");
+
+  /* --------- HOS simulation state --------- */
+  const [hosTickMinutes, setHosTickMinutes] = useState(15);
+  const [hosSimRunning, setHosSimRunning] = useState(false);
+  const [hosSimLastSummary, setHosSimLastSummary] = useState(null);
 
   /* --------- derive visible rows --------- */
   const visibleDrivers = useMemo(() => {
@@ -243,6 +287,13 @@ export default function Drivers() {
               escrow_percent,
               advance_limit,
               pay_notes,
+              hos_drive_remaining_min,
+              hos_shift_remaining_min,
+              hos_cycle_remaining_min,
+              hos_on_duty_today_min,
+              hos_drive_today_min,
+              hos_status,
+              hos_last_synced_at,
               created_by,
               created_at,
               updated_at
@@ -267,6 +318,118 @@ export default function Drivers() {
     },
     [orgId]
   );
+
+  /* ====================== HOS SIM HELPERS ====================== */
+
+  /**
+   * Call a HOS simulation Edge Function (demo-only).
+   * - endpoint: "hos-sim-tick" | "hos-sim-reset" | "hos-sim-randomize"
+   * - body: JSON payload (e.g., { tick_minutes: 15 })
+   *
+   * Uses the current user's access_token from Supabase Auth and NEVER bypasses RLS.
+   * This is strictly simulation UI, not real ELD/telematics data.
+   */
+  async function callHosSimFunction(endpoint, body = {}) {
+    if (!SUPABASE_URL) {
+      toast(
+        setToast,
+        "error",
+        "Missing VITE_SUPABASE_URL. Check your environment config."
+      );
+      return;
+    }
+
+    try {
+      setHosSimRunning(true);
+
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError) throw sessionError;
+      if (!session?.access_token) {
+        throw new Error("No active auth session. Please log in again.");
+      }
+
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/${endpoint}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify(body || {}),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Edge function error (${res.status}): ${text}`);
+      }
+
+      const json = await res.json();
+
+      if (!json.ok) {
+        throw new Error(json.error || "Simulation function returned an error.");
+      }
+
+      // Save last summary so we can show it in the panel
+      setHosSimLastSummary({
+        type: endpoint,
+        ...json,
+      });
+
+      // Reload drivers so the HOS chips pick up new values
+      await loadDrivers();
+
+      if (endpoint === "hos-sim-tick") {
+        toast(
+          setToast,
+          "success",
+          `Advanced HOS by ${json.tick_minutes} minutes for ${json.updated} drivers.`
+        );
+      } else if (endpoint === "hos-sim-reset") {
+        toast(
+          setToast,
+          "success",
+          `Reset HOS for ${json.updated} of ${json.total_drivers} drivers (fresh day).`
+        );
+      } else if (endpoint === "hos-sim-randomize") {
+        toast(
+          setToast,
+          "success",
+          `Randomized HOS for ${json.updated} of ${json.total_drivers} drivers.`
+        );
+      } else {
+        toast(setToast, "success", "HOS simulation updated.");
+      }
+    } catch (err) {
+      console.error("[Drivers] HOS sim error:", err);
+      toast(
+        setToast,
+        "error",
+        err?.message || "Failed to run HOS simulation function."
+      );
+    } finally {
+      setHosSimRunning(false);
+    }
+  }
+
+  async function handleAdvanceHos() {
+    await callHosSimFunction("hos-sim-tick", {
+      tick_minutes: hosTickMinutes,
+    });
+  }
+
+  async function handleResetHos() {
+    await callHosSimFunction("hos-sim-reset", {});
+  }
+
+  async function handleRandomizeHos() {
+    // NOTE: This expects a deployed Edge Function at:
+    // supabase/functions/hos-sim-randomize/index.ts
+    // If it does not exist yet, this will return an error toast.
+    await callHosSimFunction("hos-sim-randomize", {});
+  }
 
   /* ====================== CREATE DRIVER ====================== */
 
@@ -338,6 +501,13 @@ export default function Drivers() {
             escrow_percent,
             advance_limit,
             pay_notes,
+            hos_drive_remaining_min,
+            hos_shift_remaining_min,
+            hos_cycle_remaining_min,
+            hos_on_duty_today_min,
+            hos_drive_today_min,
+            hos_status,
+            hos_last_synced_at,
             created_by,
             created_at,
             updated_at
@@ -463,6 +633,13 @@ export default function Drivers() {
             escrow_percent,
             advance_limit,
             pay_notes,
+            hos_drive_remaining_min,
+            hos_shift_remaining_min,
+            hos_cycle_remaining_min,
+            hos_on_duty_today_min,
+            hos_drive_today_min,
+            hos_status,
+            hos_last_synced_at,
             created_by,
             created_at,
             updated_at
@@ -602,7 +779,8 @@ export default function Drivers() {
           <h1 className="text-lg font-semibold text-slate-100">Drivers</h1>
           <p className="text-xs text-slate-400">
             Org-scoped list of drivers. All actions respect Row Level
-            Security.
+            Security. HOS data is read-only and maintained by Atlas
+            integrations/simulators.
           </p>
         </div>
 
@@ -617,10 +795,7 @@ export default function Drivers() {
             )}
           >
             <RefreshCw
-              className={cx(
-                "w-3.5 h-3.5",
-                refreshing && "animate-spin"
-              )}
+              className={cx("w-3.5 h-3.5", refreshing && "animate-spin")}
             />
             <span>Refresh</span>
           </button>
@@ -641,6 +816,135 @@ export default function Drivers() {
             )}
             <span>New driver</span>
           </button>
+        </div>
+      </div>
+
+      {/* HOS Simulation Panel (Demo-only) */}
+      <div className="flex justify-end">
+        <div className="w-full max-w-xl rounded-xl border border-slate-700/80 bg-slate-950/80 px-3 py-2 text-[11px] text-slate-200">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-col">
+              <span className="font-medium text-slate-100">
+                HOS Simulation (Demo-only)
+              </span>
+              <span className="text-[10px] text-slate-400">
+                Advance or randomize Hours of Service for this org&apos;s
+                drivers. This is simulated data only – it does NOT affect real
+                ELD/telematics systems.
+              </span>
+            </div>
+            {hosSimRunning && (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+            )}
+          </div>
+
+          {/* Tick controls + Advance */}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span className="text-[10px] text-slate-400 mr-1">
+              Tick size:
+            </span>
+            {[5, 15, 30, 60].map((min) => (
+              <button
+                key={min}
+                type="button"
+                onClick={() => setHosTickMinutes(min)}
+                className={cx(
+                  "rounded-full px-2 py-0.5 text-[10px] border",
+                  hosTickMinutes === min
+                    ? "border-emerald-500/70 bg-emerald-500/10 text-emerald-100"
+                    : "border-slate-700 bg-slate-900/80 text-slate-200 hover:bg-slate-800"
+                )}
+              >
+                +{min}m
+              </button>
+            ))}
+
+            <button
+              type="button"
+              onClick={handleAdvanceHos}
+              disabled={hosSimRunning || !orgId}
+              className={cx(
+                "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-0.5 text-[10px] font-medium",
+                "border-emerald-500/60 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20",
+                (hosSimRunning || !orgId) && "opacity-60 cursor-not-allowed"
+              )}
+            >
+              {hosSimRunning ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <RefreshCw className="w-3 h-3" />
+              )}
+              <span>Advance HOS</span>
+            </button>
+          </div>
+
+          {/* Scenario buttons */}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleResetHos}
+              disabled={hosSimRunning || !orgId}
+              className={cx(
+                "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-0.5 text-[10px] font-medium",
+                "border-slate-500/70 bg-slate-900/80 text-slate-100 hover:bg-slate-800",
+                (hosSimRunning || !orgId) && "opacity-60 cursor-not-allowed"
+              )}
+            >
+              <RefreshCw className="w-3 h-3" />
+              <span>Reset HOS – Fresh Day</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleRandomizeHos}
+              disabled={hosSimRunning || !orgId}
+              className={cx(
+                "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-0.5 text-[10px] font-medium",
+                "border-purple-500/70 bg-purple-500/10 text-purple-100 hover:bg-purple-500/20",
+                (hosSimRunning || !orgId) && "opacity-60 cursor-not-allowed"
+              )}
+            >
+              <Shuffle className="w-3 h-3" />
+              <span>Randomize Fleet HOS</span>
+            </button>
+          </div>
+
+          {/* Last sim summary */}
+          {hosSimLastSummary && (
+            <div className="mt-2 text-[10px] text-slate-400">
+              {(() => {
+                const {
+                  type,
+                  total_drivers,
+                  simulatable_drivers,
+                  updated,
+                  tick_minutes,
+                  scenario,
+                } = hosSimLastSummary;
+
+                if (type === "hos-sim-tick") {
+                  const baseTotal =
+                    simulatable_drivers ?? total_drivers ?? updated ?? 0;
+                  return `Last: advanced ${tick_minutes} minutes, updated ${updated ?? 0} of ${
+                    baseTotal
+                  } drivers.`;
+                }
+                if (type === "hos-sim-reset") {
+                  return `Last: reset HOS for ${updated ?? 0} of ${
+                    total_drivers ?? 0
+                  } drivers (fresh day).`;
+                }
+                if (type === "hos-sim-randomize") {
+                  return `Last: randomized HOS for ${updated ?? 0} of ${
+                    total_drivers ?? 0
+                  } drivers${
+                    scenario ? ` (${scenario})` : ""
+                  }.`;
+                }
+                return null;
+              })()}
+            </div>
+          )}
         </div>
       </div>
 
@@ -803,6 +1107,7 @@ export default function Drivers() {
               <th className="px-3 py-2 text-left">Phone</th>
               <th className="px-3 py-2 text-left">License</th>
               <th className="px-3 py-2 text-left">Pay</th>
+              <th className="px-3 py-2 text-left">HOS</th>
               <th className="px-3 py-2 text-left">Status</th>
               <th className="px-3 py-2 text-left w-12"></th>
             </tr>
@@ -811,7 +1116,7 @@ export default function Drivers() {
             {visibleDrivers.length === 0 ? (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={8}
                   className="px-3 py-4 text-center text-slate-500"
                 >
                   No drivers found.
@@ -821,6 +1126,7 @@ export default function Drivers() {
               visibleDrivers.map((row) => {
                 const isEditing = editingId === row.id;
                 const paySummary = formatPaySummary(row);
+                const hosSummary = formatHosSummary(row);
 
                 return (
                   <tr
@@ -1035,6 +1341,47 @@ export default function Drivers() {
                             </span>
                           )}
                         </div>
+                      )}
+                    </td>
+
+                    {/* HOS (read-only) */}
+                    <td className="px-3 py-1.5 align-top">
+                      {hosSummary ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span
+                            className={cx(
+                              "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium border",
+                              row.hos_status === "DRIVING"
+                                ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-100"
+                                : row.hos_status === "ON_DUTY"
+                                ? "border-amber-500/60 bg-amber-500/10 text-amber-100"
+                                : row.hos_status === "OFF_DUTY" ||
+                                  row.hos_status === "RESTING"
+                                ? "border-slate-500/60 bg-slate-700/30 text-slate-100"
+                                : "border-slate-600/60 bg-slate-800/40 text-slate-100"
+                            )}
+                          >
+                            {row.hos_status || "HOS"}
+                          </span>
+                          <span className="text-[10px] text-slate-300">
+                            {hosSummary}
+                          </span>
+                          {row.hos_last_synced_at && (
+                            <span className="text-[9px] text-slate-500">
+                              Updated{" "}
+                              {new Date(
+                                row.hos_last_synced_at
+                              ).toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-[11px] text-slate-500">
+                          No HOS
+                        </span>
                       )}
                     </td>
 

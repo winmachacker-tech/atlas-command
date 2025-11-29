@@ -1,8 +1,15 @@
 ﻿// FILE: src/pages/Signup.jsx
-// Purpose: Invite-only signup for Atlas Command (Option 2)
-// - Requires an invite code (validated via rpc_use_invite_token)
-// - Collects: Full name, company name, email, password, confirm password
-// - Creates Supabase auth user with metadata (full_name, company_name)
+// Purpose: Invite-only signup using the new invite-validate Edge Function
+// Flow:
+// 1) User enters an invite code
+// 2) We call the Edge Function via supabase.functions.invoke
+// 3) If valid → returns org_id
+// 4) Create Supabase Auth user with metadata
+//
+// SECURITY:
+// - No service-role key on frontend
+// - Supabase client sends anon JWT automatically
+// - Edge Function runs fully server-side
 
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -65,26 +72,42 @@ export default function SignupPage() {
 
     try {
       setIsSubmitting(true);
-      console.log("🎟️ Validating invite code:", inviteCode);
 
-      // 1) Validate + consume invite code via RPC
-      const { data: invite, error: inviteError } = await supabase.rpc(
-        "rpc_use_invite_token",
-        {
-          p_token: inviteCode,
-          p_email: email,
-        }
-      );
+      console.log("🎟️ Validating invite via Edge Function (invoke):", inviteCode);
+
+      //
+      // STEP 1 — Validate invite code via supabase.functions.invoke
+      //
+      const {
+        data: invite,
+        error: inviteError,
+      } = await supabase.functions.invoke("invite-validate", {
+        body: {
+          code: inviteCode.trim(),
+        },
+      });
+
+      console.log("ℹ️ invite-validate response:", { invite, inviteError });
 
       if (inviteError) {
-        console.error("💥 Invite validation error:", inviteError);
-        setFormError(inviteError.message || "Invalid invite code.");
+        console.error("💥 invite-validate error:", inviteError);
+        setFormError(
+          inviteError.message || "Error validating invite code. Please try again."
+        );
         return;
       }
 
-      console.log("✅ Invite valid:", invite);
+      if (!invite || !invite.success) {
+        setFormError(invite?.error || "Invalid invite code.");
+        return;
+      }
 
-      // 2) Proceed with signup
+      const orgId = invite.org_id;
+      console.log("✅ Invite valid. org_id:", orgId);
+
+      //
+      // STEP 2 — Create Supabase Auth user
+      //
       console.log("📧 Calling supabase.auth.signUp with:", email);
 
       const { data, error } = await supabase.auth.signUp({
@@ -93,11 +116,10 @@ export default function SignupPage() {
         options: {
           data: {
             full_name: fullName,
-            company_name: companyName || invite?.org_name || null,
-            invite_token_used: inviteCode, // handy to see later in auth metadata
+            company_name: companyName || null,
+            invite_code_used: inviteCode.trim().toUpperCase(),
+            invited_org_id: orgId,
           },
-          // If you use email confirmation, Supabase will send an email automatically
-          // emailRedirectTo: `${window.location.origin}/auth/callback`,
         },
       });
 
@@ -110,7 +132,7 @@ export default function SignupPage() {
       console.log("✅ Supabase signup success:", data);
 
       setFormMessage(
-        "Signup successful! If email confirmation is enabled, please check your inbox. Redirecting to login..."
+        "Signup successful! Please check your email to confirm your account. Redirecting..."
       );
 
       setTimeout(() => {
@@ -134,7 +156,7 @@ export default function SignupPage() {
             Join Atlas Command (Invite Only)
           </h1>
           <p className="text-sm text-slate-400">
-            You&apos;ll need an invite code from Mark to create an account.
+            Enter your invite code to create your account.
           </p>
         </div>
 
@@ -197,7 +219,7 @@ export default function SignupPage() {
               </div>
             </div>
 
-            {/* Company / Fleet name (optional) */}
+            {/* Company */}
             <div className="space-y-1">
               <label className="text-sm font-medium text-slate-200">
                 Company / Fleet name{" "}
@@ -260,7 +282,7 @@ export default function SignupPage() {
               </div>
             </div>
 
-            {/* Confirm password */}
+            {/* Confirm Password */}
             <div className="space-y-1">
               <label className="text-sm font-medium text-slate-200">
                 Confirm password

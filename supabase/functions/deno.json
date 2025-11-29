@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "motive-sync-locations": {
+      "verify_jwt": false
+    }
+  }
+}

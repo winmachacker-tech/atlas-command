@@ -19,14 +19,19 @@
 //  - Only ORG OWNER / ADMIN can see and change toggles
 //  - Nobody can flip their OWN toggle from this page
 //
-// Admin controls per member (all enforced server-side):
-//  - Role change dropdown (owner/admin/member) via RPC rpc_admin_set_member_role
-//  - Enable / disable user via RPC rpc_admin_set_member_status
-//  - Resend invite via Edge Function admin-invite-user
-//  - Remove from organization via RPC rpc_admin_delete_member
-//  - All permission checks and org-scoping are enforced INSIDE those RPCs / functions
+// Extended: Org-level feature flags
+//  - Reads from public.feature_flags (feature catalog)
+//  - Reads/writes public.org_features (per-org enabled/disabled)
+//  - Only ORG OWNER / ADMIN can change switches on this page
+//  - RLS and current_org_id() still enforce org isolation on the backend
+//
+// Extended: Org switcher pill (top-right snapshot)
+//  - Reads current org via public.current_org_id()
+//  - Loads all orgs (RLS-scoped) from public.orgs
+//  - Calls rpc_set_active_org(p_org_id) when user picks a different org
+//  - Backend enforces that user must belong to that org or be a super admin
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
   Users,
@@ -38,6 +43,8 @@ import {
   AlertTriangle,
   Bot,
   Trash2,
+  Building2,
+  ChevronDown,
 } from "lucide-react";
 
 export default function TeamManagementPage() {
@@ -59,27 +66,62 @@ export default function TeamManagementPage() {
   const [resendInviteId, setResendInviteId] = useState(null);
   const [deleteMemberId, setDeleteMemberId] = useState(null);
 
-  // Current logged-in user (Supabase auth user_id)
+  // Current logged-in user (Supabase auth user_id + email)
   const [currentUserId, setCurrentUserId] = useState(null);
+  const [currentUserEmail, setCurrentUserEmail] = useState(null);
 
-  // Load current user + team members on mount
+  // Current org_id (derived from team_members rows for this org)
+  const [orgId, setOrgId] = useState(null);
+
+  // Org-level feature flag data
+  const [featureFlags, setFeatureFlags] = useState([]); // from feature_flags
+  const [orgFeatures, setOrgFeatures] = useState([]); // from org_features for this org
+  const [orgFeaturesLoading, setOrgFeaturesLoading] = useState(false);
+  const [orgFeatureSavingKey, setOrgFeatureSavingKey] = useState(null);
+
+  // Collapsible state
+  const [orgFeaturesCollapsed, setOrgFeaturesCollapsed] = useState(false);
+  const [membersCollapsed, setMembersCollapsed] = useState(false);
+
+  // -------- Org switcher state (for the pill at the top) --------
+  const [orgs, setOrgs] = useState([]); // all orgs this user can see (RLS-backed)
+  const [currentOrgId, setCurrentOrgId] = useState(null); // from current_org_id()
+  const [orgsLoading, setOrgsLoading] = useState(true);
+  const [orgSwitchingId, setOrgSwitchingId] = useState(null);
+  const [orgDropdownOpen, setOrgDropdownOpen] = useState(false);
+  const orgDropdownRef = useRef(null);
+
+  // -------------------------------------------------------------------
+  // Load current user, members, and org list on mount
+  // -------------------------------------------------------------------
   useEffect(() => {
+    let cancelled = false;
+
     async function init() {
       try {
         const { data, error } = await supabase.auth.getUser();
         if (error) {
           console.error("[TeamManagement] getUser error:", error);
-        } else {
-          setCurrentUserId(data?.user?.id || null);
+        } else if (!cancelled) {
+          const user = data?.user;
+          setCurrentUserId(user?.id || null);
+          setCurrentUserEmail(user?.email || null);
         }
       } catch (e) {
         console.error("[TeamManagement] getUser unexpected error:", e);
       } finally {
-        // Regardless of auth user fetch result, load members
-        fetchMembers();
+        if (!cancelled) {
+          fetchMembers();
+          fetchOrgs();
+        }
       }
     }
+
     init();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -118,6 +160,11 @@ export default function TeamManagementPage() {
       }
 
       setMembers(data || []);
+
+      // Derive org_id (all rows are scoped to same org by RLS)
+      if (data && data.length > 0 && !orgId) {
+        setOrgId(data[0].org_id || null);
+      }
     } catch (e) {
       console.error("[TeamManagement] fetchMembers unexpected error:", e);
       setMessage({
@@ -126,6 +173,254 @@ export default function TeamManagementPage() {
       });
     } finally {
       setLoadingMembers(false);
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Load org list + current org id for the org switcher pill
+  // -------------------------------------------------------------------
+  async function fetchOrgs() {
+    try {
+      setOrgsLoading(true);
+
+      // 1) Ask the backend which org is currently active for this user
+      const { data: activeOrgId, error: activeErr } = await supabase.rpc(
+        "current_org_id",
+        {}
+      );
+
+      if (activeErr) {
+        console.error(
+          "[TeamManagement] fetchOrgs current_org_id error:",
+          activeErr
+        );
+      } else {
+        setCurrentOrgId(activeOrgId || null);
+      }
+
+      // 2) Load all orgs the user can see (RLS handles scoping).
+      // We select "*" so we get any billing fields the Stripe webhook writes
+      // (billing_plan, billing_status, etc.) without guessing column names.
+      const { data: orgRows, error: orgErr } = await supabase
+        .from("orgs")
+        .select("*")
+        .order("name", { ascending: true });
+
+      if (orgErr) {
+        console.error("[TeamManagement] fetchOrgs orgs error:", orgErr);
+        return;
+      }
+
+      setOrgs(orgRows || []);
+    } catch (e) {
+      console.error("[TeamManagement] fetchOrgs unexpected error:", e);
+    } finally {
+      setOrgsLoading(false);
+    }
+  }
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (!orgDropdownRef.current) return;
+      if (!orgDropdownRef.current.contains(e.target)) {
+        setOrgDropdownOpen(false);
+      }
+    }
+
+    if (orgDropdownOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [orgDropdownOpen]);
+
+  const currentOrg = useMemo(
+    () => orgs.find((o) => o.id === currentOrgId) || null,
+    [orgs, currentOrgId]
+  );
+
+  // Only Mark's main account should ever see the full org list.
+  // Everyone else is restricted to their CURRENT org only in this UI.
+  const isMarkPlatformOwner = useMemo(() => {
+    if (!currentUserEmail) return false;
+    return currentUserEmail.toLowerCase() === "mtishkun@hotmail.com";
+  }, [currentUserEmail]);
+
+  const displayOrgs = useMemo(() => {
+    // Mark (platform owner) keeps the full global list for admin work
+    if (isMarkPlatformOwner) {
+      return orgs || [];
+    }
+
+    // For all other users, only show their CURRENT org in the UI,
+    // even if the backend returns more rows.
+    if (!currentOrgId) {
+      return currentOrg ? [currentOrg] : [];
+    }
+    return (orgs || []).filter((o) => o.id === currentOrgId);
+  }, [isMarkPlatformOwner, orgs, currentOrgId, currentOrg]);
+
+  // Human-friendly plan label using Stripe-driven fields on the org row.
+  const planDisplay = useMemo(() => {
+    if (!currentOrg) {
+      return orgsLoading ? "Loading…" : "Unknown";
+    }
+
+    // Try common plan fields you may have from the Stripe webhook.
+    const rawPlan =
+      currentOrg.billing_plan ||
+      currentOrg.plan_name ||
+      currentOrg.plan ||
+      currentOrg.tier ||
+      currentOrg.subscription_plan ||
+      null;
+
+    // Try common status fields (Stripe subscription status).
+    const rawStatus =
+      (currentOrg.billing_status ||
+        currentOrg.subscription_status ||
+        "") + "";
+    const status = rawStatus.toLowerCase();
+
+    const prettyStatus = (() => {
+      if (!status) return "";
+      if (status === "trialing") return "Trial";
+      if (status === "active") return "Active";
+      if (status === "past_due") return "Past due";
+      if (status === "canceled" || status === "cancelled") return "Canceled";
+      if (status === "incomplete" || status === "incomplete_expired")
+        return "Incomplete";
+      if (status === "unpaid") return "Unpaid";
+      return status.charAt(0).toUpperCase() + status.slice(1);
+    })();
+
+    if (rawPlan) {
+      // If we know the plan and the status is something other than "Active",
+      // show both. Example: "Growth (Trial)" or "Starter (Past due)".
+      if (prettyStatus && prettyStatus !== "Active") {
+        return `${rawPlan} (${prettyStatus})`;
+      }
+      return rawPlan;
+    }
+
+    // No explicit plan, but we know the status (e.g., trialing).
+    if (prettyStatus) {
+      return prettyStatus;
+    }
+
+    // Nothing from Stripe yet.
+    return "Unknown";
+  }, [currentOrg, orgsLoading]);
+
+  const membersCount = members.length || 0;
+
+  async function handleSwitchOrg(targetOrgId) {
+    // If user is not Mark, don't allow switching via this UI at all.
+    if (!isMarkPlatformOwner) {
+      setOrgDropdownOpen(false);
+      return;
+    }
+
+    if (!targetOrgId || targetOrgId === currentOrgId) {
+      setOrgDropdownOpen(false);
+      return;
+    }
+
+    try {
+      setOrgSwitchingId(targetOrgId);
+      setMessage(null);
+
+      // Use secure backend RPC that checks membership and updates user_active_org
+      const { data, error } = await supabase.rpc("rpc_set_active_org", {
+        p_org_id: targetOrgId,
+      });
+
+      if (error) {
+        console.error("[TeamManagement] rpc_set_active_org error:", error);
+        setMessage({
+          type: "error",
+          text:
+            error.message ||
+            "Could not switch organizations. You may not have access to that org.",
+        });
+        return;
+      }
+
+      // rpc_set_active_org returns a table (org_id uuid)
+      const newOrgId =
+        Array.isArray(data) && data.length > 0 && data[0]?.org_id
+          ? data[0].org_id
+          : targetOrgId;
+
+      // Update local state then hard-refresh so RLS data (loads, drivers, etc.)
+      // is re-queried under the new org.
+      setCurrentOrgId(newOrgId);
+      setOrgDropdownOpen(false);
+
+      // Full reload keeps everything honest with RLS + caches.
+      window.location.reload();
+    } catch (e) {
+      console.error("[TeamManagement] handleSwitchOrg unexpected error:", e);
+      setMessage({
+        type: "error",
+        text:
+          e?.message ||
+          "Unexpected error while switching organizations. Please try again.",
+      });
+    } finally {
+      setOrgSwitchingId(null);
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Org-level features
+  // -------------------------------------------------------------------
+  useEffect(() => {
+    if (!orgId) return;
+    fetchOrgFeatures();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId]);
+
+  async function fetchOrgFeatures() {
+    try {
+      setOrgFeaturesLoading(true);
+
+      // 1) Load the feature catalog (global)
+      const { data: flags, error: flagsError } = await supabase
+        .from("feature_flags")
+        .select("key, name, description, min_plan")
+        .order("name", { ascending: true });
+
+      if (flagsError) {
+        console.error(
+          "[TeamManagement] fetchOrgFeatures feature_flags error:",
+          flagsError
+        );
+        setOrgFeaturesLoading(false);
+        return;
+      }
+
+      // 2) Load this org's overrides
+      const { data: orgRows, error: orgError } = await supabase
+        .from("org_features")
+        .select("feature_key, enabled, settings")
+        .eq("org_id", orgId);
+
+      if (orgError) {
+        console.error(
+          "[TeamManagement] fetchOrgFeatures org_features error:",
+          orgError
+        );
+        setOrgFeaturesLoading(false);
+        return;
+      }
+
+      setFeatureFlags(flags || []);
+      setOrgFeatures(orgRows || []);
+    } catch (e) {
+      console.error("[TeamManagement] fetchOrgFeatures unexpected error:", e);
+    } finally {
+      setOrgFeaturesLoading(false);
     }
   }
 
@@ -173,12 +468,6 @@ export default function TeamManagementPage() {
         return;
       }
 
-      console.log(
-        "[TeamManagement] rpc_invite_existing_user_to_org result:",
-        rpcData
-      );
-
-      // rpcData is a team_members row; we can look at its status if it exists
       const statusFromRpc = (rpcData?.status || "").toLowerCase();
       const orgIdFromRpc = rpcData?.org_id;
 
@@ -234,7 +523,6 @@ export default function TeamManagementPage() {
         fnData
       );
 
-      // Friendly success message based on membership status
       if (statusFromRpc === "pending_user" || statusFromRpc === "invited") {
         setMessage({
           type: "success",
@@ -306,11 +594,28 @@ export default function TeamManagementPage() {
   const canManageFeatures =
     currentRole === "owner" || currentRole === "admin";
 
+  // Merge global feature catalog + org overrides into one array for the UI
+  const mergedOrgFeatures = useMemo(() => {
+    if (!featureFlags || featureFlags.length === 0) return [];
+    return featureFlags.map((flag) => {
+      const override = orgFeatures.find(
+        (of) => of.feature_key === flag.key
+      );
+      const enabled = override?.enabled ?? true; // default to enabled if no row yet
+      return {
+        key: flag.key,
+        name: flag.name,
+        description: flag.description,
+        min_plan: flag.min_plan,
+        enabled,
+      };
+    });
+  }, [featureFlags, orgFeatures]);
+
   // Toggle AI Recommendations feature for a member
   async function handleToggleAiRecommendations(member, nextValue) {
     const { id, email } = member;
 
-    // Guard: only allow if we already decided this row is toggle-able
     if (!canManageFeatures) return;
     if (member.user_id && currentUserId && member.user_id === currentUserId) {
       // No self-toggling from this page
@@ -339,7 +644,6 @@ export default function TeamManagementPage() {
         return;
       }
 
-      // On success, just refresh members (keeps UI honest with DB)
       await fetchMembers();
     } catch (e) {
       console.error(
@@ -356,6 +660,62 @@ export default function TeamManagementPage() {
       });
     } finally {
       setFeatureUpdatingId(null);
+    }
+  }
+
+  // Toggle an org-level feature flag via org_features
+  async function handleToggleOrgFeature(featureKey, nextEnabled) {
+    if (!canManageFeatures) return;
+    if (!orgId) return;
+
+    try {
+      setOrgFeatureSavingKey(featureKey);
+
+      const { error } = await supabase
+        .from("org_features")
+        .upsert(
+          {
+            org_id: orgId,
+            feature_key: featureKey,
+            enabled: nextEnabled,
+          },
+          {
+            onConflict: "org_id,feature_key",
+          }
+        );
+
+      if (error) {
+        console.error(
+          "[TeamManagement] handleToggleOrgFeature upsert error:",
+          error
+        );
+        setMessage({
+          type: "error",
+          text:
+            error.message ||
+            "Could not update this feature toggle. Please try again.",
+        });
+        return;
+      }
+
+      await fetchOrgFeatures();
+      setMessage({
+        type: "success",
+        text: "Feature settings updated for this organization.",
+      });
+    } catch (e) {
+      console.error(
+        "[TeamManagement] handleToggleOrgFeature unexpected error:",
+        e
+      );
+      setMessage({
+        type: "error",
+        text:
+          e?.message ||
+          "Unexpected error while updating feature settings. Please try again.",
+      });
+    } finally {
+      setOrgFeatureSavingKey(null);
     }
   }
 
@@ -417,7 +777,6 @@ export default function TeamManagementPage() {
   async function handleToggleMemberStatus(member) {
     if (!canManageFeatures) return;
 
-    // Never allow disabling your own account from this page
     if (member.user_id && currentUserId && member.user_id === currentUserId) {
       return;
     }
@@ -435,7 +794,10 @@ export default function TeamManagementPage() {
       });
 
       if (error) {
-        console.error("[TeamManagement] rpc_admin_set_member_status error:", error);
+        console.error(
+          "[TeamManagement] rpc_admin_set_member_status error:",
+          error
+        );
         setMessage({
           type: "error",
           text:
@@ -555,7 +917,6 @@ export default function TeamManagementPage() {
   async function handleRemoveFromOrganization(member) {
     if (!canManageFeatures) return;
 
-    // Never allow removing your own membership from this page
     if (member.user_id && currentUserId && member.user_id === currentUserId) {
       return;
     }
@@ -611,26 +972,166 @@ export default function TeamManagementPage() {
     }
   }
 
+  // -------------------------------------------------------------------
+  // Render
+  // -------------------------------------------------------------------
   return (
     <div className="p-4 md:p-6 lg:p-8">
-      <div className="max-w-5xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <Users className="w-6 h-6 text-sky-500" />
-              <h1 className="text-xl md:text-2xl font-semibold text-slate-900 dark:text-slate-50">
-                Team &amp; Organization
-              </h1>
+      <div className="max-w-6xl mx-auto space-y-6">
+        {/* Top header: Team card + Org snapshot with switcher pill */}
+        <div className="grid gap-4 md:grid-cols-[minmax(0,1.7fr),minmax(0,1.1fr)]">
+          {/* Team & Organization summary */}
+          <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-2xl shadow-sm p-4 md:p-5 flex items-start gap-3">
+            <div className="mt-1">
+              <Users className="w-6 h-6 text-emerald-500" />
             </div>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Manage who has access to this Atlas organization, control feature
-              access, and send invites directly from here.
-            </p>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <h1 className="text-lg md:text-xl font-semibold text-slate-900 dark:text-slate-50">
+                  Team &amp; Organization
+                </h1>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-200 dark:border-emerald-700/60">
+                  Admin controls
+                </span>
+              </div>
+              {/* Increased contrast here */}
+              <p className="text-xs md:text-sm text-slate-700 dark:text-slate-200 max-w-xl">
+                Manage members and features for{" "}
+                <span className="font-medium text-slate-900 dark:text-slate-50">
+                  this organization
+                </span>
+                . To manage another org, use the org switcher on the right.
+              </p>
+              {/* Increased contrast here */}
+              <div className="flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300">
+                <Shield className="w-3.5 h-3.5" />
+                <span>Access is enforced per org with Row Level Security.</span>
+              </div>
+            </div>
           </div>
-          <div className="hidden md:flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-            <Shield className="w-4 h-4" />
-            <span>Org-scoped access via RLS</span>
+
+          {/* Org snapshot + org switcher pill */}
+          <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-2xl shadow-sm p-4 md:p-5 flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Building2 className="w-5 h-5 text-sky-500" />
+                <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+                  Org snapshot
+                </span>
+              </div>
+              <span className="text-[10px] uppercase tracking-wide text-slate-400">
+                RLS enforced per org
+              </span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              {/* Org selector pill */}
+              <div className="col-span-2" ref={orgDropdownRef}>
+                <div className="text-[10px] mb-1 text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                  Org
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    isMarkPlatformOwner &&
+                    displayOrgs.length > 1 &&
+                    !orgsLoading
+                      ? setOrgDropdownOpen((s) => !s)
+                      : null
+                  }
+                  disabled={
+                    orgsLoading ||
+                    displayOrgs.length <= 1 ||
+                    !isMarkPlatformOwner
+                  }
+                  className={`w-full inline-flex items-center justify-between gap-2 px-3 py-1.5 rounded-full border text-xs ${
+                    orgsLoading ||
+                    displayOrgs.length <= 1 ||
+                    !isMarkPlatformOwner
+                      ? "bg-slate-100 text-slate-500 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700 cursor-default"
+                      : "bg-slate-900 text-slate-50 border-slate-900 dark:bg-slate-50 dark:text-slate-900 dark:border-slate-50 hover:opacity-90 transition"
+                  }`}
+                >
+                  <span className="truncate">
+                    {currentOrg?.name ||
+                      (orgsLoading ? "Loading…" : "Current org")}
+                  </span>
+                  {orgsLoading ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : isMarkPlatformOwner && displayOrgs.length > 1 ? (
+                    <ChevronDown
+                      className={`w-3 h-3 ${
+                        orgDropdownOpen ? "rotate-180" : ""
+                      } transition-transform`}
+                    />
+                  ) : null}
+                </button>
+
+                {/* Dropdown list of orgs (only ever for Mark) */}
+                {orgDropdownOpen &&
+                  isMarkPlatformOwner &&
+                  displayOrgs.length > 1 && (
+                    <div className="mt-2 w-full max-h-64 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg text-xs z-20 relative">
+                      {displayOrgs.map((org) => {
+                        const isActive = org.id === currentOrgId;
+                        const isSwitching = orgSwitchingId === org.id;
+                        return (
+                          <button
+                            key={org.id}
+                            type="button"
+                            disabled={isSwitching}
+                            onClick={() => handleSwitchOrg(org.id)}
+                            className={`w-full px-3 py-2 flex items-center justify-between gap-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800 ${
+                              isActive
+                                ? "bg-slate-100 dark:bg-slate-800/70 font-medium"
+                                : ""
+                            }`}
+                          >
+                            <span className="truncate">
+                              {org.name || "Unnamed org"}
+                            </span>
+                            <div className="flex items-center gap-1">
+                              {isSwitching && (
+                                <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
+                              )}
+                              {isActive && !isSwitching && (
+                                <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+              </div>
+
+              {/* Plan + members summary */}
+              <div className="flex flex-col gap-2 text-[11px]">
+                <div>
+                  <div className="text-[10px] mb-1 text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                    Plan
+                  </div>
+                  <div className="inline-flex items-center px-2 py-1 rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 text-slate-700 dark:text-slate-200">
+                    <span className="truncate">{planDisplay}</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] mb-1 text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                    Members
+                  </div>
+                  <div className="inline-flex items-center px-2 py-1 rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 text-slate-700 dark:text-slate-200">
+                    <span>{membersCount}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {isMarkPlatformOwner && displayOrgs.length > 1 && (
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Switch orgs from here. You’ll only see orgs you belong to, and
+                all access is still enforced by backend permissions.
+              </p>
+            )}
           </div>
         </div>
 
@@ -649,6 +1150,96 @@ export default function TeamManagementPage() {
               <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
             )}
             <div>{message.text}</div>
+          </div>
+        )}
+
+        {/* Org-level Feature Flags (owner/admin only) */}
+        {canManageFeatures && (
+          <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-xl shadow-sm p-4 md:p-5 space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Bot className="w-5 h-5 text-sky-500" />
+                <h2 className="text-base md:text-lg font-semibold text-slate-900 dark:text-slate-50">
+                  Org features &amp; AI access
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setOrgFeaturesCollapsed((collapsed) => !collapsed)
+                }
+                className="inline-flex items-center gap-1 rounded-full border border-slate-300 dark:border-slate-700 px-2 py-1 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition"
+              >
+                <span>{orgFeaturesCollapsed ? "Expand" : "Collapse"}</span>
+                <ChevronDown
+                  className={`w-3 h-3 transition-transform ${
+                    orgFeaturesCollapsed ? "-rotate-90" : "rotate-0"
+                  }`}
+                />
+              </button>
+            </div>
+
+            {!orgFeaturesCollapsed && (
+              <>
+                {orgFeaturesLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Loading features…</span>
+                  </div>
+                ) : mergedOrgFeatures.length === 0 ? (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    No org-level features have been configured yet.
+                  </p>
+                ) : (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {mergedOrgFeatures.map((f) => {
+                      const isSaving = orgFeatureSavingKey === f.key;
+                      return (
+                        <div
+                          key={f.key}
+                          className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-900/40 px-3 py-2.5"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
+                                {f.name || f.key}
+                              </span>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-900/5 dark:bg-slate-50/5 text-slate-500 dark:text-slate-400 border border-slate-200/60 dark:border-slate-700/60">
+                                Min plan: {f.min_plan || "FREE"}
+                              </span>
+                            </div>
+                            {f.description && (
+                              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400 line-clamp-2">
+                                {f.description}
+                              </p>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            disabled={isSaving}
+                            onClick={() =>
+                              handleToggleOrgFeature(f.key, !f.enabled)
+                            }
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border transition shrink-0 ${
+                              f.enabled
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700/60"
+                                : "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
+                            } ${isSaving ? "opacity-60 cursor-wait" : ""}`}
+                          >
+                            {isSaving ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Bot className="w-3 h-3" />
+                            )}
+                            <span>{f.enabled ? "On" : "Off"}</span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
 
@@ -739,218 +1330,250 @@ export default function TeamManagementPage() {
         )}
 
         {/* Team members list */}
-        <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-xl shadow-sm p-4 md:p-5 mt-6">
-          <div className="flex items-center gap-2 mb-3">
-            <Users className="w-5 h-5 text-sky-500" />
-            <h2 className="text-base md:text-lg font-semibold text-slate-900 dark:text-slate-50">
-              Team members
-            </h2>
+        <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-xl shadow-sm p-4 md:p-5 mt-2">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="flex items-center gap-2">
+              <Users className="w-5 h-5 text-sky-500" />
+              <h2 className="text-base md:text-lg font-semibold text-slate-900 dark:text-slate-50">
+                Team members
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                setMembersCollapsed((collapsed) => !collapsed)
+              }
+              className="inline-flex items-center gap-1 rounded-full border border-slate-300 dark:border-slate-700 px-2 py-1 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition"
+            >
+              <span>{membersCollapsed ? "Expand" : "Collapse"}</span>
+              <ChevronDown
+                className={`w-3 h-3 transition-transform ${
+                  membersCollapsed ? "-rotate-90" : "rotate-0"
+                }`}
+              />
+            </button>
           </div>
 
-          {loadingMembers ? (
-            <div className="py-4 flex items-center gap-2 text-slate-500 dark:text-slate-400">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span>Loading...</span>
-            </div>
-          ) : members.length === 0 ? (
-            <div className="py-4 text-slate-500 dark:text-slate-400 text-sm">
-              No team members found.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="text-left text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700">
-                    <th className="pb-2 pr-4">Email</th>
-                    <th className="pb-2 pr-4">Role</th>
-                    <th className="pb-2 pr-4">Status</th>
-                    {canManageFeatures && (
-                      <th className="pb-2 pr-4 whitespace-nowrap">
-                        <span className="inline-flex items-center gap-1">
-                          <Bot className="w-3 h-3 text-sky-500" />
-                          AI Recs
-                        </span>
-                      </th>
-                    )}
-                    {canManageFeatures && (
-                      <th className="pb-2 pr-4 whitespace-nowrap">Actions</th>
-                    )}
-                    <th className="pb-2 pr-4">Added</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {members.map((m) => {
-                    const aiEnabled = !!m.ai_recommendations_enabled;
-                    const isUpdatingFeature = featureUpdatingId === m.id;
-                    const isUpdatingRole = roleUpdatingId === m.id;
-                    const isUpdatingStatus = statusUpdatingId === m.id;
-                    const isResendingInvite = resendInviteId === m.id;
-                    const isDeleting = deleteMemberId === m.id;
-
-                    const isSelf =
-                      m.user_id && currentUserId && m.user_id === currentUserId;
-
-                    // OWNER / ADMIN can manage others, but not themselves
-                    const canToggleThisRow =
-                      canManageFeatures && !isSelf;
-
-                    const statusNorm = (m.status || "").toLowerCase();
-                    const isInvited =
-                      statusNorm === "invited" ||
-                      statusNorm === "pending_user";
-                    const isDisabled = statusNorm === "disabled";
-
-                    return (
-                      <tr
-                        key={m.id}
-                        className="border-b border-slate-200 dark:border-slate-800"
-                      >
-                        <td className="py-2 pr-4">{m.email}</td>
-
-                        {/* Role cell */}
-                        <td className="py-2 pr-4 capitalize">
-                          {canToggleThisRow ? (
-                            <div className="inline-flex items-center gap-2">
-                              <select
-                                value={m.role}
-                                disabled={isUpdatingRole}
-                                onChange={(e) =>
-                                  handleChangeRole(m, e.target.value)
-                                }
-                                className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
-                              >
-                                <option value="member">Member</option>
-                                <option value="admin">Admin</option>
-                                <option value="owner">Owner</option>
-                              </select>
-                              {isUpdatingRole && (
-                                <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
-                              )}
-                            </div>
-                          ) : (
-                            <span>{m.role}</span>
-                          )}
-                        </td>
-
-                        {/* Status pill */}
-                        <td className="py-2 pr-4">
-                          {renderStatusPill(m.status)}
-                        </td>
-
-                        {/* AI Recs toggle */}
+          {!membersCollapsed && (
+            <>
+              {loadingMembers ? (
+                <div className="py-4 flex items-center gap-2 text-slate-500 dark:text-slate-400">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Loading...</span>
+                </div>
+              ) : members.length === 0 ? (
+                <div className="py-4 text-slate-500 dark:text-slate-400 text-sm">
+                  No team members found.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700">
+                        <th className="pb-2 pr-4">Email</th>
+                        <th className="pb-2 pr-4">Role</th>
+                        <th className="pb-2 pr-4">Status</th>
                         {canManageFeatures && (
-                          <td className="py-2 pr-4">
-                            {canToggleThisRow ? (
-                              <button
-                                type="button"
-                                disabled={isUpdatingFeature}
-                                onClick={() =>
-                                  handleToggleAiRecommendations(m, !aiEnabled)
-                                }
-                                className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border transition ${
-                                  aiEnabled
-                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700/60"
-                                    : "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
-                                } ${
-                                  isUpdatingFeature
-                                    ? "opacity-60 cursor-wait"
-                                    : ""
-                                }`}
-                              >
-                                {isUpdatingFeature ? (
-                                  <Loader2 className="w-3 h-3 animate-spin" />
-                                ) : (
-                                  <Bot className="w-3 h-3" />
-                                )}
-                                <span>{aiEnabled ? "On" : "Off"}</span>
-                              </button>
-                            ) : (
-                              <span
-                                className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border opacity-70 cursor-not-allowed ${
-                                  aiEnabled
-                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700/60"
-                                    : "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
-                                }`}
-                              >
-                                <Bot className="w-3 h-3" />
-                                <span>{aiEnabled ? "On" : "Off"}</span>
-                              </span>
-                            )}
-                          </td>
+                          <th className="pb-2 pr-4 whitespace-nowrap">
+                            <span className="inline-flex items-center gap-1">
+                              <Bot className="w-3 h-3 text-sky-500" />
+                              AI Recs
+                            </span>
+                          </th>
                         )}
-
-                        {/* Admin actions */}
                         {canManageFeatures && (
-                          <td className="py-2 pr-4">
-                            {canToggleThisRow ? (
-                              <div className="flex flex-wrap gap-2">
-                                {/* Enable / Disable */}
-                                <button
-                                  type="button"
-                                  disabled={isUpdatingStatus || isDeleting}
-                                  onClick={() =>
-                                    handleToggleMemberStatus(m)
-                                  }
-                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
-                                >
-                                  {isUpdatingStatus ? (
-                                    <Loader2 className="w-3 h-3 animate-spin" />
-                                  ) : null}
-                                  <span>
-                                    {isDisabled ? "Enable" : "Disable"}
-                                  </span>
-                                </button>
+                          <th className="pb-2 pr-4 whitespace-nowrap">
+                            Actions
+                          </th>
+                        )}
+                        <th className="pb-2 pr-4">Added</th>
+                      </tr>
+                    </thead>
 
-                                {/* Resend invite */}
-                                {isInvited && (
+                    <tbody>
+                      {members.map((m) => {
+                        const aiEnabled = !!m.ai_recommendations_enabled;
+                        const isUpdatingFeature = featureUpdatingId === m.id;
+                        const isUpdatingRole = roleUpdatingId === m.id;
+                        const isUpdatingStatus = statusUpdatingId === m.id;
+                        const isResendingInvite = resendInviteId === m.id;
+                        const isDeleting = deleteMemberId === m.id;
+
+                        const isSelf =
+                          m.user_id &&
+                          currentUserId &&
+                          m.user_id === currentUserId;
+
+                        const canToggleThisRow =
+                          canManageFeatures && !isSelf;
+
+                        const statusNorm = (m.status || "").toLowerCase();
+                        const isInvited =
+                          statusNorm === "invited" ||
+                          statusNorm === "pending_user";
+                        const isDisabled = statusNorm === "disabled";
+
+                        return (
+                          <tr
+                            key={m.id}
+                            className="border-b border-slate-200 dark:border-slate-800"
+                          >
+                            <td className="py-2 pr-4">{m.email}</td>
+
+                            {/* Role cell */}
+                            <td className="py-2 pr-4 capitalize">
+                              {canToggleThisRow ? (
+                                <div className="inline-flex items-center gap-2">
+                                  <select
+                                    value={m.role}
+                                    disabled={isUpdatingRole}
+                                    onChange={(e) =>
+                                      handleChangeRole(m, e.target.value)
+                                    }
+                                    className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                                  >
+                                    <option value="member">Member</option>
+                                    <option value="admin">Admin</option>
+                                    <option value="owner">Owner</option>
+                                  </select>
+                                  {isUpdatingRole && (
+                                    <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
+                                  )}
+                                </div>
+                              ) : (
+                                <span>{m.role}</span>
+                              )}
+                            </td>
+
+                            {/* Status pill */}
+                            <td className="py-2 pr-4">
+                              {renderStatusPill(m.status)}
+                            </td>
+
+                            {/* AI Recs toggle */}
+                            {canManageFeatures && (
+                              <td className="py-2 pr-4">
+                                {canToggleThisRow ? (
                                   <button
                                     type="button"
-                                    disabled={isResendingInvite || isDeleting}
-                                    onClick={() => handleResendInvite(m)}
-                                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-sky-300 text-xs text-sky-700 dark:border-sky-700 dark:text-sky-300 hover:bg-sky-50 dark:hover:bg-sky-950 disabled:opacity-60 disabled:cursor-not-allowed"
+                                    disabled={isUpdatingFeature}
+                                    onClick={() =>
+                                      handleToggleAiRecommendations(
+                                        m,
+                                        !aiEnabled
+                                      )
+                                    }
+                                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border transition ${
+                                      aiEnabled
+                                        ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700/60"
+                                        : "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
+                                    } ${
+                                      isUpdatingFeature
+                                        ? "opacity-60 cursor-wait"
+                                        : ""
+                                    }`}
                                   >
-                                    {isResendingInvite ? (
+                                    {isUpdatingFeature ? (
                                       <Loader2 className="w-3 h-3 animate-spin" />
-                                    ) : null}
-                                    <span>Resend invite</span>
+                                    ) : (
+                                      <Bot className="w-3 h-3" />
+                                    )}
+                                    <span>{aiEnabled ? "On" : "Off"}</span>
                                   </button>
+                                ) : (
+                                  <span
+                                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border opacity-70 cursor-not-allowed ${
+                                      aiEnabled
+                                        ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700/60"
+                                        : "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
+                                    }`}
+                                  >
+                                    <Bot className="w-3 h-3" />
+                                    <span>{aiEnabled ? "On" : "Off"}</span>
+                                  </span>
                                 )}
-
-                                {/* Remove from organization */}
-                                <button
-                                  type="button"
-                                  disabled={isDeleting}
-                                  onClick={() =>
-                                    handleRemoveFromOrganization(m)
-                                  }
-                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-rose-300 text-xs text-rose-700 dark:border-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950 disabled:opacity-60 disabled:cursor-not-allowed"
-                                >
-                                  {isDeleting ? (
-                                    <Loader2 className="w-3 h-3 animate-spin" />
-                                  ) : (
-                                    <Trash2 className="w-3 h-3" />
-                                  )}
-                                  <span>Remove from organization</span>
-                                </button>
-                              </div>
-                            ) : (
-                              <span className="text-xs text-slate-400">—</span>
+                              </td>
                             )}
-                          </td>
-                        )}
 
-                        <td className="py-2 pr-4">
-                          {m.created_at
-                            ? new Date(m.created_at).toLocaleDateString()
-                            : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                            {/* Admin actions */}
+                            {canManageFeatures && (
+                              <td className="py-2 pr-4">
+                                {canToggleThisRow ? (
+                                  <div className="flex flex-wrap gap-2">
+                                    {/* Enable / Disable */}
+                                    <button
+                                      type="button"
+                                      disabled={
+                                        isUpdatingStatus || isDeleting
+                                      }
+                                      onClick={() =>
+                                        handleToggleMemberStatus(m)
+                                      }
+                                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
+                                    >
+                                      {isUpdatingStatus ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : null}
+                                      <span>
+                                        {isDisabled ? "Enable" : "Disable"}
+                                      </span>
+                                    </button>
+
+                                    {/* Resend invite */}
+                                    {isInvited && (
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          isResendingInvite || isDeleting
+                                        }
+                                        onClick={() => handleResendInvite(m)}
+                                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-sky-300 text-xs text-sky-700 dark:border-sky-700 dark:text-sky-300 hover:bg-sky-50 dark:hover:bg-sky-950 disabled:opacity-60 disabled:cursor-not-allowed"
+                                      >
+                                        {isResendingInvite ? (
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                        ) : null}
+                                        <span>Resend invite</span>
+                                      </button>
+                                    )}
+
+                                    {/* Remove from organization */}
+                                    <button
+                                      type="button"
+                                      disabled={isDeleting}
+                                      onClick={() =>
+                                        handleRemoveFromOrganization(m)
+                                      }
+                                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-rose-300 text-xs text-rose-700 dark:border-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950 disabled:opacity-60 disabled:cursor-not-allowed"
+                                    >
+                                      {isDeleting ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <Trash2 className="w-3 h-3" />
+                                      )}
+                                      <span>Remove from org</span>
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-400">
+                                    —
+                                  </span>
+                                )}
+                              </td>
+                            )}
+
+                            <td className="py-2 pr-4">
+                              {m.created_at
+                                ? new Date(m.created_at).toLocaleDateString()
+                                : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

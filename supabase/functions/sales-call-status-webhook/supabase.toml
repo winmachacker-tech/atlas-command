@@ -1,0 +1,7 @@
+[functions.sales-call-status-webhook]
+verify_jwt = false
+
+[env]
+TWILIO_STATUS_WEBHOOK_SECRET="k8m3p7r2t9x5z1b4d6f0"
+SUPABASE_URL="https://tnpesnohwbwpmakvyzpn.supabase.co"
+SUPABASE_SERVICE_ROLE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRucGVzbm9od2J3cG1ha3Z5enBuIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MTUxODA4NCwiZXhwIjoyMDc3MDk0MDg0fQ.uucqKGYzYV5_Xjo-amxVVnzwEPf4ZiSBw9WMBO7Jzt8"

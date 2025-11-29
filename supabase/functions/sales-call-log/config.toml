@@ -1,0 +1,26 @@
+# FILE: supabase/functions/sales-call-log/config.toml
+#
+# Purpose:
+# - Configure the sales-call-log Edge Function.
+# - We disable JWT verification because this function is called ONLY
+#   by the Atlas Voice Bridge server using an internal shared secret
+#   header (x-atlas-voice-secret), NOT by browsers or logged-in users.
+#
+# Security model:
+# - verify_jwt = false  → Supabase will NOT require an Authorization header.
+# - index.ts still enforces its own shared-secret check:
+#       x-atlas-voice-secret OR x-voice-server-webhook-secret
+#   which must match one of:
+#       ATLAS_VOICE_INTERNAL_SECRET
+#       VOICE_SERVER_WEBHOOK_SECRET
+#
+# - Inside the function, we use SUPABASE_SERVICE_ROLE_KEY to write to
+#   public.sales_calls, which is safe because this function is strictly
+#   backend-only and protected by the internal secret.
+#
+# IMPORTANT:
+# - Do NOT call this function from the browser.
+# - Do NOT expose the internal secret to frontend code.
+
+[functions]
+verify_jwt = false

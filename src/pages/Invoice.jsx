@@ -1,11 +1,11 @@
-﻿// src/pages/Invoice.jsx
+// src/pages/Invoice.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Loader2, FileDown, AlertTriangle } from "lucide-react";
 import { supabase } from "../lib/supabase";
 
 function fmtMoney(n) {
-  if (n === null || n === undefined || isNaN(Number(n))) return "â€”";
+  if (n === null || n === undefined || isNaN(Number(n))) return "—";
   try {
     return Number(n).toLocaleString(undefined, { style: "currency", currency: "USD" });
   } catch {
@@ -14,9 +14,9 @@ function fmtMoney(n) {
 }
 
 function fmtDate(d) {
-  if (!d) return "â€”";
+  if (!d) return "—";
   const dt = new Date(d);
-  if (Number.isNaN(dt.getTime())) return "â€”";
+  if (Number.isNaN(dt.getTime())) return "—";
   return dt.toLocaleString();
 }
 
@@ -48,7 +48,7 @@ export default function Invoice() {
 
         if (error) throw error;
         if (!data) {
-          setError("Invoice not found or you donâ€™t have access.");
+          setError("Invoice not found or you don’t have access.");
           setLoad(null);
         } else if (isMounted) {
           setLoad(data);
@@ -67,7 +67,7 @@ export default function Invoice() {
   }, [id]);
 
   const invoiceNumber = useMemo(() => {
-    if (!load?.id) return "â€”";
+    if (!load?.id) return "—";
     // simple readable invoice id; tweak as needed
     return `INV-${String(load.id).slice(0, 8).toUpperCase()}`;
   }, [load?.id]);
@@ -110,7 +110,7 @@ export default function Invoice() {
         <div className="h-40 grid place-items-center text-gray-400">
           <div className="inline-flex items-center gap-2">
             <Loader2 className="animate-spin h-4 w-4" />
-            <span>Loading invoiceâ€¦</span>
+            <span>Loading invoice…</span>
           </div>
         </div>
       ) : error ? (
@@ -146,13 +146,13 @@ export default function Invoice() {
             <div className="grid md:grid-cols-2 gap-6 mb-8">
               <div className="rounded-xl border border-gray-700 p-4">
                 <div className="text-sm text-gray-400 mb-1">Bill To</div>
-                <div className="text-base font-medium">{load.shipper || "â€”"}</div>
+                <div className="text-base font-medium">{load.shipper || "—"}</div>
                 {/* Add your address on file here if needed */}
               </div>
 
               <div className="rounded-xl border border-gray-700 p-4">
                 <div className="text-sm text-gray-400 mb-1">Equipment</div>
-                <div className="text-base font-medium">{load.equipment_type || "â€”"}</div>
+                <div className="text-base font-medium">{load.equipment_type || "—"}</div>
               </div>
             </div>
 
@@ -160,15 +160,15 @@ export default function Invoice() {
             <div className="rounded-xl border border-gray-700 p-4 mb-8">
               <div className="grid md:grid-cols-2 gap-4">
                 <div>
-                  <div className="text-sm text-gray-400 mb-1">Origin â†’ Destination</div>
+                  <div className="text-sm text-gray-400 mb-1">Origin → Destination</div>
                   <div className="text-base font-medium">
-                    {load.origin || "â€”"} <span className="text-gray-500">â†’</span> {load.destination || "â€”"}
+                    {load.origin || "—"} <span className="text-gray-500">→</span> {load.destination || "—"}
                   </div>
                 </div>
                 <div>
                   <div className="text-sm text-gray-400 mb-1">PU / DEL</div>
                   <div className="text-base font-medium">
-                    PU: {fmtDate(load.pickup_at)} <span className="text-gray-500">â€¢</span> DEL: {fmtDate(load.delivery_at)}
+                    PU: {fmtDate(load.pickup_at)} <span className="text-gray-500">•</span> DEL: {fmtDate(load.delivery_at)}
                   </div>
                 </div>
               </div>
@@ -186,7 +186,7 @@ export default function Invoice() {
                 <tbody>
                   <tr className="border-t border-gray-700">
                     <td className="p-3">
-                      Linehaul â€” {load.reference || "No Reference"} ({load.origin} â†’ {load.destination})
+                      Linehaul — {load.reference || "No Reference"} ({load.origin} → {load.destination})
                     </td>
                     <td className="p-3 text-right">{fmtMoney(load.rate)}</td>
                   </tr>
@@ -218,4 +218,3 @@ export default function Invoice() {
     </div>
   );
 }
-

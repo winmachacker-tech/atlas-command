@@ -21,6 +21,7 @@ import {
   FileText,
   ThumbsUp,
   ThumbsDown,
+  Search,
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import AddLoadModal from "../components/AddLoadModal";
@@ -120,6 +121,9 @@ export default function Loads() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState("");
   const [isAddOpen, setIsAddOpen] = useState(false);
+
+  // Search state
+  const [searchTerm, setSearchTerm] = useState("");
 
   async function leaveFeedback(load, accepted, note = null) {
     try {
@@ -223,9 +227,35 @@ export default function Loads() {
     }
   }
 
-  // Filtering
+  // Filtering with search
   const visibleRows = useMemo(() => {
     let rows = loads;
+
+    // Search filter
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase().trim();
+      rows = rows.filter((r) => {
+        const ref = (r.reference || "").toLowerCase();
+        const shipper = (r.shipper || "").toLowerCase();
+        const origin = (r.origin || "").toLowerCase();
+        const dest = (r.destination || "").toLowerCase();
+        const driverName = r.driver 
+          ? `${r.driver.first_name} ${r.driver.last_name}`.toLowerCase()
+          : "";
+        const notes = (r.notes || "").toLowerCase();
+        const problemNote = (r.problem_note || "").toLowerCase();
+
+        return (
+          ref.includes(term) ||
+          shipper.includes(term) ||
+          origin.includes(term) ||
+          dest.includes(term) ||
+          driverName.includes(term) ||
+          notes.includes(term) ||
+          problemNote.includes(term)
+        );
+      });
+    }
 
     // RLS handles org isolation
 
@@ -239,7 +269,7 @@ export default function Loads() {
     }
 
     return rows;
-  }, [loads, showProblemsOnly, priorityFilter]);
+  }, [loads, searchTerm, showProblemsOnly, priorityFilter]);
 
   /* --------------------------- CRUD helpers --------------------------- */
   async function deleteLoad(id) {
@@ -509,6 +539,34 @@ export default function Loads() {
       {/* Learned AI lane memory suggestions (shows only when a load is selected for assigning) */}
       {loadIdForAI && <LearnedSuggestions loadId={loadIdForAI} />}
 
+      {/* Search bar */}
+      <div className="mb-4">
+        <div className="relative">
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Search loads by reference, shipper, route, or driver..."
+            className="w-full rounded-xl border border-white/10 bg-white/5 pl-10 pr-10 py-2.5 text-sm outline-none placeholder:text-white/40 focus:border-amber-500/50 focus:bg-white/10 transition-colors"
+          />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/40" />
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/70 transition-colors"
+              title="Clear search"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+        {searchTerm && (
+          <div className="mt-2 text-xs text-white/60">
+            Found {visibleRows.length} load{visibleRows.length !== 1 ? 's' : ''}
+          </div>
+        )}
+      </div>
+
       {/* Header */}
       <div className="mb-4 sm:mb-6 flex flex-col sm:flex-row sm:flex-wrap items-start sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -575,16 +633,20 @@ export default function Loads() {
                   <TruckGlyph />
                 </div>
                 <h2 className="text-base sm:text-lg font-semibold">
-                  {priorityFilter !== "ALL" || showProblemsOnly
+                  {searchTerm
+                    ? "No matching loads found"
+                    : priorityFilter !== "ALL" || showProblemsOnly
                     ? "No matching problem loads"
                     : "No loads yet"}
                 </h2>
                 <p className="mt-1 text-xs sm:text-sm text:white/60">
-                  {priorityFilter !== "ALL" || showProblemsOnly
+                  {searchTerm
+                    ? "Try adjusting your search terms."
+                    : priorityFilter !== "ALL" || showProblemsOnly
                     ? "Adjust filters or priority to see more."
                     : "Create your first load to get started."}
                 </p>
-                {priorityFilter === "ALL" && !showProblemsOnly && (
+                {!searchTerm && priorityFilter === "ALL" && !showProblemsOnly && (
                   <button
                     onClick={() => setIsAddOpen(true)}
                     className="mt-4 inline-flex items-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400"

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <!-- Simple intro so the caller knows what's happening -->
+  <Say voice="alice">
+    Connecting you to Atlas Command A I voice assistant.
+  </Say>
+
+  <Connect>
+    <Stream url="wss://unconcernedly-unlarge-adaline.ngrok-free.dev/twilio-stream">
+      <!-- Marks this as an INBOUND call into Atlas -->
+      <Parameter name="direction" value="INBOUND" />
+      <!-- Optional tag if you want to distinguish public callers later -->
+      <Parameter name="source" value="public_inbound_number" />
+    </Stream>
+  </Connect>
+</Response>

@@ -1,30 +1,14 @@
-# supabase/config.toml
-# Configure Edge Function behavior and allow preflight CORS requests
-# for the ai-chat function (only this one).
+# FILE: supabase/config.toml
 
-[functions]
+project_id = "tnpesnohwbwpmakvyzpn"
 
-[functions."ai-chat"]
+# Existing function configs
+[functions.sales-call-recording]
 verify_jwt = false
 
-[functions.extract-load-document]
-enabled = true
-verify_jwt = true
-import_map = "./functions/extract-load-document/deno.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-entrypoint = "./functions/extract-load-document/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/extract-load-document/*.html" ]
+[functions.stripe-webhook]
+verify_jwt = false
 
-[functions.calculate-miles]
-enabled = true
-verify_jwt = true
-import_map = "./functions/calculate-miles/deno.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-entrypoint = "./functions/calculate-miles/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/calculate-miles/*.html" ]
+# NEW: allow calling the dummy GPS simulator without JWT
+[functions.atlas-dummy-gps-simulator]
+verify_jwt = false

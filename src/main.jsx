@@ -13,6 +13,9 @@ import "./index.css";
 /* Supabase */
 import { supabase } from "./lib/supabase";
 
+/* Feature flags */
+import { loadOrgFeatures } from "./lib/features";
+
 /* Shell / providers / guards */
 import MainLayout from "./layout/MainLayout.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
@@ -53,6 +56,7 @@ const Login = lazy(() => import("./pages/Login.jsx"));
 const Signup = lazy(() => import("./pages/Signup.jsx"));
 const Customers = lazy(() => import("./pages/Customers.jsx"));
 const CustomerDetail = lazy(() => import("./pages/CustomerDetail.jsx"));
+const Sales = lazy(() => import("./pages/Sales.jsx"));
 const Audit = lazy(() => import("./pages/Audit.jsx"));
 const AiLaneIntelligence = lazy(() => import("./pages/AiLaneIntelligence.jsx"));
 const CompleteAccount = lazy(() => import("./pages/CompleteAccount.jsx"));
@@ -88,6 +92,19 @@ const DriverSettlements = lazy(() =>
 
 /* Platform Admin */
 const SuperAdmin = lazy(() => import("./pages/SuperAdmin.jsx"));
+
+/* Billing subscription page (Stripe checkout) */
+const BillingSubscription = lazy(() =>
+  import("./pages/BillingSubscription.jsx")
+);
+
+/* Motive OAuth callback page */
+const MotiveOAuthCallback = lazy(() =>
+  import("./pages/MotiveOAuthCallback.jsx")
+);
+
+/* Fleet Map – live Motive vehicles on map */
+const FleetMap = lazy(() => import("./pages/FleetMap.jsx"));
 
 /* ---------------------- LOGIN EVENT WIRING ---------------------- */
 /**
@@ -188,6 +205,9 @@ async function logLoginEventWithMfa(event, session) {
 }
 
 if (typeof window !== "undefined") {
+  // 🔑 Preload org feature flags once we're in the browser
+  loadOrgFeatures();
+
   // 1) On initial load, log the current session (if any)
   supabase.auth
     .getSession()
@@ -247,7 +267,7 @@ function MfaGate({ children }) {
           await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
         if (error) throw error;
 
-        // User has a factor enrolled but hasn’t verified it this session
+        // User has a factor enrolled but hasn't verified it this session
         if (data.nextLevel === "aal2" && data.currentLevel !== "aal2") {
           // 2) Pick a TOTP factor and create a challenge
           const { data: factors } = await supabase.auth.mfa.listFactors();
@@ -325,7 +345,7 @@ function MfaGate({ children }) {
             maxLength={6}
             value={code}
             onChange={(e) => setCode(e.target.value)}
-            className="w-full rounded-lg bg-black/60 border border-white/20 px-3 py-2 text-white tracking-[0.3em]"
+            className="w-full rounded-lg bg-black/60 border border.white/20 px-3 py-2 text-white tracking-[0.3em]"
             placeholder="123456"
           />
           {error && (
@@ -344,7 +364,7 @@ function MfaGate({ children }) {
     );
   }
 
-  // ✅ Either no MFA enrolled, or it’s already verified for this session
+  // ✅ Either no MFA enrolled, or it's already verified for this session
   return children;
 }
 
@@ -396,6 +416,10 @@ function AppRoutes() {
                   <Route path="trucks/:id" element={<TruckProfile />} />
                   <Route path="customers" element={<Customers />} />
                   <Route path="customers/:id" element={<CustomerDetail />} />
+                  <Route path="sales" element={<Sales />} />
+
+                  {/* Fleet Map */}
+                  <Route path="fleet-map" element={<FleetMap />} />
 
                   {/* Trust & Legal */}
                   <Route path="trust-center" element={<TrustCenter />} />
@@ -406,6 +430,10 @@ function AppRoutes() {
 
                   {/* Accounting */}
                   <Route path="billing" element={<Billing />} />
+                  <Route
+                    path="billing/subscription"
+                    element={<BillingSubscription />}
+                  />
                   <Route
                     path="driver-settlements"
                     element={<DriverSettlements />}
@@ -446,6 +474,12 @@ function AppRoutes() {
                   />
                   <Route path="settings/security" element={<Security />} />
                   <Route path="teammanagement" element={<TeamManagement />} />
+
+                  {/* Motive OAuth callback (protected) */}
+                  <Route
+                    path="integrations/motive/callback"
+                    element={<MotiveOAuthCallback />}
+                  />
 
                   {/* Redirect legacy settings */}
                   <Route
