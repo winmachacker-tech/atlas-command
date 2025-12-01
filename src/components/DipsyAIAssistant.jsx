@@ -2,12 +2,12 @@
 // Enhanced AI Assistant with Dipsy Intelligence
 // Handles both database queries and OpenAI conversations
 // Now with PROPER stateful conversation support via conversation_state!
+// And secure document reading via Supabase Edge Function (read-document)
 
 import { useEffect, useRef, useState } from "react";
 import {
   Bot,
   Send,
-  StopCircle,
   Loader2,
   Trash2,
   Clipboard,
@@ -146,18 +146,6 @@ export default function DipsyAIAssistant({ className = "" }) {
     }
   };
 
-  const fileToBase64 = (file) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = reader.result.split(",")[1];
-        resolve(base64);
-      };
-      reader.onerror = () => reject(new Error("Failed to read file"));
-      reader.readAsDataURL(file);
-    });
-  };
-
   const extractTextFromPDF = async (file) => {
     try {
       console.log("📄 Extracting text from PDF...");
@@ -193,95 +181,75 @@ export default function DipsyAIAssistant({ className = "" }) {
     }
   };
 
-  const readDocumentWithAI = async (imageUrl, fileName, fileObject = null) => {
+  // 🔐 NEW: Read document via Supabase Edge Function (read-document)
+  // No more direct OpenAI calls from the browser.
+  const readDocumentWithAI = async (fileUrl, fileName, fileObject = null) => {
     try {
-      console.log("🔮 Reading document with OpenAI:", imageUrl);
+      console.log("🔮 Reading document via Supabase read-document function:", {
+        fileUrl,
+        fileName,
+      });
 
       const isPDF = fileName.toLowerCase().endsWith(".pdf");
 
-      const { getOpenAIApiKey } = await import("../lib/openaiConfig");
-      const apiKey = getOpenAIApiKey();
-
-      let messages;
-
-      if (isPDF && fileObject) {
-        const extractResult = await extractTextFromPDF(fileObject);
-
-        if (!extractResult.success) {
-          throw new Error(`Failed to extract PDF text: ${extractResult.error}`);
-        }
-
-        messages = [
-          {
-            role: "user",
-            content: `You are reading a trucking/logistics document (rate confirmation, BOL, POD, etc.).
-
-Here is the extracted text from the PDF:
-
-${extractResult.text}
-
-Extract ALL information you can find. Pay special attention to:
-- Pickup location (origin city, state, zip)
-- Delivery location (destination city, state, zip)
-- Pickup date/time
-- Delivery date/time
-- Rate/payment amount
-- Commodity/cargo description
-- Weight
-- Equipment type (dry van, reefer, flatbed, etc.)
-- Shipper/customer name
-- Reference numbers (PO, BOL, load number)
-- Any special instructions
-
-Format your response as a clear summary of what you found. Be specific and include all details.
-If this looks like a rate confirmation, say "This is a rate confirmation" at the start.`,
-          },
-        ];
-      } else {
-        messages = [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `You are reading a trucking/logistics document. Extract ALL information you can find including pickup/delivery locations, dates, rate, cargo, weight, equipment type, shipper name, and reference numbers.`,
-              },
-              {
-                type: "image_url",
-                image_url: { url: imageUrl },
-              },
-            ],
-          },
-        ];
+      if (!isPDF) {
+        // For now, we support deep reading for PDFs only.
+        // We can extend this later to handle images via a separate Edge Function.
+        return {
+          success: false,
+          error:
+            "Right now I can only deeply read PDF rate confirmations. Please upload a PDF.",
+        };
       }
 
-      const response = await fetch(
-        "https://api.openai.com/v1/chat/completions",
+      if (!fileObject) {
+        return {
+          success: false,
+          error:
+            "No file object provided for PDF reading. Please try uploading the document again.",
+        };
+      }
+
+      // 1) Extract text from the PDF in the browser
+      const extractResult = await extractTextFromPDF(fileObject);
+
+      if (!extractResult.success) {
+        throw new Error(`Failed to extract PDF text: ${extractResult.error}`);
+      }
+
+      const rawText = extractResult.text;
+
+      // 2) Send the extracted text to the Supabase Edge Function
+      const { data, error } = await supabase.functions.invoke(
+        "read-document",
         {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
+          body: {
+            raw_text: rawText,
+            file_name: fileName,
+            file_url: fileUrl,
           },
-          body: JSON.stringify({
-            model: "gpt-4o",
-            messages: messages,
-            max_tokens: 1000,
-          }),
         }
       );
 
-      if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`OpenAI API error: ${response.status} - ${error}`);
+      if (error) {
+        console.error("❌ Supabase read-document error:", error);
+        throw new Error(
+          error.message || "Failed to read document via AI (Supabase)."
+        );
       }
 
-      const data = await response.json();
-      const extractedText = data.choices[0]?.message?.content;
+      const analysisText =
+        data?.analysis_text ||
+        "I processed the document, but didn't get a detailed analysis back.";
 
-      return { success: true, text: extractedText };
+      console.log(
+        "✅ Document analysis received from read-document, length:",
+        analysisText.length
+      );
+
+      return { success: true, text: analysisText };
     } catch (error) {
-      console.error("❌ AI reading error:", error);
+      console.error("❌ AI reading error (read-document):", error);
       return { success: false, error: error.message };
     }
   };
@@ -397,7 +365,10 @@ If this looks like a rate confirmation, say "This is a rate confirmation" at the
       // ✅ Normal text query (no file)
       //    Pass conversation_state for context memory!
       // ================================
-      console.log("📤 Sending to Dipsy with conversation_state:", conversationState);
+      console.log(
+        "📤 Sending to Dipsy with conversation_state:",
+        conversationState
+      );
 
       const result = await sendDipsyTextMessage(finalMessage, conversationState);
 
@@ -415,7 +386,10 @@ If this looks like a rate confirmation, say "This is a rate confirmation" at the
         // This includes context memory (lastLoadReference, lastDriverName, etc.)
         if (result.conversation_state) {
           setConversationState(result.conversation_state);
-          console.log("💾 Updated conversation_state:", result.conversation_state);
+          console.log(
+            "💾 Updated conversation_state:",
+            result.conversation_state
+          );
 
           // Update message count from conversation history length
           const historyLength =
@@ -579,7 +553,9 @@ If this looks like a rate confirmation, say "This is a rate confirmation" at the
                   <div className="text-xs font-medium text-zinc-200">
                     {s.title}
                   </div>
-                  <div className="mt-0.5 text-xs text-zinc-400">{s.prompt}</div>
+                  <div className="mt-0.5 text-xs text-zinc-400">
+                    {s.prompt}
+                  </div>
                 </div>
               </button>
             ))}
