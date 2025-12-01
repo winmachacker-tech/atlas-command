@@ -1,189 +1,161 @@
-// FILE: src/pages/MotiveOAuthCallback.jsx
+// FILE: supabase/functions/motive-oauth-exchange/index.ts
 // Purpose:
-// - Handle Motive redirect back into Atlas.
-// - Exchange ?code=... for tokens via the motive-oauth-exchange Edge Function.
-// - Show a success or failure card and then bounce back to Integrations.
-//
-// This component is STRICT-MODE SAFE: we guard so the exchange only runs once.
+// - Handle the OAuth redirect back from Motive.
+// - Right now, this is a "safe placeholder":
+//   • Reads the `code` and `state` query params.
+//   • Shows a simple HTML "connection received" page.
+//   • Does NOT call Motive or write to the database yet.
+// - This keeps the function deployable and ready to be upgraded later
+//   without breaking Supabase or RLS.
 
-import { useEffect, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { supabase } from "../lib/supabase";
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-const CARD_BASE =
-  "w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 px-8 py-10 shadow-xl shadow-black/40";
-
-export default function MotiveOAuthCallback() {
-  const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
-
-  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">(
-    "idle"
-  );
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  // Guard so we only ever attempt the exchange once (even in React Strict Mode)
-  const hasStartedRef = useRef(false);
-
-  useEffect(() => {
-    const code = searchParams.get("code");
-
-    if (!code) {
-      console.warn("[MotiveOAuthCallback] Missing ?code param");
-      setStatus("error");
-      setErrorMessage("Missing authorization code from Motive.");
-      return;
+function htmlResponse(title: string, body: string, status = 200): Response {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>${title}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        sans-serif;
+      background-color: #020617; /* slate-950 */
+      color: #e5e7eb; /* gray-200 */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
     }
-
-    if (hasStartedRef.current) {
-      console.log(
-        "[MotiveOAuthCallback] Already started exchange, skipping duplicate effect"
-      );
-      return;
+    .card {
+      background-color: #020617;
+      border-radius: 1rem;
+      padding: 2rem 2.5rem;
+      max-width: 480px;
+      width: 100%;
+      box-shadow: 0 20px 40px rgba(15, 23, 42, 0.8);
+      border: 1px solid #1e293b;
     }
-    hasStartedRef.current = true;
-
-    const redirectUri = `${window.location.origin}/integrations/motive/callback`;
-
-    console.log("[MotiveOAuthCallback] Exchanging code via Edge Function", {
-      codeSnippet: `${code.substring(0, 10)}...`,
-      redirectUri,
-    });
-
-    async function run() {
-      try {
-        setStatus("loading");
-        setErrorMessage(null);
-
-        const { data, error } = await supabase.functions.invoke(
-          "motive-oauth-exchange",
-          {
-            body: {
-              code,
-              redirect_uri: redirectUri,
-            },
-          }
-        );
-
-        if (error) {
-          console.error("[MotiveOAuthCallback] Edge function error:", error);
-
-          // Try to surface server-side message if present
-          // @ts-ignore – supabase error.context may exist
-          const context = (error as any).context;
-          let message = "Edge function returned a non-2xx status code.";
-
-          if (context) {
-            try {
-              const parsed =
-                typeof context === "string" ? JSON.parse(context) : context;
-              if (parsed?.error) {
-                message = `${parsed.error}${
-                  parsed.motive_error_description
-                    ? ` – ${parsed.motive_error_description}`
-                    : ""
-                }`;
-              }
-            } catch {
-              // ignore JSON parse error, fall back to default message
-            }
-          }
-
-          setStatus((prev) => (prev === "success" ? "success" : "error"));
-          if (prev !== "success") {
-            setErrorMessage(message);
-          }
-          return;
-        }
-
-        console.log("[MotiveOAuthCallback] Exchange response:", data);
-
-        if (!data || data.ok !== true || !data.access_token) {
-          setStatus("error");
-          setErrorMessage(
-            "Motive OAuth exchange did not return an access token."
-          );
-          return;
-        }
-
-        console.log("[MotiveOAuthCallback] SUCCESS! Got access token");
-        console.log(
-          "[MotiveOAuthCallback] Access token length:",
-          (data.access_token as string).length
-        );
-
-        // TODO later: save tokens to DB via another Edge Function
-
-        setStatus("success");
-
-        // After a short pause, bounce back to Integrations with success flag
-        setTimeout(() => {
-          navigate("/integrations?motive=connected", { replace: true });
-        }, 1200);
-      } catch (err: any) {
-        console.error("[MotiveOAuthCallback] Unexpected error:", err);
-        setStatus("error");
-        setErrorMessage(
-          err?.message || "Unexpected error during Motive OAuth exchange."
-        );
-      }
+    .title {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
     }
-
-    run();
-  }, [searchParams, navigate]);
-
-  const isLoading = status === "idle" || status === "loading";
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">
-      <div className={CARD_BASE}>
-        {isLoading && (
-          <div className="flex flex-col items-center gap-4 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10">
-              <div className="h-7 w-7 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
-            </div>
-            <h1 className="text-xl font-semibold">Connecting to Motive…</h1>
-            <p className="text-sm text-slate-400">
-              Exchanging authorization code for secure API access.
-            </p>
-          </div>
-        )}
-
-        {status === "success" && (
-          <div className="flex flex-col items-center gap-4 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/15">
-              <span className="text-2xl">✅</span>
-            </div>
-            <h1 className="text-xl font-semibold">Motive connected</h1>
-            <p className="text-sm text-slate-400">
-              OAuth exchange completed successfully. Redirecting you back to
-              Integrations…
-            </p>
-          </div>
-        )}
-
-        {status === "error" && (
-          <div className="flex flex-col items-center gap-4 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-rose-500/10">
-              <span className="text-2xl">❌</span>
-            </div>
-            <h1 className="text-xl font-semibold">Connection Failed</h1>
-            <p className="text-sm text-rose-400">OAuth exchange failed.</p>
-            {errorMessage && (
-              <p className="max-h-24 w-full overflow-auto rounded-lg bg-slate-900/80 px-3 py-2 text-left text-xs text-slate-300">
-                {errorMessage}
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={() => navigate("/integrations", { replace: true })}
-              className="mt-2 inline-flex items-center justify-center rounded-lg bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 hover:bg-white"
-            >
-              Back to Integrations
-            </button>
-          </div>
-        )}
+    .subtitle {
+      font-size: 0.95rem;
+      color: #9ca3af;
+      margin-bottom: 1.5rem;
+    }
+    .tag {
+      display: inline-block;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 0.25rem 0.6rem;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.08);
+      color: #7dd3fc;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      margin-bottom: 1rem;
+    }
+    .footer {
+      margin-top: 1.5rem;
+      font-size: 0.8rem;
+      color: #6b7280;
+    }
+    .strong {
+      color: #e5e7eb;
+      font-weight: 500;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      background-color: #0f172a;
+      border: 1px solid #1f2937;
+      font-size: 0.7rem;
+      margin-top: 0.25rem;
+    }
+    .pill span {
+      opacity: 0.8;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+        monospace;
+      font-size: 0.75rem;
+      background-color: #020617;
+      padding: 0.25rem 0.4rem;
+      border-radius: 0.375rem;
+      border: 1px solid #1f2937;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="tag">Atlas Command · Motive</div>
+    <div class="title">${title}</div>
+    <div class="subtitle">${body}</div>
+    <div class="footer">
+      You can safely close this tab and return to
+      <span class="strong">Atlas Command</span>.<br />
+      <div class="pill">
+        <span>Integration status: handled by your Atlas backend</span>
       </div>
     </div>
-  );
+  </div>
+</body>
+</html>`;
+
+  return new Response(html, {
+    status,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+    },
+  });
 }
+
+serve((req) => {
+  const url = new URL(req.url);
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+
+  // If Motive returned an error explicitly
+  const error = url.searchParams.get("error");
+  const errorDescription = url.searchParams.get("error_description");
+
+  if (error) {
+    const message = `We received an error from Motive: <code>${error}</code>${
+      errorDescription ? ` – ${errorDescription}` : ""
+    }.`;
+    return htmlResponse(
+      "Motive connection failed",
+      `${message}<br /><br />Please contact Atlas support to retry the connection.`,
+      400,
+    );
+  }
+
+  if (!code) {
+    return htmlResponse(
+      "Missing authorization code",
+      "We did not receive an authorization code from Motive. This tab can be closed, but the connection may not be complete.",
+      400,
+    );
+  }
+
+  // At this stage we simply acknowledge the redirect.
+  // In a future version, we can:
+  // - Validate `state` (CSRF protection).
+  // - Exchange `code` for tokens via Motive's OAuth endpoint.
+  // - Store tokens in a secure table using a service-role Supabase client.
+
+  const safeState = state ? `<code>${state}</code>` : "not provided";
+
+  const body = `Your Motive connection code was received successfully.<br /><br />
+We have captured the authorization response and your Atlas backend can now finish wiring the integration.<br /><br />
+State: ${safeState}`;
+
+  return htmlResponse("Motive connection received", body, 200);
+});
