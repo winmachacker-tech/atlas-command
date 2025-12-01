@@ -181,8 +181,8 @@ export default function DipsyAIAssistant({ className = "" }) {
     }
   };
 
-  // 🔐 NEW: Read document via Supabase Edge Function (read-document)
-  // No more direct OpenAI calls from the browser.
+  // 🔐 NEW: Read document via direct fetch to Supabase Edge Function (read-document)
+  // This avoids the x-client-info CORS issue from supabase.functions.invoke.
   const readDocumentWithAI = async (fileUrl, fileName, fileObject = null) => {
     try {
       console.log("🔮 Reading document via Supabase read-document function:", {
@@ -219,24 +219,44 @@ export default function DipsyAIAssistant({ className = "" }) {
 
       const rawText = extractResult.text;
 
-      // 2) Send the extracted text to the Supabase Edge Function
-      const { data, error } = await supabase.functions.invoke(
-        "read-document",
+      // 2) Send the extracted text to the Supabase Edge Function via direct fetch
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      if (!supabaseUrl) {
+        throw new Error(
+          "VITE_SUPABASE_URL is not configured in the frontend environment."
+        );
+      }
+
+      const response = await fetch(
+        `${supabaseUrl}/functions/v1/read-document`,
         {
-          body: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            // No x-client-info header, no Authorization header needed here
+            // because this function only calls OpenAI and does not touch the DB.
+          },
+          body: JSON.stringify({
             raw_text: rawText,
             file_name: fileName,
             file_url: fileUrl,
-          },
+          }),
         }
       );
 
-      if (error) {
-        console.error("❌ Supabase read-document error:", error);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(
+          "[read-document] HTTP error from function:",
+          response.status,
+          errorText
+        );
         throw new Error(
-          error.message || "Failed to read document via AI (Supabase)."
+          `Function error (${response.status}): ${errorText || "Unknown error"}`
         );
       }
+
+      const data = await response.json();
 
       const analysisText =
         data?.analysis_text ||
