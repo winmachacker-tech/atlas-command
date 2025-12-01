@@ -181,8 +181,8 @@ export default function DipsyAIAssistant({ className = "" }) {
     }
   };
 
-  // 🔐 NEW: Read document via direct fetch to Supabase Edge Function (read-document)
-  // This avoids the x-client-info CORS issue from supabase.functions.invoke.
+  // 🔐 Read document via direct fetch to Supabase Edge Function (read-document)
+  // Now includes Authorization header with the current Supabase session token.
   const readDocumentWithAI = async (fileUrl, fileName, fileObject = null) => {
     try {
       console.log("🔮 Reading document via Supabase read-document function:", {
@@ -194,7 +194,6 @@ export default function DipsyAIAssistant({ className = "" }) {
 
       if (!isPDF) {
         // For now, we support deep reading for PDFs only.
-        // We can extend this later to handle images via a separate Edge Function.
         return {
           success: false,
           error:
@@ -219,7 +218,7 @@ export default function DipsyAIAssistant({ className = "" }) {
 
       const rawText = extractResult.text;
 
-      // 2) Send the extracted text to the Supabase Edge Function via direct fetch
+      // 2) Prepare request to Supabase Edge Function
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       if (!supabaseUrl) {
         throw new Error(
@@ -227,15 +226,25 @@ export default function DipsyAIAssistant({ className = "" }) {
         );
       }
 
+      // ✅ Get current session to include Authorization header (required by Supabase Functions)
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      const headers = {
+        "Content-Type": "application/json",
+      };
+
+      // If the user is logged in, attach the Bearer token
+      if (session?.access_token) {
+        headers["Authorization"] = `Bearer ${session.access_token}`;
+      }
+
       const response = await fetch(
         `${supabaseUrl}/functions/v1/read-document`,
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            // No x-client-info header, no Authorization header needed here
-            // because this function only calls OpenAI and does not touch the DB.
-          },
+          headers,
           body: JSON.stringify({
             raw_text: rawText,
             file_name: fileName,
@@ -252,7 +261,9 @@ export default function DipsyAIAssistant({ className = "" }) {
           errorText
         );
         throw new Error(
-          `Function error (${response.status}): ${errorText || "Unknown error"}`
+          `Function error (${response.status}): ${
+            errorText || "Unknown error"
+          }`
         );
       }
 
