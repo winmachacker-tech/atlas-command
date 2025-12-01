@@ -22,6 +22,7 @@ import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import { SettingsProvider } from "./context/SettingsProvider.jsx";
 import AuthGuard from "./components/AuthGuard.jsx";
 import OrgBootstrapGate from "./components/OrgBootstrapGate.jsx";
+import { attachDipsyBoardTester } from "./debug/testDipsyBoardView";
 
 /* Theme */
 import { ThemeProvider } from "./context/ThemeProvider.jsx";
@@ -52,6 +53,7 @@ const Notifications = lazy(() =>
     default: () => <div className="p-6">Notifications page coming soon</div>,
   }))
 );
+const NotificationsInbox = lazy(() => import("./pages/NotificationsInbox.jsx"));
 const Login = lazy(() => import("./pages/Login.jsx"));
 const Signup = lazy(() => import("./pages/Signup.jsx"));
 const Customers = lazy(() => import("./pages/Customers.jsx"));
@@ -60,6 +62,9 @@ const Sales = lazy(() => import("./pages/Sales.jsx"));
 const Audit = lazy(() => import("./pages/Audit.jsx"));
 const AiLaneIntelligence = lazy(() => import("./pages/AiLaneIntelligence.jsx"));
 const CompleteAccount = lazy(() => import("./pages/CompleteAccount.jsx"));
+
+/* WhatsApp Contacts */
+const WhatsAppContacts = lazy(() => import("./pages/WhatsAppContacts.jsx"));
 
 /* AI pages */
 const DispatchAI = lazy(() =>
@@ -105,6 +110,11 @@ const MotiveOAuthCallback = lazy(() =>
 
 /* Fleet Map – live Motive vehicles on map */
 const FleetMap = lazy(() => import("./pages/FleetMap.jsx"));
+
+/* Commander Board Debug – truth-aligned board snapshot */
+const CommanderBoardDebug = lazy(() =>
+  import("./pages/CommanderBoardDebug.jsx")
+);
 
 /* ---------------------- LOGIN EVENT WIRING ---------------------- */
 /**
@@ -421,6 +431,12 @@ function AppRoutes() {
                   {/* Fleet Map */}
                   <Route path="fleet-map" element={<FleetMap />} />
 
+                  {/* Commander Board Debug (truth-aligned board snapshot) */}
+                  <Route
+                    path="debug/board"
+                    element={<CommanderBoardDebug />}
+                  />
+
                   {/* Trust & Legal */}
                   <Route path="trust-center" element={<TrustCenter />} />
                   <Route path="privacy" element={<PrivacyPolicy />} />
@@ -473,7 +489,14 @@ function AppRoutes() {
                     element={<Integrations />}
                   />
                   <Route path="settings/security" element={<Security />} />
+                  <Route
+                    path="settings/whatsapp"
+                    element={<WhatsAppContacts />}
+                  />
                   <Route path="teammanagement" element={<TeamManagement />} />
+
+                  {/* Notifications Inbox */}
+                  <Route path="notifications" element={<NotificationsInbox />} />
 
                   {/* Motive OAuth callback (protected) */}
                   <Route
@@ -484,10 +507,6 @@ function AppRoutes() {
                   {/* Redirect legacy settings */}
                   <Route
                     path="settings"
-                    element={<Navigate to="/profile" replace />}
-                  />
-                  <Route
-                    path="settings/*"
                     element={<Navigate to="/profile" replace />}
                   />
 
@@ -503,6 +522,9 @@ function AppRoutes() {
       </ThemeProvider>
     </BrowserRouter>
   );
+}
+if (import.meta.env.DEV) {
+  attachDipsyBoardTester();
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(

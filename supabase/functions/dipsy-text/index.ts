@@ -4,11 +4,26 @@
 // - Uses OpenAI function calling + Supabase (RLS-respecting) tools
 //   to answer questions about drivers, loads, trucks, and HOS-aware dispatch.
 //
-// V2 Updates:
-// - Explicit context tracking (lastLoad, lastDriver) for "that load" / "that driver"
-// - Full POD workflow: delivered → POD pending → driver stays assigned → POD received → driver available
-// - Problem flow with reason prompting
-// - HOS buffer logic for safety margins
+// V2 Updates (Phase 1 - Ground Truth Alignment):
+// - Keep using existing tools, BUT:
+//   • search_loads now returns real driver assignment fields (assigned_driver_id, driver_name)
+//   • assign_driver_to_load writes assignment into BOTH:
+//       - load_driver_assignments (history/audit)
+//       - loads.assigned_driver_id + loads.driver_name (canonical "current assignment")
+//   • confirm_pod_received and release_driver_without_pod:
+//       - Free the driver
+//       - Clear loads.assigned_driver_id + loads.driver_name
+//       - Mark the assignment row as closed via unassigned_at
+//   This makes the loads table + load_driver_assignments (with unassigned_at)
+//   the single canonical "current assignment" truth.
+//
+// Phase 1b - Global Board View:
+// - New tool: get_load_board_status
+//   • Reads from public.dipsy_load_board_status (one row per load)
+//   • Lets Dipsy answer board-level questions from canonical truth:
+//       - "Which loads currently have a driver assigned?"
+//       - "List all drivers assigned to active loads."
+//       - "Is Tony Stark assigned to any loads right now?"
 //
 // Security notes:
 // - Uses SUPABASE_ANON_KEY + the caller's Authorization: Bearer <access_token>
@@ -326,8 +341,17 @@ CORE CAPABILITIES (TOOLS YOU CAN CALL)
 10) confirm_pod_received     → Confirm POD received, free driver to AVAILABLE
 11) release_driver_without_pod → Safety valve: free driver but keep pod_status PENDING
 12) mark_load_problem        → Flag load as PROBLEM with reason
+13) get_load_board_status    → Read from dipsy_load_board_status to see the entire board:
+                               all loads, their drivers (if any), and HOS-aware driver status.
 
 You MUST rely on these tools for real data. Never invent driver, truck, or load data.
+
+Use get_load_board_status when the user asks board-level questions, e.g.:
+- "Which loads currently have a driver assigned?"
+- "List all drivers who are currently assigned to active loads."
+- "Is Tony Stark assigned to any loads right now?"
+- "Show me all active loads that don't have a driver yet."
+- "Show me the real-time status of every load in my org."
 
 ═══════════════════════════════════════════════════════════════════════════════
 DISPATCH FLOW A: CREATING LOADS
@@ -419,13 +443,15 @@ User says: "POD received" / "Got the POD" / "POD is in"
 → Call confirm_pod_received
 → Sets pod_status=RECEIVED, pod_uploaded_at=now
 → Driver status → AVAILABLE
+→ ALSO clears loads.assigned_driver_id + loads.driver_name so the load no longer shows a driver.
 → Response: "✅ POD confirmed for [LOAD]. [DRIVER] is now AVAILABLE for new assignments."
 
 SAFETY VALVE - Release Without POD:
 User says: "Release the driver anyway" / "Free up [DRIVER] without POD"
 → Call release_driver_without_pod
 → Driver status → AVAILABLE
-→ pod_status stays PENDING (flagged for follow-up)
+→ Load keeps pod_status=PENDING (flagged for follow-up)
+→ ALSO clears loads.assigned_driver_id + loads.driver_name
 → Response: "✅ Released [DRIVER] - they're now AVAILABLE. Note: [LOAD] still needs POD uploaded."
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -442,6 +468,30 @@ If user provides reason upfront: "That load has a flat tire"
 AFTER mark_load_problem SUCCESS:
 - State: "🚨 Flagged [LOAD] as PROBLEM: [reason]"
 - Note: "I've set problem_flag=true and recorded the issue."
+
+═══════════════════════════════════════════════════════════════════════════════
+BOARD-LEVEL GLOBAL VIEW (USE get_load_board_status)
+═══════════════════════════════════════════════════════════════════════════════
+
+For questions about the entire board, ALWAYS call get_load_board_status:
+
+Examples:
+- "Which loads currently have a driver assigned?"
+  → Call get_load_board_status with { assigned_only: true }
+
+- "List all drivers who are currently assigned to active loads."
+  → Call get_load_board_status with { status: "IN_TRANSIT", assigned_only: true }
+
+- "Which loads currently have no driver?"
+  → Call get_load_board_status with { unassigned_only: true }
+
+- "Is Tony Stark assigned to any loads right now?"
+  → Call get_load_board_status with { driver_name: "Tony Stark", assigned_only: true }
+
+- "Show me the real-time status of every load in my org."
+  → Call get_load_board_status with no filters or with { limit: 100 }.
+
+You MUST base your answers on the board data returned. Do NOT contradict it.
 
 ═══════════════════════════════════════════════════════════════════════════════
 DRIVER & HOS RULES
@@ -463,7 +513,7 @@ HOS Status meanings:
 TRUCK LOCATION RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
-When user asks "Where is truck 2203?":
+When the user asks "Where is truck 2203?":
 → Call search_trucks_all_sources
 → This is the source of truth for Motive/Samsara/Atlas fleets
 → Only say "can't find that truck" if tool returns not found
@@ -655,10 +705,7 @@ function updateContextFromToolResult(
         updated.lastLoadDestination = result.load.destination;
         updated.lastLoadRate = result.load.rate;
         updated.lastLoadId = result.load.id;
-        console.log(
-          "[context] Updated lastLoad:",
-          updated.lastLoadReference
-        );
+        console.log("[context] Updated lastLoad:", updated.lastLoadReference);
       }
       break;
 
@@ -687,6 +734,30 @@ function updateContextFromToolResult(
       }
       break;
 
+    case "get_load_board_status":
+      // If exactly one board row returned, set both load + driver context
+      if (result.success && result.board?.length === 1) {
+        const row = result.board[0];
+        if (row.load_reference) {
+          updated.lastLoadReference = row.load_reference;
+          updated.lastLoadOrigin = row.origin;
+          updated.lastLoadDestination = row.destination;
+          updated.lastLoadRate = row.rate;
+          updated.lastLoadId = row.load_id;
+        }
+        if (row.driver_full_name || row.driver_name) {
+          updated.lastDriverName = row.driver_full_name || row.driver_name;
+          updated.lastDriverId = row.assigned_driver_id;
+          updated.lastDriverHOSMinutes = row.hos_drive_remaining_min;
+          updated.lastDriverStatus = row.hos_status || row.driver_status;
+          console.log(
+            "[context] Updated lastDriver from board:",
+            updated.lastDriverName
+          );
+        }
+      }
+      break;
+
     case "search_drivers":
     case "search_drivers_hos_aware":
       // If drivers returned, set top recommendation as context
@@ -696,14 +767,14 @@ function updateContextFromToolResult(
           const topDriver = drivers[0];
           updated.lastDriverName =
             topDriver.full_name ||
-            `${topDriver.first_name || ""} ${topDriver.last_name || ""}`.trim();
+            `${topDriver.first_name || ""} ${
+              topDriver.last_name || ""
+            }`.trim();
           updated.lastDriverId = topDriver.id;
           updated.lastDriverHOSMinutes = topDriver.hos_drive_remaining_min;
-          updated.lastDriverStatus = topDriver.hos_status || topDriver.status;
-          console.log(
-            "[context] Updated lastDriver:",
-            updated.lastDriverName
-          );
+          updated.lastDriverStatus =
+            topDriver.hos_status || topDriver.status;
+          console.log("[context] Updated lastDriver:", updated.lastDriverName);
         }
       }
       break;
@@ -927,7 +998,7 @@ function getToolDefinitions(): any[] {
       function: {
         name: "confirm_pod_received",
         description:
-          "Confirm POD has been received for a delivered load. Sets pod_status=RECEIVED and frees driver to AVAILABLE.",
+          "Confirm POD has been received for a delivered load. Sets pod_status=RECEIVED and frees driver to AVAILABLE, clears current assignment, and closes the assignment row.",
         parameters: {
           type: "object",
           properties: {
@@ -942,7 +1013,7 @@ function getToolDefinitions(): any[] {
       function: {
         name: "release_driver_without_pod",
         description:
-          "Safety valve: Release driver to AVAILABLE without POD. Load keeps pod_status=PENDING for follow-up.",
+          "Safety valve: Release driver to AVAILABLE without POD. Load keeps pod_status=PENDING for follow-up, clears the current driver assignment, and closes the assignment row.",
         parameters: {
           type: "object",
           properties: {
@@ -972,6 +1043,48 @@ function getToolDefinitions(): any[] {
         },
       },
     },
+    {
+      type: "function",
+      function: {
+        name: "get_load_board_status",
+        description:
+          "Board-level snapshot from dipsy_load_board_status. Use for questions about all loads and driver assignments.",
+        parameters: {
+          type: "object",
+          properties: {
+            status: {
+              type: "string",
+              enum: ["AVAILABLE", "IN_TRANSIT", "DELIVERED", "PROBLEM", "all"],
+              description: "Optional filter by load_status.",
+            },
+            assigned_only: {
+              type: "boolean",
+              description:
+                "If true, only return loads that currently have an assigned driver.",
+            },
+            unassigned_only: {
+              type: "boolean",
+              description:
+                "If true, only return loads that currently have NO assigned driver.",
+            },
+            driver_name: {
+              type: "string",
+              description:
+                "Optional fuzzy filter by driver_full_name to see loads for a specific driver.",
+            },
+            reference_fragment: {
+              type: "string",
+              description:
+                "Optional filter for load_reference containing this fragment.",
+            },
+            limit: {
+              type: "number",
+              description: "Maximum rows to return (default 50).",
+            },
+          },
+        },
+      },
+    },
   ];
 }
 
@@ -982,10 +1095,7 @@ async function executeTool(toolName: string, params: any): Promise<any> {
   const supabase: ReturnType<typeof createClient> = params.supabase;
 
   // Use context fallbacks for load_reference and driver_name
-  if (
-    params._contextLoadReference &&
-    !params.load_reference
-  ) {
+  if (params._contextLoadReference && !params.load_reference) {
     params.load_reference = params._contextLoadReference;
     console.log(
       "[dipsy-text] Using context load_reference:",
@@ -1037,6 +1147,9 @@ async function executeTool(toolName: string, params: any): Promise<any> {
     case "mark_load_problem":
       return await toolMarkLoadProblem(supabase, params);
 
+    case "get_load_board_status":
+      return await toolGetLoadBoardStatus(supabase, params);
+
     default:
       return { error: `Unknown tool: ${toolName}` };
   }
@@ -1052,7 +1165,19 @@ async function toolSearchLoads(
   let query = supabase
     .from("loads")
     .select(
-      "id, reference, origin, destination, status, rate, pickup_date, delivery_date, pod_status"
+      `
+      id,
+      reference,
+      origin,
+      destination,
+      status,
+      rate,
+      pickup_date,
+      delivery_date,
+      pod_status,
+      assigned_driver_id,
+      driver_name
+    `
     )
     .order("created_at", { ascending: false })
     .limit(params.limit || 10);
@@ -1205,6 +1330,80 @@ async function toolSearchTrucksAllSources(
   };
 }
 
+// ---- get_load_board_status ----
+async function toolGetLoadBoardStatus(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  let query = supabase
+    .from("dipsy_load_board_status")
+    .select(
+      `
+      load_id,
+      load_org_id,
+      load_reference,
+      load_status,
+      pod_status,
+      origin,
+      destination,
+      pickup_date,
+      delivery_date,
+      rate,
+      assigned_driver_id,
+      driver_name,
+      driver_org_id,
+      driver_full_name,
+      driver_status,
+      hos_status,
+      hos_drive_remaining_min,
+      hos_shift_remaining_min,
+      hos_cycle_remaining_min,
+      assignment_id,
+      assigned_at,
+      unassigned_at,
+      has_assigned_driver,
+      has_active_assignment_row
+    `
+    )
+    .order("load_reference", { ascending: true })
+    .limit(params.limit && params.limit > 0 ? params.limit : 50);
+
+  if (params.status && params.status !== "all") {
+    query = query.eq("load_status", params.status);
+  }
+
+  if (params.assigned_only) {
+    query = query.eq("has_assigned_driver", true);
+  }
+
+  if (params.unassigned_only) {
+    query = query.eq("has_assigned_driver", false);
+  }
+
+  if (params.driver_name) {
+    query = query.ilike("driver_full_name", `%${params.driver_name}%`);
+  }
+
+  if (params.reference_fragment) {
+    query = query.ilike("load_reference", `%${params.reference_fragment}%`);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    console.error("[toolGetLoadBoardStatus] error:", error);
+    return {
+      success: false,
+      error: error.message || "Failed to load board status",
+    };
+  }
+
+  return {
+    success: true,
+    count: data?.length ?? 0,
+    board: data ?? [],
+  };
+}
+
 // ---- create_load ----
 async function toolCreateLoad(
   supabase: ReturnType<typeof createClient>,
@@ -1214,12 +1413,11 @@ async function toolCreateLoad(
     Math.floor(Math.random() * 10000)
   ).padStart(4, "0")}`;
 
-  const shipper =
-    params.shipper?.trim() || "Unknown shipper";
-  const equipmentType =
-    params.equipment_type?.trim() || "Dry van";
-  const customerRef =
-    params.customer_reference?.trim() || loadNumber;
+  const shipper = params.shipper?.trim() || "Unknown shipper";
+  const equipmentType = params.equipment_type?.trim() || "Dry van";
+  const customerRef = params.customer_reference?.trim() || loadNumber;
+
+  const nowIso = new Date().toISOString();
 
   const { data, error } = await supabase
     .from("loads")
@@ -1246,9 +1444,9 @@ async function toolCreateLoad(
       breach_flag: false,
       fuel_surcharge: 0,
       accessorials: {},
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      status_changed_at: new Date().toISOString(),
+      created_at: nowIso,
+      updated_at: nowIso,
+      status_changed_at: nowIso,
     })
     .select()
     .single();
@@ -1306,7 +1504,7 @@ async function toolAssignDriverToLoad(
       params.load_reference
     );
 
-    // Find driver
+    // Find driver (now uses rpc_search_drivers_by_text under the hood)
     const driver = await findDriverByName(supabase, params.driver_name);
     if (!driver) {
       return { error: `Driver "${params.driver_name}" not found` };
@@ -1328,32 +1526,44 @@ async function toolAssignDriverToLoad(
       return { error: `Load "${params.load_reference}" not found` };
     }
 
-    // Create assignment
+    const nowIso = new Date().toISOString();
+
+    // Create assignment history row (unassigned_at defaults to NULL -> active assignment)
     const { error: assignError } = await supabase
       .from("load_driver_assignments")
       .insert({
         load_id: load.id,
         driver_id: driver.id,
-        assigned_at: new Date().toISOString(),
+        assigned_at: nowIso,
       });
 
     if (assignError) {
       return { error: `Failed to assign: ${assignError.message}` };
     }
 
-    // Update driver status
+    // Update driver status (kept same as your existing pattern)
     await supabase
       .from("drivers")
       .update({ status: "ASSIGNED" })
       .eq("id", driver.id);
 
-    // Update load status if AVAILABLE
+    // Canonical truth: write assignment directly on loads as well.
+    await supabase
+      .from("loads")
+      .update({
+        assigned_driver_id: driver.id,
+        driver_name: driverName,
+        updated_at: nowIso,
+      })
+      .eq("id", load.id);
+
+    // Update load status if AVAILABLE → IN_TRANSIT
     if (load.status === "AVAILABLE") {
       await supabase
         .from("loads")
         .update({
           status: "IN_TRANSIT",
-          status_changed_at: new Date().toISOString(),
+          status_changed_at: nowIso,
         })
         .eq("id", load.id);
     }
@@ -1416,11 +1626,13 @@ async function toolMarkLoadDelivered(
     return { error: error.message || "Failed to mark delivered" };
   }
 
-  // Get assigned driver name for response
+  // Get current assigned driver name for response (only active assignment rows)
   const { data: assignments } = await supabase
     .from("load_driver_assignments")
     .select("driver:drivers(id, full_name, first_name, last_name)")
     .eq("load_id", load.id)
+    .is("unassigned_at", null)
+    .order("assigned_at", { ascending: false })
     .limit(1);
 
   let driverName = "the driver";
@@ -1450,12 +1662,14 @@ async function toolConfirmPodReceived(
 
   const nowIso = new Date().toISOString();
 
-  // Update load POD status
+  // Update load POD status and clear current assignment on the load itself
   const { data, error } = await supabase
     .from("loads")
     .update({
       pod_status: "RECEIVED",
       pod_uploaded_at: nowIso,
+      assigned_driver_id: null,
+      driver_name: null,
       updated_at: nowIso,
     })
     .eq("id", load.id)
@@ -1466,32 +1680,44 @@ async function toolConfirmPodReceived(
     return { error: error.message || "Failed to confirm POD" };
   }
 
-  // Find and release assigned driver
+  // Find latest assigned driver (for messaging + status update)
   const { data: assignments } = await supabase
     .from("load_driver_assignments")
     .select("driver_id, driver:drivers(id, full_name, first_name, last_name)")
     .eq("load_id", load.id)
+    .order("assigned_at", { ascending: false })
     .limit(1);
 
   let driverName = "the driver";
+  let driverId: string | null = null;
+
   if (assignments?.[0]) {
-    const driverId = assignments[0].driver_id;
+    driverId = assignments[0].driver_id;
     const d = assignments[0].driver as any;
     driverName =
       d?.full_name || `${d?.first_name || ""} ${d?.last_name || ""}`.trim();
+  }
 
-    // Set driver to AVAILABLE
+  // Set driver back to ACTIVE (AVAILABLE for your UI)
+  if (driverId) {
     await supabase
       .from("drivers")
       .update({ status: "ACTIVE" })
       .eq("id", driverId);
   }
 
+  // Close out ANY open assignment history rows for this load
+  await supabase
+    .from("load_driver_assignments")
+    .update({ unassigned_at: nowIso })
+    .eq("load_id", load.id)
+    .is("unassigned_at", null);
+
   return {
     success: true,
     load: data,
     driver_name: driverName,
-    message: `POD confirmed for ${data.reference}. ${driverName} is now AVAILABLE.`,
+    message: `POD confirmed for ${data.reference}. ${driverName} is now AVAILABLE and the load no longer shows a current driver assignment.`,
   };
 }
 
@@ -1505,38 +1731,57 @@ async function toolReleaseDriverWithoutPod(
     return { error: `Load ${params.load_reference} not found` };
   }
 
-  // Find assigned driver
+  const nowIso = new Date().toISOString();
+
+  // Find assigned driver from current assignment
   const { data: assignments } = await supabase
     .from("load_driver_assignments")
-    .select("driver_id, driver:drivers(id, full_name, first_name, last_name)")
+    .select(
+      "id, driver_id, driver:drivers(id, full_name, first_name, last_name)"
+    )
     .eq("load_id", load.id)
+    .is("unassigned_at", null)
+    .order("assigned_at", { ascending: false })
     .limit(1);
 
   let driverName = "the driver";
   if (assignments?.[0]) {
+    const assignmentId = assignments[0].id;
     const driverId = assignments[0].driver_id;
     const d = assignments[0].driver as any;
     driverName =
       d?.full_name || `${d?.first_name || ""} ${d?.last_name || ""}`.trim();
 
-    // Set driver to AVAILABLE
+    // Close the assignment row
+    await supabase
+      .from("load_driver_assignments")
+      .update({ unassigned_at: nowIso })
+      .eq("id", assignmentId);
+
+    // Set driver to ACTIVE (free for new work)
     await supabase
       .from("drivers")
       .update({ status: "ACTIVE" })
       .eq("id", driverId);
   }
 
-  // Note: pod_status stays PENDING for follow-up
+  // Canonical truth: clear current assignment on the load, leave pod_status alone (usually PENDING)
   await supabase
     .from("loads")
-    .update({ updated_at: new Date().toISOString() })
+    .update({
+      assigned_driver_id: null,
+      driver_name: null,
+      updated_at: nowIso,
+    })
     .eq("id", load.id);
 
   return {
     success: true,
     load_reference: load.reference,
     driver_name: driverName,
-    message: `Released ${driverName} - now AVAILABLE. Note: ${load.reference} still needs POD uploaded (pod_status remains PENDING).`,
+    message: `Released ${driverName} - now AVAILABLE. Note: ${load.reference} still needs POD uploaded (pod_status remains ${
+      load.pod_status ?? "PENDING"
+    }).`,
   };
 }
 
@@ -1588,7 +1833,19 @@ async function findLoadByReference(
 ): Promise<any | null> {
   const selectClause = includeAssignments
     ? `*, load_driver_assignments(driver:drivers(id, full_name, first_name, last_name, phone, status))`
-    : "id, reference, origin, destination, status, rate, pod_status";
+    : `
+      id,
+      reference,
+      origin,
+      destination,
+      status,
+      rate,
+      pod_status,
+      pickup_date,
+      delivery_date,
+      assigned_driver_id,
+      driver_name
+    `;
 
   let { data: loads } = await supabase
     .from("loads")
@@ -1597,7 +1854,6 @@ async function findLoadByReference(
     .limit(1);
 
   if (!loads || loads.length === 0) {
-    // Try with just numbers
     const justNumber = reference.replace(/[^0-9]/g, "");
     if (justNumber) {
       const { data: loads2 } = await supabase
@@ -1612,20 +1868,39 @@ async function findLoadByReference(
   return loads?.[0] || null;
 }
 
+// 🔎 NEW: driver lookup that **always hits RPC truth first**
 async function findDriverByName(
   supabase: ReturnType<typeof createClient>,
   name: string
 ): Promise<any | null> {
-  // Try full_name first
+  const searchText = (name || "").trim();
+  if (!searchText) return null;
+
+  try {
+    const { data, error } = await supabase.rpc(
+      "rpc_search_drivers_by_text",
+      { search_text: searchText }
+    );
+
+    if (error) {
+      console.error("[findDriverByName] rpc_search_drivers_by_text error:", error);
+    } else if (data && data.length > 0) {
+      // Already org-scoped and RLS-safe inside the RPC
+      return data[0];
+    }
+  } catch (e) {
+    console.error("[findDriverByName] rpc_search_drivers_by_text threw:", e);
+  }
+
+  // Fallback – old direct RLS-safe search on drivers
   let { data: drivers } = await supabase
     .from("drivers")
     .select("id, full_name, first_name, last_name, status")
-    .ilike("full_name", `%${name}%`)
+    .ilike("full_name", `%${searchText}%`)
     .limit(1);
 
   if (!drivers || drivers.length === 0) {
-    // Try first/last name
-    const nameParts = name.trim().split(" ");
+    const nameParts = searchText.split(" ");
     const first = nameParts[0] ?? "";
     const last = nameParts.slice(1).join(" ");
 

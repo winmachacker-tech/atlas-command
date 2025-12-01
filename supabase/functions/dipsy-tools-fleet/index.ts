@@ -2,31 +2,36 @@
 //
 // Purpose (plain English):
 // ------------------------
-// This Edge Function is the backend “fleet tool” for Dipsy.
-// It lets Dipsy (and other parts of Atlas) ask:
+// This Edge Function is the backend “fleet + driver utility tool” for Dipsy.
+// It currently supports two tools:
 //
-//   tool: "search_fleet_latest"
-//   params: { provider: "dummy" | "motive" | "samsara" | "all", limit?: number }
+// 1) tool: "search_fleet_latest"
+//    params: { provider: "dummy" | "motive" | "samsara" | "all", limit?: number }
 //
-// It returns a unified list of vehicles with:
-//   - provider (dummy / motive / samsara)
-//   - vehicle_id
-//   - display_name
-//   - latitude / longitude
-//   - speed_mph
-//   - located_at
-//   - NEW: city, state, location_text (e.g. "near Placerville, CA")
+//    → Returns a unified list of vehicles with:
+//        - provider (dummy / motive / samsara)
+//        - vehicle_id
+//        - display_name
+//        - latitude / longitude
+//        - speed_mph
+//        - located_at
+//        - city, state, location_text (e.g. "near Placerville, CA")
 //
-// Flow:
+// 2) tool: "release_driver_from_all_loads"
+//    params: { driver_id: string }
+//
+//    → Unassigns a driver from all *active* loads for this org, so Dipsy can
+//      safely use that driver for a new load without double-assignment.
+//      This is used when you say things like:
+//        - “Unassign Elon from all loads and put him on this one.”
+//
+// Flow (for both tools):
 // 1) Caller sends POST with the *user’s* JWT in Authorization header.
 // 2) We create a Supabase client with the service-role key BUT forward the
 //    user’s JWT so all queries still respect RLS + current_org_id().
 // 3) We resolve org via rpc("current_org_id").
-// 4) We query per-provider “current location” tables/views, filtered by org_id.
-// 5) We normalize into a shared shape.
-// 6) We call Google Reverse Geocoding (if GOOGLE_MAPS_API_KEY is set) to turn
-//    lat/lon into city + state.
-// 7) We return JSON for Dipsy to talk about trucks in normal dispatcher language.
+// 4) We run the requested tool’s logic, always filtering by org_id.
+// 5) We return JSON that Dipsy can use to talk like a dispatcher.
 //
 // SECURITY:
 // - Uses SUPABASE_SERVICE_ROLE_KEY only on the server.
@@ -55,9 +60,17 @@ type SearchFleetLatestParams = {
   limit?: number;
 };
 
+type ReleaseDriverFromAllLoadsParams = {
+  // For safety and simplicity, this tool currently requires a specific driver_id.
+  // Dipsy (or another tool) should resolve name → driver_id before calling this.
+  driver_id: string;
+};
+
 type FleetToolRequest = {
   tool?: string;
-  params?: SearchFleetLatestParams;
+  // NOTE: At runtime this may be either SearchFleetLatestParams or
+  // ReleaseDriverFromAllLoadsParams depending on the "tool" value.
+  params?: SearchFleetLatestParams | ReleaseDriverFromAllLoadsParams;
 };
 
 type NormalizedFleetVehicle = {
@@ -70,12 +83,21 @@ type NormalizedFleetVehicle = {
   speed_mph: number | null;
   located_at: string | null;
 
-  // NEW: reverse-geocoded fields
+  // reverse-geocoded fields
   city?: string | null;
   state?: string | null;
   location_text?: string | null; // e.g. "near Placerville, CA"
 
   raw: unknown;
+};
+
+type ReleaseDriverResult = {
+  ok: boolean;
+  tool: "release_driver_from_all_loads";
+  driver_id?: string;
+  released_load_ids?: string[];
+  total_released?: number;
+  error?: string;
 };
 
 // ---------- Supabase client (RLS-safe) --------------------------------------
@@ -382,6 +404,147 @@ async function handleSearchFleetLatest(
   };
 }
 
+// ---------- Tool implementation: release_driver_from_all_loads --------------
+//
+// Purpose:
+// - Safely unassign a driver from all *active* loads in THIS org.
+// - Used when Dipsy needs to "free up" a driver before putting them
+//   on a new load so we never double-assign.
+//
+// Notes:
+// - This does NOT bypass RLS; it uses the user's JWT via createRlsClient.
+// - It only updates loads for the current org_id.
+// - It only touches loads with "active-like" statuses. Closed/canceled
+//   loads are left alone.
+//
+
+// These are the statuses we consider "active enough" that a driver being
+// assigned still matters. Adjust as your real enum grows, but it's safe
+// to include extra strings that may not exist.
+const ACTIVE_LOAD_STATUSES = [
+  "TENDERED",
+  "DISPATCHED",
+  "ASSIGNED",
+  "IN_TRANSIT",
+  "EN_ROUTE",
+  "AT_PICKUP",
+  "AT_DELIVERY",
+  "DELIVERED",
+  "POD_PENDING",
+  "POD_WAITING",
+];
+
+async function handleReleaseDriverFromAllLoads(
+  authHeader: string | null,
+  params: ReleaseDriverFromAllLoadsParams | undefined,
+): Promise<ReleaseDriverResult> {
+  const supabase = createRlsClient(authHeader);
+
+  // 1) Validate input
+  const driverId = params?.driver_id;
+  if (!driverId) {
+    console.warn(
+      "[dipsy-tools-fleet] release_driver_from_all_loads called without driver_id",
+    );
+    return {
+      ok: false,
+      tool: "release_driver_from_all_loads",
+      error: "driver_id is required to release a driver from loads.",
+    };
+  }
+
+  // 2) Resolve org via current_org_id()
+  const { data: orgId, error: orgError } = await supabase.rpc("current_org_id");
+
+  if (orgError) {
+    console.error(
+      "[dipsy-tools-fleet] current_org_id error (release_driver_from_all_loads):",
+      orgError,
+    );
+    return {
+      ok: false,
+      tool: "release_driver_from_all_loads",
+      error: "Could not determine your organization for driver release.",
+    };
+  }
+
+  if (!orgId) {
+    console.warn(
+      "[dipsy-tools-fleet] current_org_id returned null (release_driver_from_all_loads)",
+    );
+    return {
+      ok: false,
+      tool: "release_driver_from_all_loads",
+      error:
+        "You do not appear to have an active organization. Driver release requires an org.",
+    };
+  }
+
+  // 3) Find all active loads currently assigned to this driver in this org.
+  const { data: loads, error: loadsError } = await supabase
+    .from("loads")
+    .select("id,status")
+    .eq("org_id", orgId)
+    .eq("driver_id", driverId)
+    .in("status", ACTIVE_LOAD_STATUSES);
+
+  if (loadsError) {
+    console.error(
+      "[dipsy-tools-fleet] Error fetching loads for driver release:",
+      loadsError,
+    );
+    return {
+      ok: false,
+      tool: "release_driver_from_all_loads",
+      error: "Failed to look up loads for this driver.",
+    };
+  }
+
+  if (!loads || loads.length === 0) {
+    // Nothing to release; this is not an error, just a no-op.
+    return {
+      ok: true,
+      tool: "release_driver_from_all_loads",
+      driver_id: driverId,
+      released_load_ids: [],
+      total_released: 0,
+    };
+  }
+
+  const loadIds = loads.map((l) => l.id);
+
+  // 4) Unassign the driver from those loads (set driver_id to null).
+  const { data: updated, error: updateError } = await supabase
+    .from("loads")
+    .update({ driver_id: null })
+    .eq("org_id", orgId)
+    .eq("driver_id", driverId)
+    .in("status", ACTIVE_LOAD_STATUSES)
+    .select("id");
+
+  if (updateError) {
+    console.error(
+      "[dipsy-tools-fleet] Error releasing driver from loads:",
+      updateError,
+    );
+    return {
+      ok: false,
+      tool: "release_driver_from_all_loads",
+      error: "Failed to release driver from loads.",
+    };
+  }
+
+  const updatedIds = (updated ?? []).map((l: any) => l.id);
+
+  return {
+    ok: true,
+    tool: "release_driver_from_all_loads",
+    driver_id: driverId,
+    released_load_ids: updatedIds,
+    total_released: updatedIds.length,
+  };
+}
+
 // ---------- Main HTTP handler -----------------------------------------------
 
 serve(async (req: Request): Promise<Response> => {
@@ -432,7 +595,22 @@ serve(async (req: Request): Promise<Response> => {
   try {
     switch (tool) {
       case "search_fleet_latest": {
-        const result = await handleSearchFleetLatest(authHeader, payload.params);
+        const result = await handleSearchFleetLatest(
+          authHeader,
+          payload.params as SearchFleetLatestParams | undefined,
+        );
+        const status = result.ok ? 200 : 400;
+        return new Response(JSON.stringify(result), {
+          status,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      case "release_driver_from_all_loads": {
+        const result = await handleReleaseDriverFromAllLoads(
+          authHeader,
+          payload.params as ReleaseDriverFromAllLoadsParams | undefined,
+        );
         const status = result.ok ? 200 : 400;
         return new Response(JSON.stringify(result), {
           status,

@@ -3,6 +3,14 @@
 // Resolves loads by UUID or human identifiers (load_number, reference, etc.).
 // Resolves drivers by UUID, full_name, name, driver_code, employee_code, or first_name+last_name.
 // Handles duplicates by preferring ACTIVE + most recently updated.
+//
+// IMPORTANT CHANGE:
+// -----------------
+// This version ONLY updates loads.driver_id and loads.updated_at.
+// It does NOT change drivers.status at all, to avoid violating the
+// drivers_status_check constraint. Driver "ASSIGNED / AVAILABLE" UI
+// should be derived from whether a driver has active loads, not by
+// writing to drivers.status here.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -27,15 +35,20 @@ function corsHeaders(origin: string | null): Headers {
   h.set("Content-Type", "application/json; charset=utf-8");
   return h;
 }
+
 function json(status: number, body: unknown, origin: string | null) {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders(origin) });
 }
+
 const isUUID = (s?: string | null) =>
   !!s && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
 
-const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});
 
 type RowBase = { updated_at?: string | null; created_at?: string | null };
+
 function pickLatest<T extends RowBase>(rows: T[]): T {
   return rows
     .slice()
@@ -50,19 +63,23 @@ function pickLatest<T extends RowBase>(rows: T[]): T {
 }
 
 /* ---------------------------- Load resolve --------------------------- */
+
 async function resolveLoadId(args: { id?: string | null; number?: string | null }) {
   const { id, number } = args;
+
+  // Direct UUID
   if (isUUID(id)) return id!;
+
   const terms: string[] = [];
   if (number?.trim()) terms.push(number.trim());
   if (id?.trim() && !isUUID(id)) terms.push(id.trim());
   if (!terms.length) throw new Error("Missing required field: load_id or load_number");
 
-  // Add/adjust to match your schema if needed
+  // Adjust to match your schema if needed
   const cols = ["load_number", "number", "reference", "ref", "external_id", "shipment_number"];
 
   for (const term of terms) {
-    // exact
+    // Exact match search
     for (const col of cols) {
       try {
         const { data, error } = await admin
@@ -72,6 +89,7 @@ async function resolveLoadId(args: { id?: string | null; number?: string | null 
           .order("updated_at", { ascending: false })
           .order("created_at", { ascending: false })
           .limit(10);
+
         if (error) {
           if ((error as any).message?.includes(`column "${col}"`)) continue;
           throw error;
@@ -82,7 +100,8 @@ async function resolveLoadId(args: { id?: string | null; number?: string | null 
         throw new Error(`Error searching loads: ${(e as any).message || e}`);
       }
     }
-    // ilike
+
+    // ILIKE search
     for (const col of cols) {
       try {
         const { data, error } = await admin
@@ -92,6 +111,7 @@ async function resolveLoadId(args: { id?: string | null; number?: string | null 
           .order("updated_at", { ascending: false })
           .order("created_at", { ascending: false })
           .limit(10);
+
         if (error) {
           if ((error as any).message?.includes(`column "${col}"`)) continue;
           throw error;
@@ -108,10 +128,12 @@ async function resolveLoadId(args: { id?: string | null; number?: string | null 
 }
 
 /* --------------------------- Driver resolve -------------------------- */
+
 function pickBestDriver(rows: Array<{ id: string; status?: string | null } & RowBase>) {
   return rows
     .map((r) => ({
       r,
+      // Prefer ACTIVE drivers, then by most-recent updated/created
       score:
         (r.status === "ACTIVE" ? 1e9 : 0) +
         (r.updated_at ? Date.parse(r.updated_at) : 0) +
@@ -122,14 +144,19 @@ function pickBestDriver(rows: Array<{ id: string; status?: string | null } & Row
 
 async function resolveDriverId(args: { id?: string | null; name?: string | null }) {
   const { id, name } = args;
-  if (!id && !name) return null; // allow unassign
+
+  // Allow "unassign driver" by passing nothing
+  if (!id && !name) return null;
+
+  // Direct UUID
   if (isUUID(id)) return id!;
+
   const term = (name ?? "").trim();
   if (!term) return null;
 
   const cols = ["full_name", "name", "driver_code", "employee_code"];
 
-  // exact across text columns
+  // Exact across text columns
   for (const col of cols) {
     try {
       const { data, error } = await admin
@@ -139,6 +166,7 @@ async function resolveDriverId(args: { id?: string | null; name?: string | null 
         .order("updated_at", { ascending: false })
         .order("created_at", { ascending: false })
         .limit(10);
+
       if (error) {
         if ((error as any).message?.includes(`column "${col}"`)) continue;
         throw error;
@@ -150,7 +178,7 @@ async function resolveDriverId(args: { id?: string | null; name?: string | null 
     }
   }
 
-  // ilike across text columns
+  // ILIKE across text columns
   for (const col of cols) {
     try {
       const { data, error } = await admin
@@ -160,6 +188,7 @@ async function resolveDriverId(args: { id?: string | null; name?: string | null 
         .order("updated_at", { ascending: false })
         .order("created_at", { ascending: false })
         .limit(10);
+
       if (error) {
         if ((error as any).message?.includes(`column "${col}"`)) continue;
         throw error;
@@ -189,7 +218,10 @@ async function resolveDriverId(args: { id?: string | null; name?: string | null 
           .order("created_at", { ascending: false })
           .limit(10);
         if (!error && data?.length) return pickBestDriver(data).id;
-      } catch {}
+      } catch {
+        // ignore
+      }
+
       // ilike first+last
       try {
         const { data, error } = await admin
@@ -201,7 +233,9 @@ async function resolveDriverId(args: { id?: string | null; name?: string | null 
           .order("created_at", { ascending: false })
           .limit(10);
         if (!error && data?.length) return pickBestDriver(data).id;
-      } catch {}
+      } catch {
+        // ignore
+      }
     }
 
     // single token → match either first_name or last_name
@@ -214,40 +248,57 @@ async function resolveDriverId(args: { id?: string | null; name?: string | null 
         .order("created_at", { ascending: false })
         .limit(10);
       if (!error && data?.length) return pickBestDriver(data).id;
-    } catch {}
+    } catch {
+      // ignore
+    }
   }
 
-  throw new Error(`Could not resolve driver by "${term}". Provide a clearer name/code or driver_id (UUID).`);
+  throw new Error(
+    `Could not resolve driver by "${term}". Provide a clearer name/code or driver_id (UUID).`,
+  );
 }
 
 /* --------------------------- Core operation -------------------------- */
-async function assignDriver({ load_id, driver_id }: { load_id: string; driver_id: string | null }) {
-  const { data: updated, error } = await admin
+
+async function assignDriver({
+  load_id,
+  driver_id,
+}: {
+  load_id: string;
+  driver_id: string | null;
+}) {
+  const now = new Date().toISOString();
+
+  // Only update the load's driver_id (and updated_at).
+  // We intentionally do NOT modify drivers.status to avoid violating
+  // the drivers_status_check constraint. "Assigned" vs "Available"
+  // should be derived from whether the driver has active loads.
+  const { data: updatedLoad, error: loadUpdateError } = await admin
     .from("loads")
-    .update({ driver_id, updated_at: new Date().toISOString() })
+    .update({ driver_id, updated_at: now })
     .eq("id", load_id)
     .select("*")
     .single();
 
-  if (error) throw new Error(`Failed to update load: ${error.message}`);
-
-  if (driver_id) {
-    const { error: drvErr } = await admin
-      .from("drivers")
-      .update({ status: "ASSIGNED", updated_at: new Date().toISOString() })
-      .eq("id", driver_id);
-    if (drvErr) throw new Error(`Failed to update driver: ${drvErr.message}`);
+  if (loadUpdateError) {
+    throw new Error(`Failed to update load: ${loadUpdateError.message}`);
   }
 
-  return { load: updated };
+  return { load: updatedLoad };
 }
 
 /* ------------------------------- Server ------------------------------ */
+
 Deno.serve(async (req) => {
   const origin = req.headers.get("Origin");
 
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
-  if (req.method !== "POST")   return json(405, { error: "Method Not Allowed. Use POST." }, origin);
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsHeaders(origin) });
+  }
+
+  if (req.method !== "POST") {
+    return json(405, { error: "Method Not Allowed. Use POST." }, origin);
+  }
 
   try {
     const contentType = req.headers.get("content-type") || "";
@@ -257,17 +308,21 @@ Deno.serve(async (req) => {
 
     const body = await req.json();
 
+    // 1) Resolve the load
     const load_id = await resolveLoadId({
       id: body?.load_id ?? null,
       number: body?.load_number ?? null,
     });
 
+    // 2) Resolve driver (or null to unassign)
     const driver_id = await resolveDriverId({
       id: body?.driver_id ?? null,
       name: body?.driver_name ?? body?.driver ?? null,
     });
 
+    // 3) Perform the assignment/unassignment
     const result = await assignDriver({ load_id, driver_id });
+
     return json(200, { ok: true, ...result }, origin);
   } catch (err) {
     console.error("dispatch-assign-driver error:", err);

@@ -120,6 +120,21 @@ function formatHosSummary(row) {
   return parts.join(" · ");
 }
 
+/* Map DB status -> human UI label
+ * DB truth:
+ *   - ASSIGNED = driver has at least one active load
+ *   - ACTIVE   = driver has no active loads
+ * UI labels:
+ *   - ASSIGNED → "ASSIGNED"
+ *   - ACTIVE   → "AVAILABLE"
+ *   - others   → shown as-is (e.g. SUSPENDED)
+ */
+function getUiStatusLabel(dbStatus) {
+  if (!dbStatus) return "—";
+  if (dbStatus === "ACTIVE") return "AVAILABLE";
+  return dbStatus;
+}
+
 /* ============================== PAGE ============================== */
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -425,9 +440,6 @@ export default function Drivers() {
   }
 
   async function handleRandomizeHos() {
-    // NOTE: This expects a deployed Edge Function at:
-    // supabase/functions/hos-sim-randomize/index.ts
-    // If it does not exist yet, this will return an error toast.
     await callHosSimFunction("hos-sim-randomize", {});
   }
 
@@ -778,9 +790,9 @@ export default function Drivers() {
         <div>
           <h1 className="text-lg font-semibold text-slate-100">Drivers</h1>
           <p className="text-xs text-slate-400">
-            Org-scoped list of drivers. All actions respect Row Level
-            Security. HOS data is read-only and maintained by Atlas
-            integrations/simulators.
+            Org-scoped list of drivers. All actions respect Row Level Security.
+            HOS data is read-only and maintained by Atlas integrations/simulators.
+            Status reflects real load assignments (ASSIGNED vs AVAILABLE).
           </p>
         </div>
 
@@ -925,9 +937,9 @@ export default function Drivers() {
                 if (type === "hos-sim-tick") {
                   const baseTotal =
                     simulatable_drivers ?? total_drivers ?? updated ?? 0;
-                  return `Last: advanced ${tick_minutes} minutes, updated ${updated ?? 0} of ${
-                    baseTotal
-                  } drivers.`;
+                  return `Last: advanced ${tick_minutes} minutes, updated ${
+                    updated ?? 0
+                  } of ${baseTotal} drivers.`;
                 }
                 if (type === "hos-sim-reset") {
                   return `Last: reset HOS for ${updated ?? 0} of ${
@@ -1127,6 +1139,8 @@ export default function Drivers() {
                 const isEditing = editingId === row.id;
                 const paySummary = formatPaySummary(row);
                 const hosSummary = formatHosSummary(row);
+                const uiStatus = getUiStatusLabel(row.status);
+                const isAssigned = row.status === "ASSIGNED";
 
                 return (
                   <tr
@@ -1401,13 +1415,15 @@ export default function Drivers() {
                       ) : (
                         <span
                           className={cx(
-                            "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium",
-                            row.status === "ACTIVE"
-                              ? "bg-emerald-500/10 text-emerald-200 border border-emerald-500/40"
-                              : "bg-slate-700/40 text-slate-200 border border-slate-500/40"
+                            "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium border",
+                            isAssigned
+                              ? "bg-emerald-500/15 text-emerald-200 border-emerald-500/60"
+                              : row.status === "ACTIVE"
+                              ? "bg-slate-700/30 text-slate-100 border-slate-500/40"
+                              : "bg-slate-800/40 text-slate-200 border-slate-500/40"
                           )}
                         >
-                          {row.status || "—"}
+                          {uiStatus}
                         </span>
                       )}
                     </td>

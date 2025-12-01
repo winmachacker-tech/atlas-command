@@ -1,4 +1,4 @@
-// FILE: src/layouts/MainLayout.jsx
+// FILE: src/layout/MainLayout.jsx
 // Purpose:
 // - Main shell layout for Atlas Command.
 // - Provides sidebar navigation, top header, notifications, avatar menu.
@@ -47,9 +47,15 @@ import {
   BarChart3,
   FileCheck,
   Crown,
-  TrendingUp, // Sales
+  TrendingUp,
   Building2,
-  MapPin, // 🌍 Fleet Map
+  MapPin,
+  MessageSquare,
+  Bug,
+  AlertTriangle,
+  FileText,
+  CheckCircle,
+  ExternalLink,
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { trackLogout } from "../lib/activityTracker";
@@ -263,61 +269,64 @@ function AvatarMenu({ onSignOut }) {
   );
 }
 
-/* --------------------- Notification Bell --------------------- */
+/* --------------------- Dispatch Notification Bell --------------------- */
 function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
-  const [userId, setUserId] = useState(null);
   const [loading, setLoading] = useState(false);
   const wrapRef = useRef(null);
   const nav = useNavigate();
 
-  async function loadLatest(uid) {
+  // Fetch from dispatch_notifications
+  async function loadLatest() {
     setLoading(true);
-    const { data: rows } = await supabase
-      .from("notifications")
-      .select("*")
-      .eq("user_id", uid)
-      .order("created_at", { ascending: false })
-      .limit(10);
-    setItems(rows || []);
-    setLoading(false);
+    try {
+      const { data: rows, error } = await supabase
+        .from("dispatch_notifications")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(10);
+      
+      if (error) throw error;
+      setItems(rows || []);
+    } catch (err) {
+      console.error("[NotificationBell] Failed to load:", err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    let mounted = true;
-    (async () => {
-      const { data } = await supabase.auth.getUser();
-      const uid = data?.user?.id || null;
-      if (!mounted || !uid) return;
-      setUserId(uid);
-      await loadLatest(uid);
-    })();
-    return () => {
-      mounted = false;
-    };
+    loadLatest();
   }, []);
 
+  // Real-time subscription
   useEffect(() => {
-    if (!userId) return;
     const channel = supabase
-      .channel("realtime:notifications")
+      .channel("realtime:dispatch_notifications")
       .on(
         "postgres_changes",
         {
           event: "INSERT",
           schema: "public",
-          table: "notifications",
-          filter: `user_id=eq.${userId}`,
+          table: "dispatch_notifications",
         },
-        (payload) => setItems((prev) => [payload.new, ...prev].slice(0, 10))
+        (payload) => {
+          setItems((prev) => [payload.new, ...prev].slice(0, 10));
+          // Play sound for critical
+          if (payload.new.severity === "critical") {
+            playNotificationSound();
+          }
+        }
       )
       .subscribe();
+
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [userId]);
+  }, []);
 
+  // Close on outside click
   useEffect(() => {
     function onDoc(e) {
       if (!wrapRef.current) return;
@@ -334,33 +343,84 @@ function NotificationBell() {
     };
   }, []);
 
-  const unread = items.filter((i) => !i.read).length;
+  const unread = items.filter((i) => !i.read_at).length;
 
-  async function markAllRead() {
-    if (!userId) return;
-    const ids = items.filter((i) => !i.read).map((i) => i.id);
-    if (!ids.length) return;
-    await supabase
-      .from("notifications")
-      .update({ read: true })
-      .in("id", ids)
-      .eq("user_id", userId);
-    setItems((prev) => prev.map((i) => ({ ...i, read: true })));
+  // Play notification sound
+  function playNotificationSound() {
+    try {
+      const audio = new Audio("/notification.mp3");
+      audio.volume = 0.5;
+      audio.play().catch(() => {});
+    } catch (e) {
+      // Ignore
+    }
   }
 
-  async function handleItemClick(it) {
-    if (userId && !it.read) {
+  // Mark all read
+  async function markAllRead() {
+    const ids = items.filter((i) => !i.read_at).map((i) => i.id);
+    if (!ids.length) return;
+    try {
       await supabase
-        .from("notifications")
-        .update({ read: true })
-        .eq("id", it.id)
-        .eq("user_id", userId);
-      setItems((prev) =>
-        prev.map((x) => (x.id === it.id ? { ...x, read: true } : x))
-      );
+        .from("dispatch_notifications")
+        .update({ read_at: new Date().toISOString() })
+        .in("id", ids);
+      setItems((prev) => prev.map((i) => ({ ...i, read_at: new Date().toISOString() })));
+    } catch (err) {
+      console.error("[NotificationBell] markAllRead error:", err);
     }
-    if (it.link) nav(it.link);
+  }
+
+  // Handle item click
+  async function handleItemClick(it) {
+    // Mark as read
+    if (!it.read_at) {
+      try {
+        await supabase
+          .from("dispatch_notifications")
+          .update({ read_at: new Date().toISOString() })
+          .eq("id", it.id);
+        setItems((prev) =>
+          prev.map((x) => (x.id === it.id ? { ...x, read_at: new Date().toISOString() } : x))
+        );
+      } catch (err) {
+        console.error("[NotificationBell] markRead error:", err);
+      }
+    }
+    // Navigate to load if available
+    if (it.load_id) {
+      nav(`/loads/${it.load_id}`);
+    }
     setOpen(false);
+  }
+
+  // Get icon for notification type
+  function getIcon(type, severity) {
+    if (severity === "critical" || type === "ISSUE") {
+      return <AlertTriangle className="h-4 w-4 text-red-500" />;
+    }
+    if (type === "POD_RECEIVED") {
+      return <FileText className="h-4 w-4 text-blue-500" />;
+    }
+    if (type === "LOAD_DELIVERED") {
+      return <CheckCircle className="h-4 w-4 text-green-500" />;
+    }
+    return <Truck className="h-4 w-4 text-[var(--text-muted)]" />;
+  }
+
+  // Format time ago
+  function timeAgo(dateString) {
+    const now = new Date();
+    const date = new Date(dateString);
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    return `${diffDays}d ago`;
   }
 
   return (
@@ -374,7 +434,7 @@ function NotificationBell() {
       >
         <Bell className="h-5 w-5" />
         {unread > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-black text-[10px] grid place-items-center">
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center">
             {unread > 99 ? "99+" : unread}
           </span>
         )}
@@ -383,36 +443,40 @@ function NotificationBell() {
       {open && (
         <div
           className={cx(
-            "absolute right-0 mt-2 w-[360px] max-w-[90vw] rounded-xl z-40 overflow-hidden",
+            "absolute right-0 mt-2 w-[400px] max-w-[90vw] rounded-xl z-40 overflow-hidden",
             "bg-[var(--bg-panel)] border border-[var(--border)] shadow-2xl"
           )}
         >
-          <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border-subtle)]">
-            <span className="text-sm font-medium">Notifications</span>
+          {/* Header */}
+          <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]">
+            <span className="text-sm font-medium">Dispatch Notifications</span>
             <div className="flex items-center gap-3">
               <button
-                onClick={() => userId && loadLatest(userId)}
+                onClick={loadLatest}
                 className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-base)]"
                 title="Refresh"
               >
                 <RefreshCw
                   className={cx("h-3.5 w-3.5", loading && "animate-spin")}
                 />
-                Refresh
               </button>
-              <button
-                onClick={markAllRead}
-                className="text-xs text-[var(--text-muted)] hover:text-[var(--text-base)]"
-              >
-                Mark all as read
-              </button>
+              {unread > 0 && (
+                <button
+                  onClick={markAllRead}
+                  className="text-xs text-[var(--text-muted)] hover:text-[var(--text-base)]"
+                >
+                  Mark all read
+                </button>
+              )}
             </div>
           </div>
 
+          {/* List */}
           <div className="max-h-[60vh] overflow-auto">
             {items.length === 0 ? (
-              <div className="p-4 text-sm text-[var(--text-muted)]">
-                No notifications yet.
+              <div className="p-6 text-center text-[var(--text-muted)]">
+                <Bell className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                <p className="text-sm">No notifications yet</p>
               </div>
             ) : (
               <ul className="divide-y divide-[var(--border-subtle)]">
@@ -421,29 +485,53 @@ function NotificationBell() {
                     key={it.id}
                     className={cx(
                       "px-3 py-3 cursor-pointer hover:bg-[var(--bg-hover)] transition",
-                      !it.read && "bg-[var(--bg-active)]/40"
+                      !it.read_at && "bg-amber-500/5",
+                      it.severity === "critical" && "border-l-4 border-l-red-500"
                     )}
                     onClick={() => handleItemClick(it)}
                   >
                     <div className="flex items-start gap-3">
                       <div className="mt-0.5">
-                        <Bell className="h-4 w-4 text-amber-500" />
+                        {getIcon(it.type, it.severity)}
                       </div>
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium truncate">
-                          {it.title || "Notification"}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className={cx(
+                            "text-sm font-medium truncate",
+                            it.read_at ? "text-[var(--text-muted)]" : "text-[var(--text-base)]"
+                          )}>
+                            {it.title || "Notification"}
+                          </span>
+                          {it.severity === "critical" && (
+                            <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-red-500/20 text-red-400">
+                              Critical
+                            </span>
+                          )}
+                          {it.severity === "warning" && (
+                            <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-500/20 text-amber-400">
+                              Warning
+                            </span>
+                          )}
                         </div>
                         {it.message && (
-                          <div className="text-xs text-[var(--text-muted)] truncate">
+                          <div className="text-xs text-[var(--text-muted)] truncate mt-0.5">
                             {it.message}
                           </div>
                         )}
-                        <div className="mt-1 text-[10px] text-[var(--text-muted)]">
-                          {new Date(it.created_at).toLocaleString()}
+                        <div className="flex items-center gap-2 mt-1 text-[10px] text-[var(--text-muted)]">
+                          <span>{timeAgo(it.created_at)}</span>
+                          {it.meta?.load_reference && (
+                            <span className="px-1.5 py-0.5 bg-[var(--bg-surface)] rounded">
+                              #{it.meta.load_reference}
+                            </span>
+                          )}
                         </div>
                       </div>
-                      {!it.read && (
-                        <span className="ml-auto mt-0.5 inline-block h-2 w-2 rounded-full bg-amber-500" />
+                      {!it.read_at && (
+                        <span className="ml-auto mt-1 inline-block h-2 w-2 rounded-full bg-amber-500 flex-shrink-0" />
+                      )}
+                      {it.load_id && (
+                        <ExternalLink className="h-3.5 w-3.5 text-[var(--text-muted)] flex-shrink-0" />
                       )}
                     </div>
                   </li>
@@ -452,7 +540,17 @@ function NotificationBell() {
             )}
           </div>
 
-          <div className="px-3 py-2 border-t border-[var(--border-subtle)] text-right">
+          {/* Footer */}
+          <div className="px-3 py-2 border-t border-[var(--border-subtle)] bg-[var(--bg-surface)] flex justify-between">
+            <button
+              onClick={() => {
+                nav("/notifications");
+                setOpen(false);
+              }}
+              className="text-xs text-amber-500 hover:text-amber-400"
+            >
+              View all notifications
+            </button>
             <button
               onClick={() => setOpen(false)}
               className="text-xs text-[var(--text-muted)] hover:text-[var(--text-base)]"
@@ -612,6 +710,7 @@ export default function MainLayout() {
         "/settings/notifications",
         "/settings/integrations",
         "/settings/security",
+        "/settings/whatsapp",
         "/teammanagement",
         "/admin/driver-learning-test",
         "/ai-proof",
@@ -619,6 +718,7 @@ export default function MainLayout() {
         "/customers",
         "/trust-center",
         "/super-admin",
+        "/notifications",
       ].some((p) => pathname.startsWith(p))
     )
       return "admin";
@@ -628,6 +728,7 @@ export default function MainLayout() {
       pathname.startsWith("/ai-lab-proof")
     )
       return "ai";
+    if (pathname.startsWith("/debug/board")) return "debug";
     return null;
   }, [pathname]);
 
@@ -674,7 +775,6 @@ export default function MainLayout() {
         `${window.location.origin}/integrations/motive/callback`;
 
       // 🔑 Scopes - can be overridden via env, or use sensible defaults for fleet management
-      // Common scopes: companies.read, users.read, vehicles.read, drivers.read, hos_logs.read, locations.read
       const scopeEnv = import.meta.env.VITE_MOTIVE_SCOPE;
       const scope =
         scopeEnv ||
@@ -770,7 +870,6 @@ export default function MainLayout() {
                   <SideLink to="/trucks" icon={Truck}>
                     Trucks
                   </SideLink>
-                  {/* 🌍 Fleet Map – live Motive locations */}
                   <SideLink to="/fleet-map" icon={MapPin}>
                     Fleet Map
                   </SideLink>
@@ -807,14 +906,20 @@ export default function MainLayout() {
                   <SideLink to="/settings/appearance" icon={Palette}>
                     Appearance
                   </SideLink>
-                  <SideLink to="/settings/notifications" icon={Bell}>
+                  <SideLink to="/notifications" icon={Bell}>
                     Notifications
+                  </SideLink>
+                  <SideLink to="/settings/notifications" icon={Bell}>
+                    Notification Settings
                   </SideLink>
                   <SideLink to="/settings/integrations" icon={Plug}>
                     Integrations
                   </SideLink>
                   <SideLink to="/settings/security" icon={Shield}>
                     Security
+                  </SideLink>
+                  <SideLink to="/settings/whatsapp" icon={MessageSquare}>
+                    WhatsApp
                   </SideLink>
                   <SideLink to="/trust-center" icon={ShieldCheck}>
                     Trust &amp; Security
@@ -854,6 +959,18 @@ export default function MainLayout() {
                 <SideLink to="/ai-insights" icon={Sparkles}>
                   AI Insights
                 </SideLink>
+
+                {/* Debug group */}
+                <SideGroup
+                  id="debug"
+                  title="Debug"
+                  icon={Bug}
+                  defaultOpen={activeGroupByPath === "debug"}
+                >
+                  <SideLink to="/debug/board" icon={Bug}>
+                    Commander Board Debug
+                  </SideLink>
+                </SideGroup>
               </nav>
 
               {/* Footer actions */}

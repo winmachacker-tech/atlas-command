@@ -1,45 +1,131 @@
 // FILE: src/lib/dipsyTextClient.js
 //
-// Purpose:
+// Purpose
+// -------
+// Single, central client for talking to the Dipsy text Edge Function
+// (`supabase/functions/v1/dipsy-text`).
+//
+// Responsibilities:
+// - Get the current Supabase JWT (RLS-safe).
+// - Load any saved conversation_state from localStorage.
+// - Send `message` + `conversation_state` to the Edge Function.
+// - Receive and persist the updated `conversation_state`.
+// - Expose a clean `askDipsy(message)` helper the UI can use everywhere.
+//
+// Exports:
 // --------
-// Provides a simple function for the React app to talk to Dipsy:
+// 1) sendDipsyTextMessage(message, conversationState?)
+//    - Low-level function used by askDipsy.
+//    - If conversationState is not provided, it auto-loads from storage.
 //
-//   sendDipsyTextMessage(message, conversationState?) -> Promise<{ ok, answer, conversation_state, ... }>
+// 2) askDipsy(message)
+//    - Preferred helper for the UI.
+//    - Just pass the text; it handles state loading/saving internally.
 //
-// Key features:
-// - Passes conversation_state to the Edge Function for context memory
-// - Returns updated conversation_state to be stored and passed on next call
-// - Uses user's JWT for auth (RLS-safe)
-//
-// How to use:
-// -----------
-// import { sendDipsyTextMessage } from "../lib/dipsyTextClient";
-//
-// // First message (no state yet)
-// const result1 = await sendDipsyTextMessage("Create a load from Sacramento to Seattle");
-// setConversationState(result1.conversation_state);
-//
-// // Follow-up message (pass previous state)
-// const result2 = await sendDipsyTextMessage("Assign Black Panther to that load", conversationState);
-// setConversationState(result2.conversation_state);
+// 3) loadDipsyConversationState(orgId?)
+//    - Optional helper if you want to inspect the saved state in a component.
 
 import { supabase } from "./supabase";
+
+// ---------------------------------------------------------------------------
+// Local storage keys
+// ---------------------------------------------------------------------------
+
+const STORAGE_KEY_LAST = "dipsy_text_conversation_state_last";
+const STORAGE_KEY_PREFIX_BY_ORG = "dipsy_text_conversation_state_org_";
+
+// ---------------------------------------------------------------------------
+// Helpers: load / save conversation_state
+// ---------------------------------------------------------------------------
+
+/**
+ * Safely load the last known conversation_state from localStorage.
+ * Optionally scoped by orgId.
+ *
+ * @param {string|null} orgId
+ * @returns {Object|null}
+ */
+export function loadDipsyConversationState(orgId = null) {
+  if (typeof window === "undefined") return null;
+
+  try {
+    // If orgId is provided, try org-specific key first
+    if (orgId) {
+      const orgKey = `${STORAGE_KEY_PREFIX_BY_ORG}${orgId}`;
+      const orgRaw = window.localStorage.getItem(orgKey);
+      if (orgRaw) {
+        const parsed = JSON.parse(orgRaw);
+        if (parsed && typeof parsed === "object") {
+          return parsed;
+        }
+      }
+    }
+
+    // Fallback to "last" conversation state
+    const raw = window.localStorage.getItem(STORAGE_KEY_LAST);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      return parsed;
+    }
+  } catch (err) {
+    console.warn("[dipsyTextClient] Failed to load conversation_state:", err);
+  }
+
+  return null;
+}
+
+/**
+ * Safely persist conversation_state to localStorage.
+ * Saves both:
+ *  - last-known (global)
+ *  - per-org (if orgId provided)
+ *
+ * @param {Object} conversationState
+ * @param {string|null} orgId
+ */
+function saveDipsyConversationState(conversationState, orgId = null) {
+  if (typeof window === "undefined") return;
+  if (!conversationState || typeof conversationState !== "object") return;
+
+  try {
+    const serialized = JSON.stringify(conversationState);
+    window.localStorage.setItem(STORAGE_KEY_LAST, serialized);
+
+    if (orgId) {
+      const orgKey = `${STORAGE_KEY_PREFIX_BY_ORG}${orgId}`;
+      window.localStorage.setItem(orgKey, serialized);
+    }
+  } catch (err) {
+    console.warn("[dipsyTextClient] Failed to save conversation_state:", err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Core function: send text to Dipsy
+// ---------------------------------------------------------------------------
 
 /**
  * Send a text message to Dipsy (text-only, no voice).
  *
- * @param {string} message - What the user typed
- * @param {Object|null} conversationState - Previous conversation state (for context memory)
+ * @param {string} message - What the user typed.
+ * @param {Object|null} conversationStateOverride - Optional explicit state to send.
+ *        If null/undefined, we will auto-load last known state from localStorage.
+ *
  * @returns {Promise<{
  *   ok: boolean;
  *   answer?: string;
  *   error?: string;
  *   org_id?: string;
  *   used_tool?: boolean;
- *   conversation_state?: Object;
+ *   conversation_state?: Object | null;
  * }>}
  */
-export async function sendDipsyTextMessage(message, conversationState = null) {
+export async function sendDipsyTextMessage(
+  message,
+  conversationStateOverride = null
+) {
   const cleanMessage = (message ?? "").toString().trim();
 
   if (!cleanMessage) {
@@ -72,7 +158,14 @@ export async function sendDipsyTextMessage(message, conversationState = null) {
 
   const accessToken = session.access_token;
 
-  // 2) Call the Supabase Edge Function /functions/v1/dipsy-text
+  // 2) Determine which conversation_state to send:
+  //    - If caller provided one, use that.
+  //    - Otherwise, try to load from localStorage.
+  const storedState =
+    conversationStateOverride !== null && conversationStateOverride !== undefined
+      ? conversationStateOverride
+      : loadDipsyConversationState(null);
+
   const supabaseUrl = supabase.supabaseUrl || import.meta.env.VITE_SUPABASE_URL;
 
   if (!supabaseUrl) {
@@ -85,14 +178,19 @@ export async function sendDipsyTextMessage(message, conversationState = null) {
 
   const functionUrl = `${supabaseUrl}/functions/v1/dipsy-text`;
 
-  // Build request body - include conversation_state if we have it
   const requestBody = {
     message: cleanMessage,
   };
 
-  // IMPORTANT: Pass conversation_state for context memory
-  if (conversationState) {
-    requestBody.conversation_state = conversationState;
+  if (storedState) {
+    requestBody.conversation_state = storedState;
+  }
+
+  if (import.meta.env.DEV) {
+    console.info("[dipsyTextClient] → Dipsy request", {
+      message: cleanMessage,
+      hasConversationState: !!storedState,
+    });
   }
 
   let response;
@@ -111,6 +209,7 @@ export async function sendDipsyTextMessage(message, conversationState = null) {
       ok: false,
       error:
         "Could not reach Dipsy right now. Check your internet connection and try again.",
+      conversation_state: storedState || null,
     };
   }
 
@@ -122,6 +221,7 @@ export async function sendDipsyTextMessage(message, conversationState = null) {
     return {
       ok: false,
       error: "Dipsy returned an invalid response. Please try again.",
+      conversation_state: storedState || null,
     };
   }
 
@@ -131,21 +231,61 @@ export async function sendDipsyTextMessage(message, conversationState = null) {
       `Dipsy text function failed with status ${response.status}.`;
 
     console.error("[dipsyTextClient] Error response from dipsy-text:", data);
+
+    // Even on error, if we got a new conversation_state, persist it.
+    if (data?.conversation_state) {
+      saveDipsyConversationState(data.conversation_state, data.org_id || null);
+    }
+
     return {
       ok: false,
       error: errorMessage,
-      // Still return conversation_state if present, so we don't lose context on errors
-      conversation_state: data?.conversation_state || conversationState,
+      conversation_state: data?.conversation_state || storedState || null,
     };
   }
 
-  // Success - return answer AND updated conversation_state
+  const updatedState = data.conversation_state || storedState || null;
+
+  // Persist updated state (global + org-specific if org_id available)
+  saveDipsyConversationState(updatedState, data.org_id || null);
+
+  if (import.meta.env.DEV) {
+    console.info("[dipsyTextClient] ← Dipsy response", {
+      used_tool: data.used_tool ?? false,
+      org_id: data.org_id || null,
+      hasConversationState: !!updatedState,
+    });
+  }
+
   return {
     ok: true,
     answer: data.answer,
     org_id: data.org_id,
     used_tool: data.used_tool ?? false,
-    // CRITICAL: Return the updated conversation_state for the next call
-    conversation_state: data.conversation_state || null,
+    conversation_state: updatedState,
   };
+}
+
+// ---------------------------------------------------------------------------
+// High-level helper for the UI
+// ---------------------------------------------------------------------------
+
+/**
+ * High-level helper for the UI:
+ * - You only pass the message.
+ * - It automatically loads the last conversation_state from storage,
+ *   sends it, and saves the updated state when the response comes back.
+ *
+ * @param {string} message
+ * @returns {Promise<{
+ *   ok: boolean;
+ *   answer?: string;
+ *   error?: string;
+ *   org_id?: string;
+ *   used_tool?: boolean;
+ *   conversation_state?: Object | null;
+ * }>}
+ */
+export async function askDipsy(message) {
+  return sendDipsyTextMessage(message, null);
 }
