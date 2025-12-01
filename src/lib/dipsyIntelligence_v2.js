@@ -170,8 +170,33 @@ You can use these tools:
    - Mark a load as delivered and clean up flags.
 10) mark_load_problem
     - Mark a load as PROBLEM and set problem flags.
-11) web_search
+11) get_driver_location
+    - Get a driver's current GPS location from their assigned truck.
+    - USE THIS when recommending loads, finding road service, checking ETAs, or any location-aware task.
+12) web_search
     - Generic web search (placeholder).
+
+========================
+LOCATION-AWARE DISPATCH (NEW!)
+========================
+
+You now have GPS awareness for drivers through get_driver_location.
+
+USE get_driver_location WHEN:
+- Recommending loads: "Driver X is near Sacramento, here's a backhaul..."
+- Road service needed: "Driver is near Reno on I-80, here are nearby tire shops..."
+- ETA questions: "Your driver is 47 miles out, about 50 minutes away"
+- Weather alerts: "Driver Mike is approaching a storm cell on I-70"
+- Any question about where a driver currently is
+
+The tool returns:
+- driver_name, phone, status
+- vehicle_name (their assigned truck)
+- latitude, longitude, speed_mph, heading
+- location_label (city, state if available)
+- located_at (timestamp of last GPS ping)
+
+If a driver has no truck assigned, it will tell you - suggest the dispatcher assign one.
 
 ========================
 DISPATCH FLOW (END-TO-END)
@@ -221,7 +246,7 @@ A) When the user describes a new load:
    - If you summarize the load back:
        "Origin: X, Destination: Y, Pickup: A, Delivery: B, Rate: R, Cargo: C"
      and the user responds with:
-       "Yes", "That's it", "That’s all", "Build the load", "That’s the load"
+       "Yes", "That's it", "That's all", "Build the load", "That's the load"
      you MUST NOT ask for those details again. You MUST call create_load using the details already
      present in the conversation.
    - It is FORBIDDEN to get stuck in a loop asking for origin/destination/dates/rate again when those
@@ -254,14 +279,17 @@ B) Choosing and assigning a driver for that load:
         - Shift/cycle remaining (if relevant)
         - Status (DRIVING, ON_DUTY, OFF_DUTY/RESTING)
         - Any location or notes if present.
+     4) ALSO use get_driver_location to check where recommended drivers currently are!
+        - "Black Panther is near Fresno and has 9h drive time - perfect for this Sacramento pickup"
 
    EXAMPLE EXPLANATION:
    - "I recommend Black Panther because they are ACTIVE, currently RESTING, and have 9h 54m of drive
-      time left, which is more than enough for a 5-hour run."
+      time left, which is more than enough for a 5-hour run. They're currently near Stockton so pickup is quick."
 
    WHEN USER SAYS "WHO SHOULD I SEND?":
    - You MUST propose 1–3 best candidates, not just dump a list.
    - You MUST base your answer on the tool result (HOS-aware search if used).
+   - BONUS: Include their current location if you can get it!
 
    WHEN USER SAYS "Assign <NAME> please":
    - Look at the recent conversation:
@@ -286,6 +314,14 @@ C) Marking loads delivered or problematic:
    - After the tool, respond with a short confirmation:
      - "✅ Marked LD-2025-1234 as DELIVERED."
      - "⚠️ Marked LD-2025-5678 as PROBLEM and flagged it for review."
+
+D) Road service and emergencies:
+   - When user says:
+     - "Driver has a blown tire"
+     - "Need road service for Mark"
+     - "Truck broke down"
+   → FIRST call get_driver_location to find where the driver is
+   → THEN you can suggest nearby services or help coordinate
 
 ========================
 DRIVER & HOS RULES
@@ -341,6 +377,18 @@ TRUCK LOCATION TRUTH RULES (FLEET MAP PARITY)
   - and speed/movement.
 
 ========================
+DRIVER LOCATION RULES (NEW!)
+========================
+
+- When the user asks where a DRIVER is (not a truck):
+  "Where is Mark?"
+  "Where's Black Panther right now?"
+  → Use get_driver_location with their name
+- This looks up the driver's assigned truck and returns GPS coordinates
+- If driver has no truck assigned, tell the dispatcher and suggest assigning one
+- Use this proactively when recommending drivers for loads!
+
+========================
 CONVERSATION CONTEXT RULES
 ========================
 
@@ -389,9 +437,7 @@ function sanitizeMessageForOpenAI(msg) {
 /**
  * Call OpenAI with function calling capabilities
  */
-async function callOpenA
-
-IWithTools(
+async function callOpenAIWithTools(
   messages,
   userContext,
   conversationHistory,
@@ -663,6 +709,27 @@ function getToolDefinitions() {
     {
       type: "function",
       function: {
+        name: "get_driver_location",
+        description:
+          "Get a driver's current GPS location from their assigned truck. Use when dispatcher asks where a driver is, when recommending drivers for loads (to show proximity), when coordinating road service, or for ETA calculations.",
+        parameters: {
+          type: "object",
+          properties: {
+            driver_name: {
+              type: "string",
+              description: "Driver's name (first name, last name, or full name)",
+            },
+            driver_id: {
+              type: "string",
+              description: "Driver's UUID if already known from prior tool call",
+            },
+          },
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
         name: "create_load",
         description:
           "Create a new load. Call when you have core details (origin, destination, rate, pickup_date, delivery_date).",
@@ -862,6 +929,9 @@ async function executeTool(toolName, params) {
       case "search_drivers_hos_aware":
         return await toolSearchDriversHosAware(params);
 
+      case "get_driver_location":
+        return await toolGetDriverLocation(params);
+
       case "create_load":
         return await toolCreateLoad(params);
 
@@ -984,6 +1054,267 @@ async function toolSearchDrivers(params) {
     success: true,
     count: data.length,
     drivers: driversWithStatus,
+  };
+}
+
+// ---------- GET DRIVER LOCATION (v2 - Proper Architecture) ----------
+//
+// Chain: Driver → Truck (real equipment) → GPS Vehicle (ELD/dummy)
+//
+// The proper model is:
+//   1. Driver is assigned to a Truck (via trucks.current_driver_id or trucks.driver_id)
+//   2. Truck is linked to a GPS source (via trucks.gps_vehicle_id + trucks.gps_provider)
+//   3. GPS source has location data (dummy/motive/samsara tables)
+
+async function toolGetDriverLocation(params) {
+  const { orgId, driver_name, driver_id } = params;
+
+  console.log("[Dipsy/toolGetDriverLocation] Looking up driver:", {
+    driver_name,
+    driver_id,
+    orgId,
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 1) Find the driver by ID or name
+  // ─────────────────────────────────────────────────────────────────────────
+  let driverQuery = supabase
+    .from("drivers")
+    .select("id, full_name, first_name, last_name, phone, status");
+
+  if (driver_id) {
+    driverQuery = driverQuery.eq("id", driver_id);
+  } else if (driver_name) {
+    // Fuzzy match on name
+    driverQuery = driverQuery.or(
+      `full_name.ilike.%${driver_name}%,first_name.ilike.%${driver_name}%,last_name.ilike.%${driver_name}%`
+    );
+  } else {
+    return {
+      success: false,
+      error: "Please provide a driver name or ID.",
+    };
+  }
+
+  const { data: drivers, error: driverError } = await driverQuery.limit(1);
+
+  if (driverError) {
+    console.error("[Dipsy/toolGetDriverLocation] Driver query error:", driverError);
+    return { success: false, error: driverError.message };
+  }
+
+  if (!drivers || drivers.length === 0) {
+    return {
+      success: false,
+      error: `Driver "${driver_name || driver_id}" not found.`,
+    };
+  }
+
+  const driver = drivers[0];
+  const displayName = driver.full_name || `${driver.first_name} ${driver.last_name}`.trim();
+
+  console.log("[Dipsy/toolGetDriverLocation] Found driver:", driver);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 2) Find the truck assigned to this driver
+  // ─────────────────────────────────────────────────────────────────────────
+  const { data: trucks, error: truckError } = await supabase
+    .from("trucks")
+    .select("id, unit_number, truck_number, make, model, year, gps_vehicle_id, gps_provider")
+    .or(`current_driver_id.eq.${driver.id},driver_id.eq.${driver.id}`)
+    .limit(1);
+
+  if (truckError) {
+    console.error("[Dipsy/toolGetDriverLocation] Truck query error:", truckError);
+    return { success: false, error: truckError.message };
+  }
+
+  if (!trucks || trucks.length === 0) {
+    return {
+      success: false,
+      driver_id: driver.id,
+      driver_name: displayName,
+      phone: driver.phone,
+      status: driver.status,
+      error: `${displayName} is not assigned to any truck. Assign them to a truck on the Trucks page to enable GPS tracking.`,
+    };
+  }
+
+  const truck = trucks[0];
+  const truckDisplayName = truck.unit_number || truck.truck_number || `${truck.make} ${truck.model}`.trim() || "Unknown Truck";
+
+  console.log("[Dipsy/toolGetDriverLocation] Found truck:", truck);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 3) Check if truck has GPS source linked
+  // ─────────────────────────────────────────────────────────────────────────
+  if (!truck.gps_vehicle_id) {
+    return {
+      success: false,
+      driver_id: driver.id,
+      driver_name: displayName,
+      phone: driver.phone,
+      status: driver.status,
+      truck_id: truck.id,
+      truck_name: truckDisplayName,
+      error: `${displayName}'s truck (${truckDisplayName}) is not linked to a GPS source. Link it to an ELD vehicle on the Trucks page to enable location tracking.`,
+    };
+  }
+
+  const gpsProvider = truck.gps_provider || "dummy";
+  const gpsVehicleId = truck.gps_vehicle_id;
+
+  console.log("[Dipsy/toolGetDriverLocation] GPS source:", { gpsProvider, gpsVehicleId });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 4) Get location from the appropriate GPS provider
+  // ─────────────────────────────────────────────────────────────────────────
+  let location = null;
+  let gpsVehicleName = null;
+
+  if (gpsProvider === "dummy") {
+    // Get dummy vehicle info
+    const { data: veh } = await supabase
+      .from("atlas_dummy_vehicles")
+      .select("id, name, code, make, model")
+      .eq("id", gpsVehicleId)
+      .single();
+
+    if (veh) {
+      gpsVehicleName = veh.name || veh.code;
+    }
+
+    // Get dummy location
+    const { data: loc, error: locErr } = await supabase
+      .from("atlas_dummy_vehicle_locations_current")
+      .select("*")
+      .eq("dummy_vehicle_id", gpsVehicleId)
+      .order("located_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (locErr) {
+      console.error("[Dipsy/toolGetDriverLocation] Dummy location error:", locErr);
+    } else {
+      location = loc;
+    }
+
+  } else if (gpsProvider === "motive") {
+    // Motive has a combined view with vehicle + location
+    const { data: loc, error: locErr } = await supabase
+      .from("motive_vehicle_locations_current")
+      .select("*")
+      .eq("motive_vehicle_id", gpsVehicleId)
+      .order("located_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (locErr) {
+      console.error("[Dipsy/toolGetDriverLocation] Motive location error:", locErr);
+    } else {
+      location = loc;
+      gpsVehicleName = loc.name || loc.vehicle_number;
+    }
+
+  } else if (gpsProvider === "samsara") {
+    // Get samsara vehicle info
+    const { data: veh } = await supabase
+      .from("samsara_vehicles")
+      .select("samsara_vehicle_id, name, make, model")
+      .eq("samsara_vehicle_id", gpsVehicleId)
+      .single();
+
+    if (veh) {
+      gpsVehicleName = veh.name;
+    }
+
+    // Get samsara location
+    const { data: loc, error: locErr } = await supabase
+      .from("samsara_vehicle_locations_current")
+      .select("*")
+      .eq("samsara_vehicle_id", gpsVehicleId)
+      .order("located_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (locErr) {
+      console.error("[Dipsy/toolGetDriverLocation] Samsara location error:", locErr);
+    } else {
+      location = loc;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 5) If no location found
+  // ─────────────────────────────────────────────────────────────────────────
+  if (!location) {
+    return {
+      success: false,
+      driver_id: driver.id,
+      driver_name: displayName,
+      phone: driver.phone,
+      status: driver.status,
+      truck_id: truck.id,
+      truck_name: truckDisplayName,
+      gps_provider: gpsProvider,
+      gps_vehicle_name: gpsVehicleName,
+      error: `No GPS location available for ${displayName}. The ELD (${gpsProvider}) may be offline or not reporting.`,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 6) Reverse geocode for a friendly location label
+  // ─────────────────────────────────────────────────────────────────────────
+  let locationLabel = null;
+  if (location.latitude && location.longitude) {
+    try {
+      const geoUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${location.latitude}&lon=${location.longitude}`;
+      const geoRes = await fetch(geoUrl, {
+        headers: { Accept: "application/json" },
+      });
+      if (geoRes.ok) {
+        const geoData = await geoRes.json();
+        const addr = geoData?.address || {};
+        const city =
+          addr.city || addr.town || addr.village || addr.hamlet || addr.county;
+        const state = addr.state;
+        if (city && state) {
+          locationLabel = `${city}, ${state}`;
+        } else if (city) {
+          locationLabel = city;
+        } else if (state) {
+          locationLabel = state;
+        }
+      }
+    } catch (geoErr) {
+      console.warn("[Dipsy/toolGetDriverLocation] Geocode failed:", geoErr);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 7) Return the full location info
+  // ─────────────────────────────────────────────────────────────────────────
+  return {
+    success: true,
+    driver_id: driver.id,
+    driver_name: displayName,
+    phone: driver.phone,
+    status: driver.status,
+    truck_id: truck.id,
+    truck_name: truckDisplayName,
+    truck_make: truck.make,
+    truck_model: truck.model,
+    truck_year: truck.year,
+    gps_provider: gpsProvider,
+    gps_vehicle_id: gpsVehicleId,
+    gps_vehicle_name: gpsVehicleName,
+    latitude: location.latitude,
+    longitude: location.longitude,
+    speed_mph: location.speed_mph,
+    heading_degrees: location.heading_degrees,
+    located_at: location.located_at,
+    last_synced_at: location.last_synced_at,
+    location_label: locationLabel,
   };
 }
 
@@ -1177,7 +1508,7 @@ function normalizeDummyTruckRow(locationRow, vehicleRow) {
   const {
     dummy_vehicle_id,
     latitude,
-longitude,
+    longitude,
     heading_degrees,
     speed_mph,
     odometer_miles,
