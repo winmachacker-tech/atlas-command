@@ -1,35 +1,28 @@
-﻿// src/pages/Billing.jsx
+﻿// FILE: src/pages/Billing.jsx
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import {
   Loader2,
   Search,
   Calendar,
   X,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  FileCheck2,
   ExternalLink,
   DollarSign,
-  FileCheck2,
   ShieldCheck,
-  UserRound,
-  ClipboardList,
-  Download,
-  FileDown,
-  Mail,
-  Send,
 } from "lucide-react";
-import DraftInvoiceModal from "../components/billing/DraftInvoiceModal.jsx";
 
 /* ------------------------------ Config ------------------------------ */
 const PAGE_SIZE = 20;
-const READY_STATUS = "READY_FOR_BILLING";
 
 /* ------------------------------ Helpers ----------------------------- */
 function cx(...a) {
   return a.filter(Boolean).join(" ");
 }
+
 function fmtDate(d) {
   if (!d) return "—";
   try {
@@ -38,6 +31,7 @@ function fmtDate(d) {
     return String(d);
   }
 }
+
 function fmtDateTime(d) {
   if (!d) return "—";
   try {
@@ -46,6 +40,7 @@ function fmtDateTime(d) {
     return String(d);
   }
 }
+
 const money = (n) => Number(Number(n || 0).toFixed(2));
 const fmtUSD = (n) =>
   new Intl.NumberFormat("en-US", {
@@ -53,852 +48,321 @@ const fmtUSD = (n) =>
     currency: "USD",
   }).format(money(n));
 
+/**
+ * We normalize both "ready" loads and invoice rows into a single shape
+ * so the table can render them consistently.
+ *
+ * {
+ *   kind: "READY" | "INVOICED" | "PAID",
+ *   loadId,
+ *   invoiceId?,
+ *   orgId?,
+ *   reference,
+ *   shipper,
+ *   deliveredAt,
+ *   podUrl,
+ *   amount,
+ *   invoiceNumber?,
+ *   invoiceStatus?,
+ *   issuedAt?,
+ *   paidAt?
+ * }
+ */
+
 /* ============================== Page ================================= */
 export default function BillingPage() {
+  const nav = useNavigate();
+
+  // Tab state
+  const [activeTab, setActiveTab] = useState("READY"); // READY | INVOICED | PAID
+
+  // Data
   const [rows, setRows] = useState([]);
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(1);
 
-  // filters
+  // Filters
   const [q, setQ] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [requirePOD, setRequirePOD] = useState(true);
-  const [showInvoiced, setShowInvoiced] = useState(false);
 
-  // state
+  // State
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [banner, setBanner] = useState(null);
-
-  // selection
-  const [selected, setSelected] = useState(new Set());
-  const allChecked = rows.length > 0 && rows.every((r) => selected.has(r.id));
-
-  // Draft modal
-  const [isDraftOpen, setIsDraftOpen] = useState(false);
-  const [selectedLoad, setSelectedLoad] = useState(null);
-
-  // Email Invoice modal state
-  const [emailModalOpen, setEmailModalOpen] = useState(false);
-  const [emailRow, setEmailRow] = useState(null);
-  const [emailTo, setEmailTo] = useState("");
-  const [emailCc, setEmailCc] = useState("");
-  const [emailSubject, setEmailSubject] = useState("");
-  const [emailBody, setEmailBody] = useState("");
-  const [emailSending, setEmailSending] = useState(false);
-  const [emailError, setEmailError] = useState(null);
 
   const totalPages = useMemo(
     () => Math.max(1, Math.ceil(count / PAGE_SIZE)),
     [count]
   );
 
+  // Reset page when filters or tab change
   useEffect(() => {
     setPage(1);
-  }, [q, dateFrom, dateTo, requirePOD, showInvoiced]);
+  }, [activeTab, q, dateFrom, dateTo, requirePOD]);
 
   useEffect(() => {
-    // eslint-disable-next-line
     fetchPage(page);
-  }, [page, q, dateFrom, dateTo, requirePOD, showInvoiced]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, activeTab, q, dateFrom, dateTo, requirePOD]);
 
-  /* ------------------------------ Data ------------------------------ */
+  /* ------------------------------ Data Fetch ------------------------------ */
   async function fetchPage(pageNumber) {
     setLoading(true);
     setErr(null);
     setBanner(null);
+
     const from = (pageNumber - 1) * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
     try {
-      let query = supabase
-        .from("loads")
-        .select(
-          [
-            "id",
-            "reference",
-            "shipper",
-            "delivery_date",
-            "status",
-            "pod_url",
-            "notes",
-            // billing fields on loads
-            "billing_ready",
-            "billing_marked_at",
-            "billed_amount",
-            "assigned_biller",
-            "invoice_number",
-            "invoiced_at",
-            // fields helpful for PDF
-            "rate",
-            "po_number",
-            "pro_number",
-            "dispatcher_name",
-            "driver_name",
-            "origin",
-            "destination",
-            // where we mirror the invoice PDF URL for UI
-            "invoice_pdf_url",
-          ].join(","),
-          { count: "exact" }
+      if (activeTab === "READY") {
+        // 1) READY TAB
+        // Loads that:
+        // - are marked ready_for_billing = true
+        // - are NOT cancelled
+        // - have no invoice yet (load_invoices empty)
+        let query = supabase
+          .from("loads")
+          .select(
+            `
+            id,
+            org_id,
+            reference,
+            shipper,
+            delivery_date,
+            status,
+            pod_url,
+            rate,
+            load_invoices ( id )
+          `,
+            { count: "exact" }
+          )
+          .eq("ready_for_billing", true)
+          .neq("status", "CANCELED");
+
+        if (dateFrom) query = query.gte("delivery_date", dateFrom);
+        if (dateTo) query = query.lte("delivery_date", dateTo);
+        if (requirePOD) query = query.not("pod_url", "is", null);
+
+        // Sort newest deliveries first
+        query = query
+          .order("delivery_date", { ascending: false })
+          .range(from, to);
+
+        const { data, error, count: total } = await query;
+        if (error) throw error;
+
+        // Filter out loads that already have an invoice row
+        const readyLoads = (data || []).filter(
+          (l) => !l.load_invoices || l.load_invoices.length === 0
         );
 
-      if (showInvoiced) {
-        query = query.or("invoice_number.not.is.null,invoiced_at.not.is.null");
+        // Client-side search by reference/shipper
+        const filtered = applySearchFilterToReady(readyLoads, q);
+
+        const normalized = filtered.map((l) => ({
+          kind: "READY",
+          loadId: l.id,
+          invoiceId: null,
+          orgId: l.org_id,
+          reference: l.reference || "—",
+          shipper: l.shipper || "—",
+          deliveredAt: l.delivery_date,
+          podUrl: l.pod_url,
+          amount: l.rate || 0,
+          invoiceNumber: null,
+          invoiceStatus: null,
+          issuedAt: null,
+          paidAt: null,
+        }));
+
+        setRows(normalized);
+        // Count is approximate with filters; good enough for MVP
+        setCount(total ?? normalized.length);
       } else {
-        query = query.or(
-          [`status.eq.${READY_STATUS}`, `billing_ready.eq.true`].join(",")
-        );
+        // 2) INVOICED / PAID TABS
+        const statusFilter = activeTab === "INVOICED" ? "ISSUED" : "PAID";
+
+        let query = supabase
+          .from("load_invoices")
+          .select(
+            `
+            id,
+            org_id,
+            invoice_number,
+            status,
+            amount,
+            issued_at,
+            paid_at,
+            notes,
+            load:loads (
+              id,
+              reference,
+              shipper,
+              delivery_date,
+              pod_url,
+              status,
+              rate
+            )
+          `,
+            { count: "exact" }
+          )
+          .eq("status", statusFilter);
+
+        // Basic date filter on load delivery date
+        if (dateFrom) query = query.gte("load.delivery_date", dateFrom);
+        if (dateTo) query = query.lte("load.delivery_date", dateTo);
+        if (requirePOD) query = query.not("load.pod_url", "is", null);
+
+        query = query.order("issued_at", { ascending: false }).range(from, to);
+
+        const { data, error, count: total } = await query;
+        if (error) throw error;
+
+        const normalized = (data || []).map((inv) => ({
+          kind: inv.status === "PAID" ? "PAID" : "INVOICED",
+          loadId: inv.load?.id || null,
+          invoiceId: inv.id,
+          orgId: inv.org_id,
+          reference: inv.load?.reference || "—",
+          shipper: inv.load?.shipper || "—",
+          deliveredAt: inv.load?.delivery_date || null,
+          podUrl: inv.load?.pod_url || null,
+          amount: inv.amount || inv.load?.rate || 0,
+          invoiceNumber: inv.invoice_number || "—",
+          invoiceStatus: inv.status,
+          issuedAt: inv.issued_at,
+          paidAt: inv.paid_at,
+        }));
+
+        const filtered = applySearchFilterToInvoices(normalized, q);
+        setRows(filtered);
+        setCount(total ?? filtered.length);
       }
-
-      if (q.trim()) {
-        const like = `%${q.trim()}%`;
-        query = query.or(
-          [`reference.ilike.${like}`, `shipper.ilike.${like}`].join(",")
-        );
-      }
-      if (dateFrom) query = query.gte("delivery_date", dateFrom);
-      if (dateTo) query = query.lte("delivery_date", dateTo);
-      if (requirePOD) query = query.not("pod_url", "is", null);
-
-      query = query.order("delivery_date", { ascending: false }).range(from, to);
-
-      const { data, error, count: total } = await query;
-      if (error) throw error;
-
-      setRows(data ?? []);
-      setCount(total ?? 0);
-      setSelected(new Set());
     } catch (e) {
       console.error("[Billing] fetch error:", e);
-      setErr(e.message ?? "Failed to load billing queue.");
+      setErr(e.message ?? "Failed to load billing data.");
     } finally {
       setLoading(false);
     }
   }
 
-  /* ------------------------------ PDF generation ------------------------------ */
-  async function generatePDFForRow(loadRow) {
-    try {
-      setBanner(null);
-      setErr(null);
-      setLoading(true);
-
-      console.log("[PDF] Starting PDF generation for load:", loadRow.id);
-
-      // 1) Get or create invoice for this load
-      let { data: inv, error: invErr } = await supabase
-        .from("invoices")
-        .select("*")
-        .eq("load_id", loadRow.id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      console.log("[PDF] Invoice query result:", { inv, invErr });
-
-      // If no invoice exists, create a basic one
-      if (!inv) {
-        console.log("[PDF] No invoice found, creating new one...");
-        const { data: authData } = await supabase.auth.getUser();
-        const newInvoice = {
-          load_id: loadRow.id,
-          number: `INV-${Date.now()}`,
-          status: "DRAFT",
-          amount: loadRow.billed_amount || loadRow.rate || 0,
-          total: loadRow.billed_amount || loadRow.rate || 0,
-          created_by: authData?.user?.id,
-          notes: loadRow.notes || "",
-        };
-
-        const { data: created, error: createErr } = await supabase
-          .from("invoices")
-          .insert(newInvoice)
-          .select()
-          .single();
-
-        console.log("[PDF] Invoice creation result:", { created, createErr });
-
-        if (createErr) {
-          setErr(`Failed to create invoice: ${createErr.message}`);
-          setLoading(false);
-          return;
-        }
-
-        inv = created;
-      }
-
-      if (!inv) {
-        setErr("Unable to get or create invoice for this load.");
-        setLoading(false);
-        return;
-      }
-
-      console.log("[PDF] Using invoice:", inv);
-
-      // 2) Get current user for header
-      const { data: authData } = await supabase.auth.getUser();
-      const meEmail = authData?.user?.email || "";
-      let companyName = "";
-      try {
-        const { data: meRow } = await supabase
-          .from("users")
-          .select("company_name")
-          .eq("id", authData?.user?.id || "")
-          .maybeSingle();
-        companyName = meRow?.company_name || "Atlas Command";
-      } catch {
-        companyName = "Atlas Command";
-      }
-
-      console.log("[PDF] Building professional PDF document...");
-
-      // 3) Build Professional PDF with modern styling
-      const { jsPDF } = await import("jspdf");
-      const doc = new jsPDF({ unit: "pt", format: "letter" });
-
-      const pageWidth = doc.internal.pageSize.getWidth();
-      const pageHeight = doc.internal.pageSize.getHeight();
-      const margin = 40;
-      let y = margin;
-
-      // Header background
-      doc.setFillColor(30, 64, 175);
-      doc.rect(0, 0, pageWidth, 140, "F");
-
-      // Company name
-      doc.setTextColor(255, 255, 255);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(32);
-      doc.text(companyName, margin, y + 30);
-
-      // Email
-      doc.setFontSize(11);
-      doc.setFont("helvetica", "normal");
-      doc.text(meEmail, margin, y + 52);
-
-      // INVOICE title
-      doc.setFontSize(28);
-      doc.setFont("helvetica", "bold");
-      doc.text("INVOICE", margin, y + 90);
-
-      // Reset
-      doc.setTextColor(0, 0, 0);
-      y = 160;
-
-      // Invoice meta box
-      doc.setFillColor(249, 250, 251);
-      doc.setDrawColor(229, 231, 235);
-      doc.roundedRect(margin, y, pageWidth - 2 * margin, 90, 4, 4, "FD");
-
-      const col1X = margin + 20;
-      const col2X = margin + 220;
-      const col3X = margin + 400;
-
-      y += 25;
-
-      // Invoice number
-      doc.setFontSize(9);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(107, 114, 128);
-      doc.text("INVOICE NUMBER", col1X, y);
-
-      y += 18;
-      doc.setFontSize(12);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(17, 24, 39);
-      doc.text(inv.number, col1X, y);
-
-      // Status
-      y -= 18;
-      doc.setFontSize(9);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(107, 114, 128);
-      doc.text("STATUS", col2X, y);
-
-      y += 18;
-      const statusText = inv.status;
-      const statusWidth = doc.getTextWidth(statusText) + 16;
-      doc.setFillColor(16, 185, 129);
-      doc.roundedRect(col2X, y - 12, statusWidth, 20, 3, 3, "F");
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(11);
-      doc.setFont("helvetica", "bold");
-      doc.text(statusText, col2X + 8, y + 2);
-
-      // Invoice date
-      y -= 18;
-      doc.setFontSize(9);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(107, 114, 128);
-      doc.text("INVOICE DATE", col3X, y);
-
-      y += 18;
-      doc.setFontSize(12);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(17, 24, 39);
-      const formattedDate = new Date(inv.created_at).toLocaleDateString(
-        "en-US",
-        {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        }
-      );
-      doc.text(formattedDate, col3X, y);
-
-      y += 35;
-
-      // Bill To
-      doc.setFontSize(14);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(30, 58, 138);
-      doc.text("Bill To", margin, y);
-      y += 5;
-
-      doc.setDrawColor(229, 231, 235);
-      doc.setLineWidth(2);
-      doc.line(margin, y, pageWidth - margin, y);
-      y += 20;
-
-      doc.setFillColor(249, 250, 251);
-      doc.roundedRect(margin, y, pageWidth - 2 * margin, 30, 4, 4, "F");
-      doc.setFontSize(13);
-      doc.setFont("helvetica", "normal");
-      doc.setTextColor(17, 24, 39);
-      doc.text(loadRow.shipper || "Customer", margin + 15, y + 20);
-
-      y += 50;
-
-      // Load Details
-      doc.setFontSize(14);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(30, 58, 138);
-      doc.text("Load Details", margin, y);
-      y += 5;
-      doc.setDrawColor(229, 231, 235);
-      doc.line(margin, y, pageWidth - margin, y);
-      y += 20;
-
-      doc.setFontSize(10);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(107, 114, 128);
-
-      const detailLabels = [
-        "Reference Number:",
-        "Origin:",
-        "Destination:",
-        "Delivery Status:",
-      ];
-
-      const detailValues = [
-        loadRow.reference || "—",
-        loadRow.origin || "—",
-        loadRow.destination || "—",
-        "Delivered",
-      ];
-
-      const leftCol = margin;
-      const rightCol = margin + 280;
-
-      for (let i = 0; i < 4; i++) {
-        const col = i < 2 ? leftCol : rightCol;
-        const idx = i < 2 ? i : i - 2;
-        const yPos = y + idx * 20;
-
-        doc.setFont("helvetica", "bold");
-        doc.setTextColor(107, 114, 128);
-        doc.text(detailLabels[i], col, yPos);
-
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(17, 24, 39);
-        doc.setFontSize(11);
-        doc.text(detailValues[i], col + 105, yPos);
-        doc.setFontSize(10);
-      }
-
-      y += 50;
-
-      // More details
-      const moreDetails = [
-        ["Dispatcher:", loadRow.dispatcher_name || "Not Assigned"],
-        ["Driver:", loadRow.driver_name || "Not Assigned"],
-        ["PO Number:", loadRow.po_number || "Not Provided"],
-        ["PRO Number:", loadRow.pro_number || "Not Provided"],
-      ];
-
-      for (let i = 0; i < moreDetails.length; i++) {
-        const col = i < 2 ? leftCol : rightCol;
-        const idx = i < 2 ? i : i - 2;
-        const yPos = y + idx * 20;
-
-        doc.setFont("helvetica", "bold");
-        doc.setTextColor(107, 114, 128);
-        doc.setFontSize(10);
-        doc.text(moreDetails[i][0], col, yPos);
-
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(17, 24, 39);
-        doc.setFontSize(11);
-        doc.text(moreDetails[i][1], col + 105, yPos);
-      }
-
-      y += 60;
-
-      // Charges
-      doc.setFontSize(14);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(30, 58, 138);
-      doc.text("Charges", margin, y);
-      y += 5;
-      doc.setDrawColor(229, 231, 235);
-      doc.line(margin, y, pageWidth - margin, y);
-      y += 20;
-
-      doc.setFillColor(249, 250, 251);
-      doc.roundedRect(margin, y, pageWidth - 2 * margin, 35, 4, 4, "F");
-
-      const rate = Number(loadRow.rate || 0);
-      doc.setFontSize(11);
-      doc.setFont("helvetica", "normal");
-      doc.setTextColor(55, 65, 81);
-      doc.text("Linehaul", margin + 15, y + 22);
-
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(17, 24, 39);
-      doc.setFontSize(13);
-      doc.text(fmtUSD(rate), pageWidth - margin - 15, y + 22, {
-        align: "right",
-      });
-
-      y += 50;
-
-      // Total
-      doc.setFillColor(30, 64, 175);
-      doc.roundedRect(margin, y, pageWidth - 2 * margin, 40, 4, 4, "F");
-
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(16);
-      doc.setFont("helvetica", "bold");
-      doc.text("Amount Due", margin + 15, y + 25);
-
-      doc.setFontSize(24);
-      doc.text(
-        fmtUSD(inv.amount || inv.total || rate),
-        pageWidth - margin - 15,
-        y + 27,
-        {
-          align: "right",
-        }
-      );
-
-      y += 60;
-
-      // POD link
-      if (loadRow.pod_url) {
-        doc.setFontSize(11);
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(59, 130, 246);
-        doc.textWithLink("📎 View Attached POD", margin, y, {
-          url: loadRow.pod_url,
-        });
-        y += 20;
-      }
-
-      // Notes
-      if (inv.notes) {
-        y += 10;
-        doc.setFillColor(255, 251, 235);
-        doc.setDrawColor(245, 158, 11);
-        const notesHeight =
-          Math.max(40, Math.ceil(inv.notes.length / 80) * 15 + 20);
-        doc.roundedRect(
-          margin,
-          y,
-          pageWidth - 2 * margin,
-          notesHeight,
-          4,
-          4,
-          "FD"
-        );
-
-        y += 15;
-        doc.setFontSize(11);
-        doc.setFont("helvetica", "bold");
-        doc.setTextColor(146, 64, 14);
-        doc.text("Notes", margin + 15, y);
-
-        y += 15;
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(120, 53, 15);
-        doc.setFontSize(10);
-        const noteLines = doc.splitTextToSize(
-          inv.notes,
-          pageWidth - 2 * margin - 30
-        );
-        doc.text(noteLines, margin + 15, y);
-        y += noteLines.length * 12 + 10;
-      }
-
-      // Footer
-      const footerY = pageHeight - 50;
-      doc.setFillColor(249, 250, 251);
-      doc.rect(0, footerY - 10, pageWidth, 60, "F");
-
-      doc.setFontSize(10);
-      doc.setFont("helvetica", "normal");
-      doc.setTextColor(107, 114, 128);
-      doc.text(
-        "Thank you for your business!",
-        pageWidth / 2,
-        footerY + 5,
-        { align: "center" }
-      );
-      doc.setFontSize(9);
-      doc.text(
-        `For questions about this invoice, please contact ${meEmail}`,
-        pageWidth / 2,
-        footerY + 20,
-        { align: "center" }
-      );
-
-      console.log("[PDF] PDF document built successfully");
-
-      // 4) Upload to Supabase Storage
-      const pdfBlob = doc.output("blob");
-      const fileName = `invoice_${inv.number}_${
-        loadRow.reference || loadRow.id
-      }_${Date.now()}.pdf`;
-      const filePath = `invoices/${fileName}`;
-
-      console.log("[PDF] Uploading to Supabase Storage:", filePath);
-
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from("documents")
-        .upload(filePath, pdfBlob, {
-          contentType: "application/pdf",
-          upsert: false,
-        });
-
-      if (uploadError) {
-        console.error("[PDF] Upload error:", uploadError);
-        // Still download locally if upload fails
-        const url = URL.createObjectURL(pdfBlob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        setErr(
-          `PDF downloaded locally, but failed to upload to storage: ${uploadError.message}`
-        );
-        setLoading(false);
-        return;
-      }
-
-      console.log("[PDF] Upload successful:", uploadData);
-
-      // 5) Get public URL
-      const { data: urlData } = supabase.storage
-        .from("documents")
-        .getPublicUrl(filePath);
-
-      const pdfUrl = urlData.publicUrl;
-      console.log("[PDF] Public URL:", pdfUrl);
-
-      // 6) Update invoice with PDF URL and status
-      const { error: updInvErr } = await supabase
-        .from("invoices")
-        .update({
-          status: "FINAL",
-          pdf_url: pdfUrl,
-        })
-        .eq("id", inv.id);
-
-      if (updInvErr) {
-        console.warn("[PDF] Invoice DB update failed:", updInvErr.message);
-      }
-
-      // 7) Mirror PDF URL onto loads row for UI (Invoice PDF column + email)
-      const { error: updLoadErr } = await supabase
-        .from("loads")
-        .update({ invoice_pdf_url: pdfUrl })
-        .eq("id", loadRow.id);
-
-      if (updLoadErr) {
-        console.warn(
-          "[PDF] Load DB update (invoice_pdf_url) failed:",
-          updLoadErr.message
-        );
-      }
-
-      // 8) Also download locally for immediate access
-      const url = URL.createObjectURL(pdfBlob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      console.log("[PDF] ✅ PDF generation complete!");
-      setBanner(
-        `Invoice PDF generated, uploaded to storage, and downloaded to your computer.`
-      );
-      await fetchPage(page);
-    } catch (e) {
-      console.error("[Billing] generatePDF error:", e);
-      setErr(e?.message || "Failed to generate PDF.");
-    } finally {
-      setLoading(false);
-    }
+  function applySearchFilterToReady(loads, qStr) {
+    if (!qStr.trim()) return loads;
+    const needle = qStr.trim().toLowerCase();
+    return loads.filter((l) => {
+      const ref = (l.reference || "").toLowerCase();
+      const shipper = (l.shipper || "").toLowerCase();
+      return ref.includes(needle) || shipper.includes(needle);
+    });
   }
 
-  /* ------------------------------ Email Invoice ------------------------------ */
-  function openEmailModal(row) {
-    setEmailError(null);
-    setEmailRow(row);
-
-    const subjectBase = row.invoice_number
-      ? `Invoice ${row.invoice_number}`
-      : "Invoice";
-
-    const subject =
-      subjectBase + (row.reference ? ` for Load ${row.reference}` : "");
-
-    const amount = row.billed_amount || row.rate || 0;
-    const deliveredStr = fmtDate(row.delivery_date);
-    const lane =
-      row.origin && row.destination
-        ? `${row.origin} → ${row.destination}`
-        : "";
-
-    const hasPdf = !!row.invoice_pdf_url;
-
-    const pdfLine = hasPdf
-      ? `The invoice is attached as a PDF.\nYou can also view it online here:\n${row.invoice_pdf_url}\n`
-      : "Invoice PDF has not been generated yet.\nUse the Generate PDF button in Atlas Command.\n";
-
-    const body =
-      `Hi,\n\n` +
-      `Please find ${subjectBase.toLowerCase()} for load ${
-        row.reference || row.id
-      }.\n\n` +
-      (lane ? `Lane: ${lane}\n` : "") +
-      (deliveredStr !== "—" ? `Delivered: ${deliveredStr}\n` : "") +
-      `Amount: ${fmtUSD(amount)}\n\n` +
-      pdfLine +
-      `\nThank you,\nAtlas Command\n`;
-
-    setEmailSubject(subject);
-    setEmailBody(body);
-    setEmailTo("");
-    setEmailCc("");
-    setEmailModalOpen(true);
+  function applySearchFilterToInvoices(invRows, qStr) {
+    if (!qStr.trim()) return invRows;
+    const needle = qStr.trim().toLowerCase();
+    return invRows.filter((r) => {
+      const ref = (r.reference || "").toLowerCase();
+      const shipper = (r.shipper || "").toLowerCase();
+      const invNum = (r.invoiceNumber || "").toLowerCase();
+      return (
+        ref.includes(needle) ||
+        shipper.includes(needle) ||
+        invNum.includes(needle)
+      );
+    });
   }
 
-  async function sendInvoiceEmail() {
-    if (!emailRow) return;
-    if (!emailTo.trim()) {
-      setEmailError("Please enter at least one recipient email.");
-      return;
-    }
+  /* ------------------------------ Actions ------------------------------ */
 
-    setEmailSending(true);
-    setEmailError(null);
-
-    try {
-      const toList = emailTo
-        .split(/[,\s;]+/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const ccList = emailCc
-        .split(/[,\s;]+/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-
-      const allRecipients = [...toList, ...ccList];
-
-      const bodyWithCcNote =
-        emailBody +
-        (ccList.length
-          ? `\n\n(Originally CC: ${ccList.join(", ")})`
-          : "");
-
-      const hasPdf = !!emailRow.invoice_pdf_url;
-      const pdfName =
-        emailRow.invoice_number && emailRow.invoice_number.trim().length > 0
-          ? `invoice_${emailRow.invoice_number}.pdf`
-          : "invoice.pdf";
-
-      const payload = {
-        to: allRecipients,
-        subject: emailSubject,
-        body: bodyWithCcNote,
-        loadId: emailRow.id,
-        mode: "INVOICE",
-        // NEW: pass PDF info so the Edge Function can attach it
-        pdfUrl: hasPdf ? emailRow.invoice_pdf_url : undefined,
-        pdfName: hasPdf ? pdfName : undefined,
-      };
-
-      const { error } = await supabase.functions.invoke(
-        "send-load-instructions-email",
-        {
-          body: payload,
-        }
-      );
-
-      if (error) throw error;
-
-      setBanner(
-        `Invoice email sent to ${toList.join(", ")}${
-          ccList.length ? ` (additional recipients: ${ccList.join(", ")})` : ""
-        }.`
-      );
-      setEmailModalOpen(false);
-      setEmailRow(null);
-    } catch (e) {
-      console.error("[Billing] sendInvoiceEmail error:", e);
-      setEmailError(e.message || "Failed to send invoice email.");
-    } finally {
-      setEmailSending(false);
-    }
-  }
-
-  /* ------------------------------ UI Actions ------------------------------ */
   function clearFilters() {
     setQ("");
     setDateFrom("");
     setDateTo("");
     setRequirePOD(true);
-    setShowInvoiced(false);
-  }
-  function toggleRow(id) {
-    setSelected((prev) => {
-      const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
-      return n;
-    });
-  }
-  function toggleAll() {
-    if (allChecked) setSelected(new Set());
-    else setSelected(new Set(rows.map((r) => r.id)));
-  }
-  function openDraft(row) {
-    setSelectedLoad(row);
-    setIsDraftOpen(true);
   }
 
-  async function markInvoiced(rowIds) {
-    if (!rowIds?.length) return;
+  function goToLoad(loadId) {
+    if (!loadId) return;
+    nav(`/loads/${loadId}`);
+  }
+
+  // Create an invoice for a READY load
+  async function createInvoice(row) {
+    if (!row || !row.loadId || !row.orgId) return;
+
     setLoading(true);
     setErr(null);
     setBanner(null);
+
     try {
-      const missing = rows
-        .filter((r) => rowIds.includes(r.id))
-        .filter((r) => !r.pod_url || !r.invoice_number);
-      if (missing.length) {
-        setErr(
-          `Cannot mark as invoiced: ${missing.length} row(s) missing POD and/or invoice number.`
-        );
-        setLoading(false);
-        return;
-      }
-      const updates = {
-        invoiced_at: new Date().toISOString(),
-        status: "INVOICED",
-      };
-      const { error } = await supabase
-        .from("loads")
-        .update(updates)
-        .in("id", rowIds);
+      const now = new Date().toISOString();
+      const invoiceNumber = `INV-${Date.now()}`;
+
+      const { data, error } = await supabase
+        .from("load_invoices")
+        .insert({
+          org_id: row.orgId, // RLS-safe: must match current_org_id()
+          load_id: row.loadId,
+          invoice_number: invoiceNumber,
+          status: "ISSUED",
+          amount: row.amount || 0,
+          currency: "USD",
+          issued_at: now,
+          notes: "",
+        })
+        .select()
+        .single();
+
       if (error) throw error;
-      setBanner(`Marked ${rowIds.length} load(s) as Invoiced.`);
+
+      setBanner(
+        `Invoice ${data.invoice_number || data.id.slice(0, 8)} created for load ${
+          row.reference
+        }.`
+      );
       await fetchPage(page);
     } catch (e) {
-      console.error("[Billing] markInvoiced error:", e);
-      setErr(e.message || "Unable to mark as invoiced.");
+      console.error("[Billing] createInvoice error:", e);
+      setErr(e.message || "Unable to create invoice for this load.");
     } finally {
       setLoading(false);
     }
   }
 
-  async function revertToReview(rowId) {
+  // Mark an existing invoice as PAID
+  async function markInvoicePaid(row) {
+    if (!row || !row.invoiceId) return;
+
     setLoading(true);
     setErr(null);
     setBanner(null);
+
     try {
+      const now = new Date().toISOString();
       const { error } = await supabase
-        .from("loads")
-        .update({ billing_ready: false, status: "DELIVERED" })
-        .eq("id", rowId);
+        .from("load_invoices")
+        .update({
+          status: "PAID",
+          paid_at: now,
+        })
+        .eq("id", row.invoiceId);
+
       if (error) throw error;
-      setBanner("Returned to Delivered review.");
+
+      setBanner(
+        `Invoice ${
+          row.invoiceNumber || row.invoiceId.slice(0, 8)
+        } marked as PAID.`
+      );
       await fetchPage(page);
     } catch (e) {
-      console.error("[Billing] revert error:", e);
-      setErr(e.message || "Unable to revert this load.");
+      console.error("[Billing] markInvoicePaid error:", e);
+      setErr(e.message || "Unable to mark invoice as paid.");
     } finally {
       setLoading(false);
     }
-  }
-
-  function exportCSV(rowsToExport) {
-    const header = [
-      "Reference",
-      "Shipper",
-      "Delivered",
-      "POD URL",
-      "Amount",
-      "Status",
-      "Assigned Biller",
-      "Invoice #",
-      "Invoiced At",
-      "Notes",
-      "Invoice PDF",
-    ];
-    const lines = [
-      header.join(","),
-      ...rowsToExport.map((r) =>
-        [
-          r.reference ?? "",
-          r.shipper ?? "",
-          fmtDate(r.delivery_date),
-          r.pod_url ?? "",
-          r.billed_amount ?? "",
-          r.status ?? "",
-          r.assigned_biller ?? "",
-          r.invoice_number ?? "",
-          fmtDateTime(r.invoiced_at),
-          (r.notes ?? "")
-            .replace(/(\r\n|\n|\r)/g, " ")
-            .replace(/"/g, '""'),
-          r.invoice_pdf_url ?? "",
-        ]
-          .map((v) => `"${String(v)}"`)
-          .join(",")
-      ),
-    ];
-    const blob = new Blob([lines.join("\n")], {
-      type: "text/csv;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `billing_export_${new Date()
-      .toISOString()
-      .slice(0, 10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
   }
 
   const showingFrom = Math.min(count, (page - 1) * PAGE_SIZE + 1);
@@ -912,10 +376,10 @@ export default function BillingPage() {
         <div>
           <h1 className="text-xl font-semibold">Billing Control Tower</h1>
           <p className="text-sm opacity-70">
-            Queue of loads ready to invoice. Draft, generate PDF, email
-            invoices, and export.
+            Move delivered loads from Ready for Billing → Invoiced → Paid.
           </p>
         </div>
+
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => fetchPage(page)}
@@ -925,29 +389,11 @@ export default function BillingPage() {
             {loading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <ClipboardList className="h-4 w-4" />
+              <span className="inline-flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4" />
+                <span className="text-sm">Refresh</span>
+              </span>
             )}
-            <span className="text-sm">Refresh</span>
-          </button>
-          <button
-            onClick={() =>
-              exportCSV(rows.filter((r) => selected.has(r.id)))
-            }
-            disabled={selected.size === 0}
-            className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 hover:bg-white/5 disabled:opacity-40"
-            title="Export selected"
-          >
-            <Download className="h-4 w-4" />
-            <span className="text-sm">Export Selected</span>
-          </button>
-          <button
-            onClick={() => markInvoiced(Array.from(selected))}
-            disabled={selected.size === 0 || loading}
-            className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-40"
-            title="Mark selected as invoiced"
-          >
-            <CheckCircle2 className="h-4 w-4" />
-            <span className="text-sm">Mark Invoiced</span>
           </button>
         </div>
       </div>
@@ -964,14 +410,40 @@ export default function BillingPage() {
         </div>
       )}
 
+      {/* Tabs */}
+      <div className="flex gap-2 rounded-xl border border-white/10 bg-black/20 p-1">
+        <TabButton
+          label="Ready"
+          countLabel="Loads ready for billing"
+          active={activeTab === "READY"}
+          onClick={() => setActiveTab("READY")}
+        />
+        <TabButton
+          label="Invoiced"
+          countLabel="Issued / outstanding invoices"
+          active={activeTab === "INVOICED"}
+          onClick={() => setActiveTab("INVOICED")}
+        />
+        <TabButton
+          label="Paid"
+          countLabel="Paid invoices"
+          active={activeTab === "PAID"}
+          onClick={() => setActiveTab("PAID")}
+        />
+      </div>
+
       {/* Filters */}
-      <div className="grid grid-cols-1 gap-3 rounded-xl border border-white/10 bg-white/5 p-3 sm:grid-cols-2 lg:grid-cols-7">
+      <div className="grid grid-cols-1 gap-3 rounded-xl border border-white/10 bg-white/5 p-3 sm:grid-cols-2 lg:grid-cols-6">
         <div className="relative sm:col-span-2">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 opacity-60" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search reference or shipper…"
+            placeholder={
+              activeTab === "READY"
+                ? "Search reference or shipper…"
+                : "Search reference, shipper, or invoice #…"
+            }
             className="w-full rounded-lg border border-white/10 bg-transparent px-9 py-2 outline-none placeholder:opacity-60"
           />
         </div>
@@ -1011,15 +483,6 @@ export default function BillingPage() {
           Require POD
         </label>
 
-        <label className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm">
-          <input
-            type="checkbox"
-            checked={showInvoiced}
-            onChange={(e) => setShowInvoiced(e.target.checked)}
-          />{" "}
-          Show Invoiced
-        </label>
-
         <button
           onClick={clearFilters}
           className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm hover:bg-white/5"
@@ -1034,23 +497,17 @@ export default function BillingPage() {
           <table className="w-full min-w-[1000px] text-sm">
             <thead className="bg-white/5">
               <tr className="text-left">
-                <Th>
-                  <input
-                    type="checkbox"
-                    checked={allChecked}
-                    onChange={toggleAll}
-                  />
-                </Th>
                 <Th>Reference</Th>
                 <Th>Shipper</Th>
                 <Th>Delivered</Th>
                 <Th>POD</Th>
                 <Th>Amount</Th>
-                <Th>Status</Th>
-                <Th>Assigned</Th>
-                <Th>Invoice #</Th>
-                <Th>Invoice PDF</Th>
-                <Th>Invoiced At</Th>
+                <Th>
+                  {activeTab === "READY" ? "Billing State" : "Invoice #"}
+                </Th>
+                {activeTab !== "READY" && <Th>Status</Th>}
+                {activeTab !== "READY" && <Th>Issued</Th>}
+                {activeTab === "PAID" && <Th>Paid</Th>}
                 <Th>Actions</Th>
               </tr>
             </thead>
@@ -1058,7 +515,7 @@ export default function BillingPage() {
               {loading && (
                 <tr>
                   <td
-                    colSpan={12}
+                    colSpan={activeTab === "READY" ? 7 : activeTab === "PAID" ? 9 : 8}
                     className="p-6 text-center opacity-70"
                   >
                     <span className="inline-flex items-center gap-2">
@@ -1071,143 +528,125 @@ export default function BillingPage() {
               {!loading && rows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={12}
+                    colSpan={activeTab === "READY" ? 7 : activeTab === "PAID" ? 9 : 8}
                     className="p-6 text-center opacity-70"
                   >
-                    No rows.
+                    No records found.
                   </td>
                 </tr>
               )}
 
               {!loading &&
-                rows.map((r) => {
-                  const isReady =
-                    r.status === READY_STATUS || r.billing_ready === true;
-                  const canInvoice =
-                    !!r.pod_url && !!r.invoice_number && isReady;
+                rows.map((r) => (
+                  <tr
+                    key={`${r.kind}-${r.loadId}-${r.invoiceId || "none"}`}
+                    className="border-t border-white/10 hover:bg-white/5"
+                  >
+                    <Td className="font-medium">
+                      <button
+                        onClick={() => goToLoad(r.loadId)}
+                        className="inline-flex items-center gap-1 text-sm text-sky-300 hover:underline"
+                      >
+                        {r.reference}
+                        <ExternalLink className="h-3 w-3 opacity-70" />
+                      </button>
+                    </Td>
+                    <Td>{r.shipper}</Td>
+                    <Td>{fmtDate(r.deliveredAt)}</Td>
+                    <Td>
+                      {r.podUrl ? (
+                        <a
+                          href={r.podUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-xs hover:bg-white/5"
+                          title="Open POD"
+                        >
+                          <FileCheck2 className="h-4 w-4" /> View POD
+                          <ExternalLink className="h-3 w-3 opacity-70" />
+                        </a>
+                      ) : (
+                        <span className="text-xs opacity-60">No POD</span>
+                      )}
+                    </Td>
+                    <Td>{fmtUSD(r.amount)}</Td>
 
-                  return (
-                    <tr
-                      key={r.id}
-                      className="border-t border-white/10 hover:bg-white/5"
-                    >
+                    {/* Billing state / invoice number */}
+                    <Td>
+                      {r.kind === "READY" ? (
+                        <span className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-100">
+                          Ready for Billing
+                        </span>
+                      ) : (
+                        <span className="text-xs font-medium">
+                          {r.invoiceNumber || "—"}
+                        </span>
+                      )}
+                    </Td>
+
+                    {/* Invoice status / dates */}
+                    {activeTab !== "READY" && (
                       <Td>
-                        <input
-                          type="checkbox"
-                          checked={selected.has(r.id)}
-                          onChange={() => toggleRow(r.id)}
-                        />
-                      </Td>
-                      <Td className="font-medium">
-                        {r.reference ?? "—"}
-                      </Td>
-                      <Td>{r.shipper ?? "—"}</Td>
-                      <Td>{fmtDate(r.delivery_date)}</Td>
-                      <Td>
-                        {r.pod_url ? (
-                          <a
-                            href={r.pod_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-xs hover:bg-white/5"
-                            title="Open POD"
-                          >
-                            <FileCheck2 className="h-4 w-4" /> View POD{" "}
-                            <ExternalLink className="h-3 w-3 opacity-70" />
-                          </a>
-                        ) : (
-                          <span className="text-xs opacity-60">
-                            No POD
-                          </span>
-                        )}
-                      </Td>
-                      <Td>
-                        {typeof r.billed_amount === "number"
-                          ? fmtUSD(r.billed_amount)
-                          : "—"}
-                      </Td>
-                      <Td>
-                        <span className="rounded-md border border-white/10 px-2 py-1 text-xs">
-                          {r.status ?? "—"}
+                        <span
+                          className={cx(
+                            "rounded-md px-2 py-1 text-xs",
+                            r.invoiceStatus === "PAID"
+                              ? "border border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
+                              : "border border-sky-500/40 bg-sky-500/10 text-sky-100"
+                          )}
+                        >
+                          {r.invoiceStatus}
                         </span>
                       </Td>
-                      <Td>{r.assigned_biller ?? "—"}</Td>
-                      <Td>{r.invoice_number ?? "—"}</Td>
-                      <Td>
-                        {r.invoice_pdf_url ? (
-                          <a
-                            href={r.invoice_pdf_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-xs hover:bg-white/5"
-                          >
-                            Open PDF{" "}
-                            <ExternalLink className="h-3 w-3 opacity-70" />
-                          </a>
-                        ) : (
-                          <span className="text-xs opacity-60">—</span>
-                        )}
-                      </Td>
-                      <Td>{fmtDateTime(r.invoiced_at)}</Td>
-                      <Td className="min-w-[280px] sm:min-w-[360px]">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            onClick={() => openDraft(r)}
-                            className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs hover:bg-white/5"
-                            title="Create/Update draft invoice"
-                          >
-                            <DollarSign className="h-4 w-4" /> Draft
-                            Invoice
-                          </button>
+                    )}
+                    {activeTab !== "READY" && (
+                      <Td>{fmtDateTime(r.issuedAt)}</Td>
+                    )}
+                    {activeTab === "PAID" && <Td>{fmtDateTime(r.paidAt)}</Td>}
 
+                    {/* Actions */}
+                    <Td className="min-w-[220px]">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {r.kind === "READY" && (
                           <button
-                            onClick={() => generatePDFForRow(r)}
-                            className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs hover:bg-white/5"
-                            title="Generate & attach PDF"
-                          >
-                            <FileDown className="h-4 w-4" /> Generate
-                            PDF
-                          </button>
-
-                          <button
-                            onClick={() => openEmailModal(r)}
-                            className="inline-flex items-center gap-2 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-100 hover:bg-sky-500/20"
-                            title="Email invoice to customer"
-                          >
-                            <Mail className="h-4 w-4" /> Email Invoice
-                          </button>
-
-                          <button
-                            onClick={() => markInvoiced([r.id])}
-                            disabled={!canInvoice || !!r.invoiced_at}
-                            className={cx(
-                              "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs",
-                              canInvoice && !r.invoiced_at
-                                ? "border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20"
-                                : "border-white/10 opacity-40"
-                            )}
+                            onClick={() => createInvoice(r)}
+                            className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-40"
+                            disabled={loading || !r.podUrl}
                             title={
-                              canInvoice
-                                ? "Mark as invoiced"
-                                : "Requires POD and Invoice #"
+                              r.podUrl
+                                ? "Create invoice for this load"
+                                : "Requires POD before invoicing"
                             }
                           >
-                            <ShieldCheck className="h-4 w-4" /> Mark
-                            Invoiced
+                            <DollarSign className="h-4 w-4" />
+                            Create Invoice
                           </button>
+                        )}
 
+                        {r.kind === "INVOICED" && (
                           <button
-                            onClick={() => revertToReview(r.id)}
-                            className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs hover:bg-white/5"
-                            title="Send back to Delivered review"
+                            onClick={() => markInvoicePaid(r)}
+                            className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-40"
+                            disabled={loading}
+                            title="Mark invoice as paid"
                           >
-                            <UserRound className="h-4 w-4" /> Revert
+                            <ShieldCheck className="h-4 w-4" />
+                            Mark Paid
                           </button>
-                        </div>
-                      </Td>
-                    </tr>
-                  );
-                })}
+                        )}
+
+                        <button
+                          onClick={() => goToLoad(r.loadId)}
+                          className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs hover:bg-white/5"
+                          title="Open load details"
+                        >
+                          <ExternalLink className="h-4 w-4" />
+                          View Load
+                        </button>
+                      </div>
+                    </Td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>
@@ -1238,146 +677,12 @@ export default function BillingPage() {
           </div>
         </div>
       </div>
-
-      {/* Draft Invoice Modal */}
-      <DraftInvoiceModal
-        open={isDraftOpen}
-        onClose={() => setIsDraftOpen(false)}
-        load={selectedLoad}
-        onSaved={async () => {
-          setIsDraftOpen(false);
-          setSelectedLoad(null);
-          await fetchPage(page);
-        }}
-      />
-
-      {/* Email Invoice Modal */}
-      {emailModalOpen && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-slate-950 p-4 shadow-2xl">
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
-                <h2 className="flex items-center gap-2 text-base font-semibold">
-                  <Mail className="h-4 w-4" />
-                  Email Invoice
-                </h2>
-                {emailRow && (
-                  <p className="text-xs opacity-70">
-                    {emailRow.invoice_number
-                      ? `Invoice ${emailRow.invoice_number}`
-                      : "Draft invoice"}{" "}
-                    · Load {emailRow.reference || emailRow.id}
-                  </p>
-                )}
-              </div>
-              <button
-                onClick={() => setEmailModalOpen(false)}
-                className="rounded-full border border-white/10 p-1 hover:bg-white/10"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            {emailRow && !emailRow.invoice_pdf_url && (
-              <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-                PDF not detected for this invoice. You can still email, but
-                consider clicking <strong>Generate PDF</strong> first so the
-                email body link is valid and a PDF can be attached.
-              </div>
-            )}
-
-            {emailError && (
-              <div className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-100">
-                {emailError}
-              </div>
-            )}
-
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <label className="text-xs opacity-70">
-                  To (comma or space separated)
-                </label>
-                <input
-                  value={emailTo}
-                  onChange={(e) => setEmailTo(e.target.value)}
-                  placeholder="billing@example.com"
-                  className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:opacity-60"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs opacity-70">
-                  CC (optional)
-                </label>
-                <input
-                  value={emailCc}
-                  onChange={(e) => setEmailCc(e.target.value)}
-                  placeholder="ap@example.com"
-                  className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:opacity-60"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs opacity-70">Subject</label>
-                <input
-                  value={emailSubject}
-                  onChange={(e) => setEmailSubject(e.target.value)}
-                  className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:opacity-60"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs opacity-70">
-                  Message body (plain text)
-                </label>
-                <textarea
-                  value={emailBody}
-                  onChange={(e) => setEmailBody(e.target.value)}
-                  rows={8}
-                  className="w-full resize-none rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm outline-none placeholder:opacity-60"
-                />
-              </div>
-            </div>
-
-            <div className="mt-4 flex items-center justify-between gap-3">
-              <p className="text-[11px] opacity-60">
-                Emails are sent via{" "}
-                <span className="font-semibold">
-                  send-load-instructions-email
-                </span>{" "}
-                Edge Function with <code>mode="INVOICE"</code>. When an invoice
-                PDF exists, it is attached automatically.
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setEmailModalOpen(false)}
-                  disabled={emailSending}
-                  className="rounded-lg border border-white/10 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-40"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={sendInvoiceEmail}
-                  disabled={emailSending}
-                  className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-40"
-                >
-                  {emailSending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Send className="h-4 w-4" />
-                  )}
-                  <span>Send Invoice</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </section>
   );
 }
 
-/* ------------------------------ Cells ------------------------------ */
+/* ------------------------------ Small components ------------------------------ */
+
 function Th({ children }) {
   return (
     <th className="whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide opacity-70">
@@ -1385,8 +690,33 @@ function Th({ children }) {
     </th>
   );
 }
+
 function Td({ children, className }) {
   return (
     <td className={cx("px-4 py-3 align-top", className)}>{children}</td>
+  );
+}
+
+function TabButton({ label, active, onClick, countLabel }) {
+  return (
+    <button
+      onClick={onClick}
+      className={cx(
+        "flex-1 rounded-lg px-3 py-2 text-left text-xs sm:text-sm",
+        active
+          ? "bg-white/10 text-white shadow-sm"
+          : "text-white/70 hover:bg-white/5"
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium">{label}</span>
+        {active && (
+          <span className="hidden text-[10px] uppercase tracking-wide text-emerald-300 sm:inline">
+            Active
+          </span>
+        )}
+      </div>
+      <div className="mt-0.5 text-[11px] opacity-70">{countLabel}</div>
+    </button>
   );
 }

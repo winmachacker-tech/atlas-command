@@ -25,6 +25,21 @@
 //       - "List all drivers assigned to active loads."
 //       - "Is Tony Stark assigned to any loads right now?"
 //
+// Phase 1c - Load History View:
+// - New tool: get_load_history
+//   • Reads from public.load_history_view (events timeline per load)
+//   • Lets Dipsy answer:
+//       - "Show me the full history on LD-2025-0376."
+//       - "When was this load delivered and who created it?"
+//
+// Phase 2 - GPS Location Awareness:
+// - New tool: get_driver_location
+//   • Follows chain: Driver → Truck → GPS Vehicle (dummy/motive/samsara)
+//   • Lets Dipsy answer:
+//       - "Where is Mark Tishkun?"
+//       - "Find nearby road service for driver X"
+//       - Location-aware load recommendations
+//
 // Security notes:
 // - Uses SUPABASE_ANON_KEY + the caller's Authorization: Bearer <access_token>
 //   so all queries are still protected by Row Level Security.
@@ -317,19 +332,30 @@ ${contextSection}
 CRITICAL: DATE & YEAR HANDLING (REAL DATES ONLY)
 ═══════════════════════════════════════════════════════════════════════════════
 
-When you create or update loads from documents (rate confirmations, PODs, emails) or user messages:
+When you create or update loads from documents (rate confirmations, PODs, emails, PDFs) or user messages:
 
 - If the date includes a year (e.g. "1/7/21", "01/07/2021", "2021-01-07"):
   • You MUST treat that year literally.
   • "21" means 2021, "22" means 2022, etc.
   • DO NOT silently change 2021 → 2025 or "this year".
+  • DO NOT "helpfully" move old loads into the current year unless the user explicitly tells you to reschedule.
+
 - When you call the create_load tool and pass pickup_date or delivery_date:
-  • Preserve the year from the source date.
+  • Preserve the year from the source date (especially for dates extracted from PDFs or rate cons).
   • If the source is clearly in 2021, you pass a 2021 date to the tool.
+  • If multiple candidate dates are present and you are unsure which is pickup vs delivery, ask one concise clarifying question before calling create_load.
+
 - Only change the year if the USER explicitly says to reschedule, e.g.:
   • "Use these details but schedule it for next week / this year / next month."
+  • "Take this old 2021 load and put it in January 2026."
+
 - If the user says "tomorrow" or "next day", then:
   • Use today's date (${today}) and tomorrow (${tomorrow}) like you already do.
+  • For "next day" after pickup, use pickup_date + 1 day.
+
+- When working from DOCUMENT TEXT (e.g. extracted PDF content passed in the conversation):
+  • Treat any explicit date strings in that text as ground truth.
+  • Do NOT reinterpret or normalize years to the present unless the user clearly instructs you to.
 
 ═══════════════════════════════════════════════════════════════════════════════
 CRITICAL: CONTEXT MEMORY - USE THIS FOR "THAT LOAD" / "THAT DRIVER"
@@ -361,6 +387,11 @@ CORE CAPABILITIES (TOOLS YOU CAN CALL)
 12) mark_load_problem        → Flag load as PROBLEM with reason
 13) get_load_board_status    → Read from dipsy_load_board_status to see the entire board:
                                all loads, their drivers (if any), and HOS-aware driver status.
+14) get_load_history         → Read the event timeline for a specific load from load_history_view
+                               (CREATED, STATUS_CHANGED, DRIVER_ASSIGNED, POD events, etc.).
+15) get_driver_location      → Get a driver's current GPS location from their assigned truck.
+                               Use for "Where is [driver]?", road service dispatch, ETA calculations,
+                               and location-aware load recommendations.
 
 You MUST rely on these tools for real data. Never invent driver, truck, or load data.
 
@@ -370,6 +401,17 @@ Use get_load_board_status when the user asks board-level questions, e.g.:
 - "Is Tony Stark assigned to any loads right now?"
 - "Show me all active loads that don't have a driver yet."
 - "Show me the real-time status of every load in my org."
+
+Use get_load_history when the user asks load-timeline questions, e.g.:
+- "Show me the full history on LD-2025-0376."
+- "When was this load created and when was it delivered?"
+- "Who created this load, and who was assigned when it delivered?"
+
+Use get_driver_location when the user asks about driver whereabouts, e.g.:
+- "Where is Mark Tishkun?"
+- "Where's Black Panther right now?"
+- "Find road service near [driver]"
+- When recommending drivers for loads, use this to show their current location/proximity.
 
 ═══════════════════════════════════════════════════════════════════════════════
 DISPATCH FLOW A: CREATING LOADS
@@ -384,9 +426,9 @@ Required fields for create_load:
 - origin, destination, rate, pickup_date (YYYY-MM-DD), delivery_date (YYYY-MM-DD)
 
 DATE RULES:
-- If the user or a document provides explicit dates with a year (like 1/7/21, 01/07/2021, 2021-01-07),
+- If the user or a DOCUMENT (PDF, email, rate confirmation, BOL, POD, etc.) provides explicit dates with a year (like 1/7/21, 01/07/2021, 2021-01-07),
   you MUST keep that year when passing pickup_date and delivery_date to create_load.
-- Do NOT "update" the year to the current year unless the user explicitly instructs you to reschedule.
+- Do NOT "fix" or "update" the year to the current year unless the user explicitly instructs you to reschedule.
 - If the user uses relative terms like "tomorrow" and "next day", then:
   - "tomorrow" = ${tomorrow}
   - "next day" (after pickup) = pickup_date + 1 day
@@ -397,6 +439,19 @@ Defaults:
 - equipment_type: "Dry van" if not provided
 - customer_reference: use the generated load number if not provided
 
+DOCUMENT-BASED LOAD CREATION (IMPORTANT):
+- When the conversation includes extracted text from a rate confirmation / PDF / document that clearly contains:
+  • origin,
+  • destination,
+  • pickup date,
+  • delivery date,
+  • rate,
+  you should:
+  • Parse those fields directly from the document text.
+  • Call create_load in the SAME TURN without first giving a long summary.
+- Only ask follow-up questions when a truly required field is missing or ambiguous (e.g., two possible pickup dates).
+- After you have enough fields to create the load, call create_load immediately and THEN summarize what you did.
+
 MULTI-TURN: If user says "Make a load" then gives details in the next message,
 parse ALL fields and call create_load. Do NOT ask again for fields already provided.
 
@@ -405,7 +460,7 @@ AFTER create_load SUCCESS:
 - Offer: "Need help finding a driver?"
 
 ═══════════════════════════════════════════════════════════════════════════════
-DISPATCH FLOW B: RECOMMENDING & ASSIGNING DRIVERS (HOS-AWARE)
+DISPATCH FLOW B: RECOMMENDING & ASSIGNING DRIVERS (HOS-AWARE + LOCATION-AWARE)
 ═══════════════════════════════════════════════════════════════════════════════
 
 User patterns:
@@ -420,6 +475,11 @@ When to use search_drivers_hos_aware:
 HOS BUFFER RULE:
 - For runs under 6 hours: add 1 hour buffer (5h run → search for 360 min)
 - For runs 6+ hours: add 1.5 hour buffer (8h run → search for ~570 min)
+
+LOCATION-AWARE RECOMMENDATIONS (NEW!):
+- After getting HOS-aware driver candidates, use get_driver_location on top picks
+- Include their current location in your recommendation:
+  "Black Panther is near Stockton with 9h 54m drive time - perfect for this Sacramento pickup"
 
 TIERED BEHAVIOR (IMPORTANT):
 - First, try a conservative HOS-aware search (with buffer) using search_drivers_hos_aware.
@@ -437,14 +497,14 @@ TIERED BEHAVIOR (IMPORTANT):
 
 When recommending:
 - Provide top pick + 1–2 alternates
-- Explain WHY: HOS remaining, current status, any compliance issues
+- Explain WHY: HOS remaining, current status, location, any compliance issues
 
 Example response:
 "For a 5-hour run from Stockton, I recommend:
 
-🥇 **Black Panther** - 9h 54m drive remaining, RESTING (ideal before a run)
-🥈 Pay Driver - 9h 1m drive remaining, ON_DUTY
-🥉 Mark Tishkun - 8h 33m drive remaining, RESTING
+🥇 **Black Panther** - Near Stockton, 9h 54m drive remaining, RESTING (ideal)
+🥈 Pay Driver - Near Sacramento, 9h 1m drive remaining, ON_DUTY
+🥉 Mark Tishkun - Near Fresno, 8h 33m drive remaining, RESTING
 
 Should I assign Black Panther to this run?"
 
@@ -505,6 +565,20 @@ AFTER mark_load_problem SUCCESS:
 - Note: "I've set problem_flag=true and recorded the issue."
 
 ═══════════════════════════════════════════════════════════════════════════════
+DISPATCH FLOW E: ROAD SERVICE & EMERGENCIES (NEW!)
+═══════════════════════════════════════════════════════════════════════════════
+
+When user says:
+- "Driver has a blown tire"
+- "Need road service for Mark"
+- "Truck broke down"
+
+→ FIRST call get_driver_location to find where the driver is
+→ THEN provide location info and suggest next steps:
+   "Mark Tishkun is near Reno, NV (coordinates: 39.52, -119.81).
+    I recommend contacting a local truck repair service. Do you want me to flag this load as PROBLEM?"
+
+═══════════════════════════════════════════════════════════════════════════════
 BOARD-LEVEL GLOBAL VIEW (USE get_load_board_status)
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -527,6 +601,36 @@ Examples:
   → Call get_load_board_status with no filters or with { limit: 100 }.
 
 You MUST base your answers on the board data returned. Do NOT contradict it.
+
+═══════════════════════════════════════════════════════════════════════════════
+LOAD-LEVEL HISTORY VIEW (USE get_load_history)
+═══════════════════════════════════════════════════════════════════════════════
+
+For questions about the full timeline of a single load, ALWAYS call get_load_history:
+
+Examples:
+- "Show me the full history on LD-2025-0376."
+- "Who created that load and when was it delivered?"
+- "When was a driver first assigned to this load?"
+
+You MUST base your answer on the events returned by get_load_history.
+
+═══════════════════════════════════════════════════════════════════════════════
+DRIVER LOCATION (USE get_driver_location)
+═══════════════════════════════════════════════════════════════════════════════
+
+For questions about where a DRIVER is (not a truck):
+- "Where is Mark Tishkun?"
+- "Where's Black Panther right now?"
+
+→ Use get_driver_location with their name
+→ This looks up: Driver → Truck (real equipment) → GPS Vehicle → Location
+→ Returns: driver info, truck info, GPS coordinates, speed, location label
+
+If driver has no truck assigned, tell the dispatcher and suggest assigning one.
+If truck has no GPS source linked, tell the dispatcher and suggest linking one.
+
+Use this PROACTIVELY when recommending drivers for loads to show proximity!
 
 ═══════════════════════════════════════════════════════════════════════════════
 DRIVER & HOS RULES
@@ -568,8 +672,9 @@ ACTION-FIRST PRINCIPLE
 ═══════════════════════════════════════════════════════════════════════════════
 
 - If you have enough info to call a tool, CALL IT. Don't ask permission.
+- When the user uploads or references a document (rate con, BOL, POD, PDF text) that clearly contains all required load fields, your FIRST action is to create or update the load via tools (not just summarize).
 - Only ask questions for REAL ambiguity or missing critical data.
-- After creating/assigning/marking, confirm what you did clearly.
+- After creating/assigning/marking, confirm what you did clearly, and you may briefly summarize the document or situation if useful.
 `;
 }
 
@@ -814,6 +919,19 @@ function updateContextFromToolResult(
       }
       break;
 
+    case "get_driver_location":
+      // Update driver context from location lookup
+      if (result.success) {
+        updated.lastDriverName = result.driver_name;
+        updated.lastDriverId = result.driver_id;
+        updated.lastDriverStatus = result.status;
+        console.log(
+          "[context] Updated lastDriver from location:",
+          updated.lastDriverName
+        );
+      }
+      break;
+
     case "assign_driver_to_load":
       if (result.success) {
         // Clear pending context after successful assignment
@@ -825,6 +943,27 @@ function updateContextFromToolResult(
     case "mark_load_problem":
       // Clear pending problem after it's been logged
       updated.pendingProblemLoadReference = undefined;
+      break;
+
+    case "get_load_history":
+      // Use the load from history to set context
+      if (result.success && Array.isArray(result.events) && result.events.length) {
+        const lastEvent = result.events[result.events.length - 1];
+        const ref =
+          lastEvent.load_number ||
+          lastEvent.load_reference ||
+          result.load_number ||
+          result.load_reference;
+        if (ref) {
+          updated.lastLoadReference = ref;
+        }
+        if (lastEvent.origin) {
+          updated.lastLoadOrigin = lastEvent.origin;
+        }
+        if (lastEvent.destination) {
+          updated.lastLoadDestination = lastEvent.destination;
+        }
+      }
       break;
   }
 
@@ -915,6 +1054,27 @@ function getToolDefinitions(): any[] {
             max_distance_miles: { type: "number" },
           },
           required: ["pickup_time"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_driver_location",
+        description:
+          "Get a driver's current GPS location from their assigned truck. Use when dispatcher asks where a driver is, when recommending drivers for loads (to show proximity), when coordinating road service, or for ETA calculations. Follows chain: Driver → Truck → GPS Vehicle → Location.",
+        parameters: {
+          type: "object",
+          properties: {
+            driver_name: {
+              type: "string",
+              description: "Driver's name (first name, last name, or full name)",
+            },
+            driver_id: {
+              type: "string",
+              description: "Driver's UUID if already known from prior tool call",
+            },
+          },
         },
       },
     },
@@ -1128,6 +1288,34 @@ function getToolDefinitions(): any[] {
         },
       },
     },
+    {
+      type: "function",
+      function: {
+        name: "get_load_history",
+        description:
+          "Get the full history timeline for a specific load (CREATED, STATUS_CHANGED, DRIVER_* events, POD changes) from load_history_view.",
+        parameters: {
+          type: "object",
+          properties: {
+            load_reference: {
+              type: "string",
+              description:
+                "Primary load reference, e.g. 'LD-2025-0376'. If omitted, the last discussed load from context may be used.",
+            },
+            load_number: {
+              type: "string",
+              description:
+                "Alternate field for load number; usually same as load_reference in this schema.",
+            },
+            limit: {
+              type: "number",
+              description:
+                "Max number of events to return (default 200, max 500).",
+            },
+          },
+        },
+      },
+    },
   ];
 }
 
@@ -1166,6 +1354,9 @@ async function executeTool(toolName: string, params: any): Promise<any> {
     case "search_drivers_hos_aware":
       return await toolSearchDriversHosAware(supabase, params);
 
+    case "get_driver_location":
+      return await toolGetDriverLocation(supabase, params);
+
     case "create_load":
       return await toolCreateLoad(supabase, params);
 
@@ -1192,6 +1383,9 @@ async function executeTool(toolName: string, params: any): Promise<any> {
 
     case "get_load_board_status":
       return await toolGetLoadBoardStatus(supabase, params);
+
+    case "get_load_history":
+      return await toolGetLoadHistory(supabase, params);
 
     default:
       return { error: `Unknown tool: ${toolName}` };
@@ -1373,6 +1567,236 @@ async function toolSearchTrucksAllSources(
   };
 }
 
+// ---- get_driver_location (NEW!) ----
+async function toolGetDriverLocation(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  const driverName = params.driver_name;
+  const driverId = params.driver_id;
+
+  console.log("[toolGetDriverLocation] Looking up driver:", { driverName, driverId });
+
+  // 1) Find the driver
+  let driver: any = null;
+
+  if (driverId) {
+    const { data } = await supabase
+      .from("drivers")
+      .select("id, full_name, first_name, last_name, phone, status")
+      .eq("id", driverId)
+      .limit(1);
+    driver = data?.[0];
+  } else if (driverName) {
+    driver = await findDriverByName(supabase, driverName);
+  }
+
+  if (!driver) {
+    return {
+      success: false,
+      error: `Driver "${driverName || driverId}" not found.`,
+    };
+  }
+
+  const displayName =
+    driver.full_name ||
+    `${driver.first_name || ""} ${driver.last_name || ""}`.trim();
+
+  console.log("[toolGetDriverLocation] Found driver:", driver.id, displayName);
+
+  // 2) Find the truck assigned to this driver
+  const { data: trucks, error: truckError } = await supabase
+    .from("trucks")
+    .select("id, unit_number, truck_number, make, model, year, gps_vehicle_id, gps_provider")
+    .or(`current_driver_id.eq.${driver.id},driver_id.eq.${driver.id}`)
+    .limit(1);
+
+  if (truckError) {
+    console.error("[toolGetDriverLocation] Truck query error:", truckError);
+    return { success: false, error: truckError.message };
+  }
+
+  if (!trucks || trucks.length === 0) {
+    return {
+      success: false,
+      driver_id: driver.id,
+      driver_name: displayName,
+      phone: driver.phone,
+      status: driver.status,
+      error: `${displayName} is not assigned to any truck. Assign them to a truck on the Trucks page to enable GPS tracking.`,
+    };
+  }
+
+  const truck = trucks[0];
+  const truckDisplayName =
+    truck.unit_number ||
+    truck.truck_number ||
+    `${truck.make || ""} ${truck.model || ""}`.trim() ||
+    "Unknown Truck";
+
+  console.log("[toolGetDriverLocation] Found truck:", truck.id, truckDisplayName);
+
+  // 3) Check if truck has GPS source linked
+  if (!truck.gps_vehicle_id) {
+    return {
+      success: false,
+      driver_id: driver.id,
+      driver_name: displayName,
+      phone: driver.phone,
+      status: driver.status,
+      truck_id: truck.id,
+      truck_name: truckDisplayName,
+      error: `${displayName}'s truck (${truckDisplayName}) is not linked to a GPS source. Link it to an ELD vehicle on the Trucks page to enable location tracking.`,
+    };
+  }
+
+  const gpsProvider = truck.gps_provider || "dummy";
+  const gpsVehicleId = truck.gps_vehicle_id;
+
+  console.log("[toolGetDriverLocation] GPS source:", { gpsProvider, gpsVehicleId });
+
+  // 4) Get location from the appropriate GPS provider
+  let location: any = null;
+  let gpsVehicleName: string | null = null;
+
+  if (gpsProvider === "dummy") {
+    // Get dummy vehicle info
+    const { data: veh } = await supabase
+      .from("atlas_dummy_vehicles")
+      .select("id, name, code, make, model")
+      .eq("id", gpsVehicleId)
+      .single();
+
+    if (veh) {
+      gpsVehicleName = veh.name || veh.code;
+    }
+
+    // Get dummy location
+    const { data: loc, error: locErr } = await supabase
+      .from("atlas_dummy_vehicle_locations_current")
+      .select("*")
+      .eq("dummy_vehicle_id", gpsVehicleId)
+      .order("located_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (locErr) {
+      console.error("[toolGetDriverLocation] Dummy location error:", locErr);
+    } else {
+      location = loc;
+    }
+  } else if (gpsProvider === "motive") {
+    // Motive has a combined view with vehicle + location
+    const { data: loc, error: locErr } = await supabase
+      .from("motive_vehicle_locations_current")
+      .select("*")
+      .eq("motive_vehicle_id", gpsVehicleId)
+      .order("located_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (locErr) {
+      console.error("[toolGetDriverLocation] Motive location error:", locErr);
+    } else {
+      location = loc;
+      gpsVehicleName = loc.name || loc.vehicle_number;
+    }
+  } else if (gpsProvider === "samsara") {
+    // Get samsara vehicle info
+    const { data: veh } = await supabase
+      .from("samsara_vehicles")
+      .select("samsara_vehicle_id, name, make, model")
+      .eq("samsara_vehicle_id", gpsVehicleId)
+      .single();
+
+    if (veh) {
+      gpsVehicleName = veh.name;
+    }
+
+    // Get samsara location
+    const { data: loc, error: locErr } = await supabase
+      .from("samsara_vehicle_locations_current")
+      .select("*")
+      .eq("samsara_vehicle_id", gpsVehicleId)
+      .order("located_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (locErr) {
+      console.error("[toolGetDriverLocation] Samsara location error:", locErr);
+    } else {
+      location = loc;
+    }
+  }
+
+  // 5) If no location found
+  if (!location) {
+    return {
+      success: false,
+      driver_id: driver.id,
+      driver_name: displayName,
+      phone: driver.phone,
+      status: driver.status,
+      truck_id: truck.id,
+      truck_name: truckDisplayName,
+      gps_provider: gpsProvider,
+      gps_vehicle_name: gpsVehicleName,
+      error: `No GPS location available for ${displayName}. The ELD (${gpsProvider}) may be offline or not reporting.`,
+    };
+  }
+
+  // 6) Reverse geocode for a friendly location label
+  let locationLabel: string | null = null;
+  if (location.latitude && location.longitude) {
+    try {
+      const geoUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${location.latitude}&lon=${location.longitude}`;
+      const geoRes = await fetch(geoUrl, {
+        headers: { Accept: "application/json" },
+      });
+      if (geoRes.ok) {
+        const geoData = await geoRes.json();
+        const addr = geoData?.address || {};
+        const city =
+          addr.city || addr.town || addr.village || addr.hamlet || addr.county;
+        const state = addr.state;
+        if (city && state) {
+          locationLabel = `${city}, ${state}`;
+        } else if (city) {
+          locationLabel = city;
+        } else if (state) {
+          locationLabel = state;
+        }
+      }
+    } catch (geoErr) {
+      console.warn("[toolGetDriverLocation] Geocode failed:", geoErr);
+    }
+  }
+
+  // 7) Return the full location info
+  return {
+    success: true,
+    driver_id: driver.id,
+    driver_name: displayName,
+    phone: driver.phone,
+    status: driver.status,
+    truck_id: truck.id,
+    truck_name: truckDisplayName,
+    truck_make: truck.make,
+    truck_model: truck.model,
+    truck_year: truck.year,
+    gps_provider: gpsProvider,
+    gps_vehicle_id: gpsVehicleId,
+    gps_vehicle_name: gpsVehicleName,
+    latitude: location.latitude,
+    longitude: location.longitude,
+    speed_mph: location.speed_mph,
+    heading_degrees: location.heading_degrees,
+    located_at: location.located_at,
+    last_synced_at: location.last_synced_at,
+    location_label: locationLabel,
+  };
+}
+
 // ---- get_load_board_status ----
 async function toolGetLoadBoardStatus(
   supabase: ReturnType<typeof createClient>,
@@ -1444,6 +1868,95 @@ async function toolGetLoadBoardStatus(
     success: true,
     count: data?.length ?? 0,
     board: data ?? [],
+  };
+}
+
+// ---- get_load_history ----
+async function toolGetLoadHistory(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  const orgId: string = params.orgId;
+  const loadRef: string | null =
+    typeof params.load_reference === "string" && params.load_reference.trim()
+      ? params.load_reference.trim()
+      : null;
+  const loadNumber: string | null =
+    typeof params.load_number === "string" && params.load_number.trim()
+      ? params.load_number.trim()
+      : null;
+
+  const limit: number =
+    typeof params.limit === "number" && params.limit > 0
+      ? Math.min(params.limit, 500)
+      : 200;
+
+  if (!orgId) {
+    return { success: false, error: "Missing org_id in context." };
+  }
+
+  if (!loadRef && !loadNumber) {
+    return {
+      success: false,
+      error:
+        "You must provide load_reference or load_number (or rely on context).",
+    };
+  }
+
+  let query = supabase
+    .from("load_history_view")
+    .select(
+      `
+      event_id,
+      org_id,
+      load_id,
+      load_number,
+      load_reference,
+      origin,
+      destination,
+      customer,
+      broker,
+      current_status,
+      event_type,
+      event_at,
+      from_status,
+      to_status,
+      from_driver_name,
+      to_driver_name,
+      metadata,
+      created_by,
+      logged_at
+    `
+    )
+    .eq("org_id", orgId)
+    .order("event_at", { ascending: true })
+    .limit(limit);
+
+  if (loadRef) {
+    query = query.eq("load_reference", loadRef);
+  }
+  if (loadNumber) {
+    query = query.eq("load_number", loadNumber);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error("[toolGetLoadHistory] error:", error);
+    return {
+      success: false,
+      error: error.message || "Failed to load history",
+    };
+  }
+
+  const events = data ?? [];
+  return {
+    success: true,
+    org_id: orgId,
+    load_reference: loadRef,
+    load_number: loadNumber,
+    count: events.length,
+    events,
   };
 }
 
@@ -1547,7 +2060,7 @@ async function toolAssignDriverToLoad(
       params.load_reference
     );
 
-    // Find driver (now uses rpc_search_drivers_by_text under the hood)
+    // 1) Find driver (via RPC + fallback)
     const driver = await findDriverByName(supabase, params.driver_name);
     if (!driver) {
       return { error: `Driver "${params.driver_name}" not found` };
@@ -1557,13 +2070,47 @@ async function toolAssignDriverToLoad(
       driver.full_name ||
       `${driver.first_name || ""} ${driver.last_name || ""}`.trim();
 
-    if (driver.status === "ASSIGNED") {
+    // 2) Check canonical board truth to see if this driver is already on an active load
+    // We trust dipsy_load_board_status as the single source of truth for assignments.
+    const { data: activeRows, error: boardErr } = await supabase
+      .from("dipsy_load_board_status")
+      .select("load_reference, load_status")
+      .eq("assigned_driver_id", driver.id)
+      .eq("has_assigned_driver", true)
+      .neq("load_status", "DELIVERED")
+      .neq("load_status", "CANCELLED")
+      .limit(1);
+
+    if (boardErr) {
+      console.error(
+        "[toolAssignDriverToLoad] board check error:",
+        boardErr.message
+      );
+    }
+
+    if (activeRows && activeRows.length > 0) {
+      const row = activeRows[0];
       return {
-        error: `${driverName} is already assigned to another load. Unassign them first.`,
+        error: `${driverName} is already assigned to load ${row.load_reference} (${row.load_status}). Unassign them first before assigning to another load.`,
       };
     }
 
-    // Find load
+    // If driver.status is ASSIGNED but board shows no active assignment, auto-heal status to ACTIVE.
+    if (
+      driver.status === "ASSIGNED" &&
+      (!activeRows || activeRows.length === 0)
+    ) {
+      console.log(
+        "[toolAssignDriverToLoad] Driver status is ASSIGNED but no active board rows found. Auto-correcting to ACTIVE for driver:",
+        driver.id
+      );
+      await supabase
+        .from("drivers")
+        .update({ status: "ACTIVE" })
+        .eq("id", driver.id);
+    }
+
+    // 3) Find load
     const load = await findLoadByReference(supabase, params.load_reference);
     if (!load) {
       return { error: `Load "${params.load_reference}" not found` };
@@ -1571,7 +2118,7 @@ async function toolAssignDriverToLoad(
 
     const nowIso = new Date().toISOString();
 
-    // Create assignment history row (unassigned_at defaults to NULL -> active assignment)
+    // 4) Create assignment history row (unassigned_at defaults to NULL -> active assignment)
     const { error: assignError } = await supabase
       .from("load_driver_assignments")
       .insert({
@@ -1584,13 +2131,13 @@ async function toolAssignDriverToLoad(
       return { error: `Failed to assign: ${assignError.message}` };
     }
 
-    // Update driver status (kept same as your existing pattern)
+    // 5) Update driver status to ASSIGNED
     await supabase
       .from("drivers")
       .update({ status: "ASSIGNED" })
       .eq("id", driver.id);
 
-    // Canonical truth: write assignment directly on loads as well.
+    // 6) Canonical truth: write assignment directly on loads as well.
     await supabase
       .from("loads")
       .update({
@@ -1600,7 +2147,7 @@ async function toolAssignDriverToLoad(
       })
       .eq("id", load.id);
 
-    // Update load status if AVAILABLE → IN_TRANSIT
+    // 7) Update load status if AVAILABLE → IN_TRANSIT
     if (load.status === "AVAILABLE") {
       await supabase
         .from("loads")
@@ -1911,7 +2458,7 @@ async function findLoadByReference(
   return loads?.[0] || null;
 }
 
-// 🔎 NEW: driver lookup that **always hits RPC truth first**
+// 🔎 driver lookup that **always hits RPC truth first**
 async function findDriverByName(
   supabase: ReturnType<typeof createClient>,
   name: string

@@ -376,46 +376,110 @@ export default function Drivers() {
         body: JSON.stringify(body || {}),
       });
 
-      if (!res.ok) {
+      const isJson =
+        res.headers
+          .get("content-type")
+          ?.toLowerCase()
+          .includes("application/json") ?? false;
+
+      let payload = null;
+      if (isJson) {
+        try {
+          payload = await res.json();
+        } catch (e) {
+          console.warn(
+            `[Drivers] HOS sim ${endpoint}: failed to parse JSON payload`,
+            e
+          );
+        }
+      } else {
+        // If not JSON, we still want to capture any text for debugging
         const text = await res.text();
-        throw new Error(`Edge function error (${res.status}): ${text}`);
+        if (text) {
+          console.log(`[Drivers] HOS sim ${endpoint} non-JSON body:`, text);
+        }
       }
 
-      const json = await res.json();
-
-      if (!json.ok) {
-        throw new Error(json.error || "Simulation function returned an error.");
-      }
-
-      // Save last summary so we can show it in the panel
-      setHosSimLastSummary({
-        type: endpoint,
-        ...json,
+      console.log(`[Drivers] HOS sim ${endpoint} response:`, {
+        status: res.status,
+        payload,
       });
 
-      // Reload drivers so the HOS chips pick up new values
-      await loadDrivers();
+      // If HTTP status is not OK, surface as error (with payload details if present)
+      if (!res.ok) {
+        const errMsgFromPayload =
+          payload &&
+          (payload.error || payload.message || payload.detail || payload.status);
+        throw new Error(
+          errMsgFromPayload ||
+            `Edge function error (${res.status}). Check Supabase logs.`
+        );
+      }
 
-      if (endpoint === "hos-sim-tick") {
-        toast(
-          setToast,
-          "success",
-          `Advanced HOS by ${json.tick_minutes} minutes for ${json.updated} drivers.`
-        );
-      } else if (endpoint === "hos-sim-reset") {
-        toast(
-          setToast,
-          "success",
-          `Reset HOS for ${json.updated} of ${json.total_drivers} drivers (fresh day).`
-        );
-      } else if (endpoint === "hos-sim-randomize") {
-        toast(
-          setToast,
-          "success",
-          `Randomized HOS for ${json.updated} of ${json.total_drivers} drivers.`
-        );
+      // At this point, HTTP 2xx. Decide if it's a success or a logical error.
+      if (payload && typeof payload === "object") {
+        // If the function *explicitly* says ok === false, treat as a logical error.
+        if (payload.ok === false) {
+          console.warn(
+            `[Drivers] HOS sim ${endpoint} logical error payload:`,
+            payload
+          );
+          throw new Error(
+            payload.error || "HOS simulation reported a logical error."
+          );
+        }
+
+        // Otherwise, treat 2xx + object payload as a SUCCESS,
+        // even if it doesn't include an "ok" flag.
+        setHosSimLastSummary({
+          type: endpoint,
+          ...payload,
+        });
+
+        // Refresh drivers so the HOS chips pick up new values
+        await loadDrivers();
+
+        const updated = payload.updated ?? payload.simulated ?? 0;
+        const total =
+          payload.total_drivers ??
+          payload.simulatable_drivers ??
+          payload.total ??
+          updated;
+        const tickMinutes =
+          payload.tick_minutes ?? payload.minutes ?? body.tick_minutes;
+        const scenario = payload.scenario;
+
+        if (endpoint === "hos-sim-tick") {
+          toast(
+            setToast,
+            "success",
+            `Advanced HOS by ${tickMinutes ?? "N/A"} minutes for ${
+              updated ?? 0
+            } drivers.`
+          );
+        } else if (endpoint === "hos-sim-reset") {
+          toast(
+            setToast,
+            "success",
+            `Reset HOS for ${updated ?? 0} of ${total ?? 0} drivers (fresh day).`
+          );
+        } else if (endpoint === "hos-sim-randomize") {
+          toast(
+            setToast,
+            "success",
+            `Randomized HOS for ${updated ?? 0} of ${total ?? 0} drivers${
+              scenario ? ` (${scenario})` : ""
+            }.`
+          );
+        } else {
+          toast(setToast, "success", "HOS simulation updated.");
+        }
       } else {
-        toast(setToast, "success", "HOS simulation updated.");
+        // 2xx with no usable JSON payload: still treat as success,
+        // but use a generic message.
+        setHosSimLastSummary({ type: endpoint });
+        await loadDrivers();
+        toast(setToast, "success", "HOS simulation completed.");
       }
     } catch (err) {
       console.error("[Drivers] HOS sim error:", err);
@@ -430,8 +494,10 @@ export default function Drivers() {
   }
 
   async function handleAdvanceHos() {
+    const minutes = Number(hosTickMinutes) || 0;
+    const safeMinutes = minutes > 0 ? minutes : 15;
     await callHosSimFunction("hos-sim-tick", {
-      tick_minutes: hosTickMinutes,
+      tick_minutes: safeMinutes,
     });
   }
 

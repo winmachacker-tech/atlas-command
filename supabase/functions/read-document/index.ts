@@ -23,8 +23,7 @@
 //
 // Security:
 // - Uses OPENAI_API_KEY from Supabase env (server-side only).
-// - No RLS or database writes are touched here.
-// - Does NOT weaken or modify any existing security / RLS.
+// - Does NOT touch your database or RLS at all.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
@@ -42,15 +41,21 @@ if (!OPENAI_API_KEY) {
   );
 }
 
+// ✅ Central CORS headers, including X-Client-Info (required by Supabase JS)
+const CORS_HEADERS: HeadersInit = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "Content-Type, Authorization, X-Client-Info",
+};
+
 async function handleReadDocument(req: Request): Promise<Response> {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       status: 200,
       headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        ...CORS_HEADERS,
       },
     });
   }
@@ -61,8 +66,8 @@ async function handleReadDocument(req: Request): Promise<Response> {
       {
         status: 405,
         headers: {
+          ...CORS_HEADERS,
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
         },
       }
     );
@@ -77,8 +82,8 @@ async function handleReadDocument(req: Request): Promise<Response> {
       {
         status: 500,
         headers: {
+          ...CORS_HEADERS,
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
         },
       }
     );
@@ -94,8 +99,8 @@ async function handleReadDocument(req: Request): Promise<Response> {
       {
         status: 400,
         headers: {
+          ...CORS_HEADERS,
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
         },
       }
     );
@@ -109,8 +114,8 @@ async function handleReadDocument(req: Request): Promise<Response> {
       {
         status: 400,
         headers: {
+          ...CORS_HEADERS,
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
         },
       }
     );
@@ -206,8 +211,8 @@ File URL: ${file_url ?? "not provided"}
         {
           status: 500,
           headers: {
+            ...CORS_HEADERS,
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
           },
         }
       );
@@ -232,8 +237,8 @@ File URL: ${file_url ?? "not provided"}
       {
         status: 200,
         headers: {
+          ...CORS_HEADERS,
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
         },
       }
     );
@@ -248,8 +253,8 @@ File URL: ${file_url ?? "not provided"}
       {
         status: 500,
         headers: {
+          ...CORS_HEADERS,
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
         },
       }
     );

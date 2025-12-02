@@ -6,6 +6,7 @@
 //   • Drivers with truth_status
 //   • Loads delivered without POD
 //   • Active loads with/without drivers
+// - Also shows recent load history events from load_history_view.
 //
 // Route: /debug/board  (already wired in main.jsx)
 
@@ -19,6 +20,7 @@ import {
   Truck,
   ClipboardList,
   FileX,
+  History,
 } from "lucide-react";
 
 function cx(...a) {
@@ -30,6 +32,7 @@ export default function CommanderBoardDebug() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [snapshot, setSnapshot] = useState(null);
+  const [loadHistory, setLoadHistory] = useState([]);
 
   const loadSnapshot = useCallback(async (opts = { silent: false }) => {
     try {
@@ -40,6 +43,7 @@ export default function CommanderBoardDebug() {
       }
       setError(null);
 
+      // 1) Global truth snapshot for Dipsy
       const { data, error } = await supabase.rpc("rpc_dipsy_global_snapshot");
 
       if (error) {
@@ -59,6 +63,44 @@ export default function CommanderBoardDebug() {
       }
 
       setSnapshot(data);
+
+      // 2) Recent load history events (from load_history_view)
+      //    This uses the RLS-protected view you created, scoped by org_id.
+      const { data: historyRows, error: historyError } = await supabase
+        .from("load_history_view")
+        .select(
+          `
+          event_id,
+          org_id,
+          load_id,
+          load_number,
+          load_reference,
+          origin,
+          destination,
+          customer,
+          broker,
+          current_status,
+          event_type,
+          event_at,
+          from_status,
+          to_status,
+          from_driver_name,
+          to_driver_name,
+          metadata,
+          created_by,
+          logged_at
+        `
+        )
+        .order("event_at", { ascending: false })
+        .limit(100);
+
+      if (historyError) {
+        console.error("[CommanderBoardDebug] load_history_view error:", historyError);
+        // Don't blow up the whole page; just log and keep snapshot.
+        // Optionally surface a soft error later if you want.
+      } else {
+        setLoadHistory(historyRows || []);
+      }
     } catch (e) {
       console.error("[CommanderBoardDebug] exception:", e);
       setError(e.message || "Unexpected error");
@@ -107,7 +149,7 @@ export default function CommanderBoardDebug() {
           </h1>
           <p className="text-sm text-[var(--text-muted)]">
             Truth-aligned view of loads, drivers, and trucks from
-            rpc_dipsy_global_snapshot().
+            rpc_dipsy_global_snapshot(), plus recent load history.
           </p>
         </div>
         <button
@@ -122,10 +164,7 @@ export default function CommanderBoardDebug() {
           disabled={refreshing}
         >
           <RefreshCw
-            className={cx(
-              "h-4 w-4",
-              refreshing && "animate-spin"
-            )}
+            className={cx("h-4 w-4", refreshing && "animate-spin")}
           />
           Refresh
         </button>
@@ -308,6 +347,101 @@ export default function CommanderBoardDebug() {
               loads={activeLoadsNoDriver}
             />
           </section>
+
+          {/* Recent load history (from load_history_view) */}
+          <section className="space-y-2">
+            <h2 className="text-sm font-semibold flex items-center gap-2">
+              <History className="h-4 w-4 text-sky-400" />
+              Recent Load History (debug)
+              <span className="text-xs text-[var(--text-muted)]">
+                ({loadHistory.length} events)
+              </span>
+            </h2>
+            <div className="overflow-x-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]">
+              {loadHistory.length === 0 ? (
+                <div className="p-3 text-xs text-[var(--text-muted)]">
+                  No history events yet. New events will appear here as loads are
+                  created, updated, assigned, and delivered.
+                </div>
+              ) : (
+                <table className="min-w-full text-[11px]">
+                  <thead className="bg-[var(--bg-surface)] text-[var(--text-muted)]">
+                    <tr>
+                      <Th>When</Th>
+                      <Th>Event</Th>
+                      <Th>Load</Th>
+                      <Th>Lane</Th>
+                      <Th>Status</Th>
+                      <Th>Driver</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loadHistory.map((ev) => (
+                      <tr
+                        key={ev.event_id}
+                        className="border-t border-[var(--border-subtle)]"
+                      >
+                        <Td mono>
+                          {ev.event_at
+                            ? new Date(ev.event_at).toLocaleString()
+                            : "—"}
+                        </Td>
+                        <Td>
+                          <span
+                            className={cx(
+                              "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium",
+                              badgeClassForEventType(ev.event_type)
+                            )}
+                          >
+                            {ev.event_type}
+                          </span>
+                        </Td>
+                        <Td mono>
+                          <div className="flex flex-col gap-0.5">
+                            <span>{ev.load_number || "—"}</span>
+                            <span className="text-[10px] text-[var(--text-muted)]">
+                              {ev.load_reference || "No ref"}
+                            </span>
+                          </div>
+                        </Td>
+                        <Td>
+                          <div className="truncate">
+                            {ev.origin || "?"} → {ev.destination || "?"}
+                          </div>
+                        </Td>
+                        <Td>
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[10px] text-[var(--text-muted)]">
+                              From: {ev.from_status || "—"}
+                            </span>
+                            <span className="text-[10px]">
+                              To:{" "}
+                              <span className="font-medium">
+                                {ev.to_status || ev.current_status || "—"}
+                              </span>
+                            </span>
+                          </div>
+                        </Td>
+                        <Td>
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[10px] text-[var(--text-muted)]">
+                              From: {ev.from_driver_name || "—"}
+                            </span>
+                            <span className="text-[10px]">
+                              To:{" "}
+                              <span className="font-medium">
+                                {ev.to_driver_name || "—"}
+                              </span>
+                            </span>
+                          </div>
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </section>
         </>
       )}
     </div>
@@ -364,6 +498,25 @@ function badgeClassForTruthStatus(ts) {
     case "SHOULD_BE_FREE":
       return "bg-amber-500/10 text-amber-300 border border-amber-500/40";
     case "UNKNOWN":
+    default:
+      return "bg-slate-500/10 text-slate-300 border border-slate-500/40";
+  }
+}
+
+function badgeClassForEventType(eventType) {
+  switch (eventType) {
+    case "CREATED":
+      return "bg-emerald-500/10 text-emerald-300 border border-emerald-500/40";
+    case "STATUS_CHANGED":
+      return "bg-blue-500/10 text-blue-300 border border-blue-500/40";
+    case "DRIVER_ASSIGNED":
+    case "DRIVER_REASSIGNED":
+      return "bg-indigo-500/10 text-indigo-300 border border-indigo-500/40";
+    case "DRIVER_UNASSIGNED":
+      return "bg-amber-500/10 text-amber-300 border border-amber-500/40";
+    case "POD_STATUS_CHANGED":
+    case "POD_UPLOADED":
+      return "bg-teal-500/10 text-teal-300 border border-teal-500/40";
     default:
       return "bg-slate-500/10 text-slate-300 border border-slate-500/40";
   }

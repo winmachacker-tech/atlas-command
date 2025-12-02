@@ -1,564 +1,853 @@
-// FILE: src/lib/dipsyIntelligence_v2.js
-// Purpose: Dipsy's AI Brain - Powered by OpenAI function calling
-// - Interpret user messages in natural language.
-// - Use tools (Supabase + Edge Functions) to act on loads, drivers, and trucks.
-// - Stay RLS-safe (no service-role keys; everything uses the logged-in user).
+// FILE: supabase/functions/dipsy-text/index.ts
+// Purpose:
+// - Text-only Dipsy endpoint for Atlas Command.
+// - Uses OpenAI function calling + Supabase (RLS-respecting) tools
+//   to answer questions about drivers, loads, trucks, and HOS-aware dispatch.
+//
+// V2 Updates (Phase 1 - Ground Truth Alignment):
+// - Keep using existing tools, BUT:
+//   • search_loads now returns real driver assignment fields (assigned_driver_id, driver_name)
+//   • assign_driver_to_load writes assignment into BOTH:
+//       - load_driver_assignments (history/audit)
+//       - loads.assigned_driver_id + loads.driver_name (canonical "current assignment")
+//   • confirm_pod_received and release_driver_without_pod:
+//       - Free the driver
+//       - Clear loads.assigned_driver_id + loads.driver_name
+//       - Mark the assignment row as closed via unassigned_at
+//   This makes the loads table + load_driver_assignments (with unassigned_at)
+//   the single canonical "current assignment" truth.
+//
+// Phase 1b - Global Board View:
+// - New tool: get_load_board_status
+//   • Reads from public.dipsy_load_board_status (one row per load)
+//   • Lets Dipsy answer board-level questions from canonical truth:
+//       - "Which loads currently have a driver assigned?"
+//       - "List all drivers assigned to active loads."
+//       - "Is Tony Stark assigned to any loads right now?"
+//
+// Phase 1c - Load History View:
+// - New tool: get_load_history
+//   • Reads from public.load_history_view (events timeline per load)
+//   • Lets Dipsy answer:
+//       - "Show me the full history on LD-2025-0376."
+//       - "When was this load delivered and who created it?"
+//
+// Phase 2 - GPS Location Awareness:
+// - New tool: get_driver_location
+//   • Follows chain: Driver → Truck → GPS Vehicle (dummy/motive/samsara)
+//   • Lets Dipsy answer:
+//       - "Where is Mark Tishkun?"
+//       - "Find nearby road service for driver X"
+//       - Location-aware load recommendations
+//
+// Phase 2b - Road Service Search:
+// - New tool: find_nearby_services
+//   • Uses Google Places API to find truck services near GPS coordinates
+//   • Supports: tire shops, tow trucks, mechanics, fuel/truck stops
+//   • Lets Dipsy answer:
+//       - "Find a tire shop near Mark"
+//       - "Driver has a flat tire" → auto-finds nearby tire services
+//
+// Security notes:
+// - Uses SUPABASE_ANON_KEY + the caller's Authorization: Bearer <access_token>
+//   so all queries are still protected by Row Level Security.
+// - We decode the user via supabase.auth.getUser() using the passed token.
+// - org_id is derived from user_orgs.
 
-import { supabase } from "/src/lib/supabase.js";
-import { getOpenAIApiKey } from "/src/lib/openaiConfig.js";
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
-/**
- * Main entry point - Process any user query with AI
- * @param {string} userMessage - Natural language from user
- * @param {string} userId - Current user ID
- * @param {Object} conversationState - Current conversation state with conversationHistory array
- * @returns {Promise<Object>} - Response with data, actions, and UPDATED conversation state
- */
-export async function processDipsyQuery(
-  userMessage,
-  userId,
-  conversationState = null
-) {
-  console.log("🤖 Dipsy AI Query:", userMessage);
-  console.log("🔄 Conversation State:", conversationState);
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY") ?? "";
+const GOOGLE_MAPS_API_KEY = Deno.env.get("GOOGLE_MAPS_API_KEY") ?? "";
 
+// Basic CORS headers so the browser can call this from localhost:5173 and prod
+const corsHeaders: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+// ------------------------------ Types ------------------------------
+
+interface ConversationMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  tool_call_id?: string;
+}
+
+interface ContextMemory {
+  // Last load discussed
+  lastLoadReference?: string;
+  lastLoadOrigin?: string;
+  lastLoadDestination?: string;
+  lastLoadRate?: number;
+  lastLoadId?: string;
+
+  // Last driver discussed/recommended
+  lastDriverName?: string;
+  lastDriverId?: string;
+  lastDriverHOSMinutes?: number;
+  lastDriverStatus?: string;
+
+  // Pending problem (waiting for reason)
+  pendingProblemLoadReference?: string;
+}
+
+interface ConversationState {
+  mode?: string;
+  conversationHistory?: ConversationMessage[];
+  context?: ContextMemory;
+}
+
+// ------------------------------ Main serve ------------------------------
+
+serve(async (req: Request): Promise<Response> => {
   try {
-    // 1) Get user context (org, etc.)
-    const userContext = await getUserContext(userId);
+    // Handle CORS preflight
+    if (req.method === "OPTIONS") {
+      return new Response("ok", { headers: corsHeaders });
+    }
 
-    // 2) Build messages + conversation history for OpenAI
-    const { messages, conversationHistory } = buildMessages(
+    if (req.method !== "POST") {
+      return jsonResponse(405, { ok: false, error: "Method not allowed" });
+    }
+
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader || !authHeader.toLowerCase().startsWith("bearer ")) {
+      return jsonResponse(401, {
+        ok: false,
+        error: "Missing or invalid Authorization header",
+      });
+    }
+
+    const accessToken = authHeader.replace(/bearer /i, "").trim();
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+    });
+
+    const body = await req.json().catch(() => ({} as any));
+    const userMessage: string = body.message ?? body.prompt ?? "";
+    const conversationState: ConversationState | null =
+      body.conversation_state ?? null;
+
+    if (!userMessage || typeof userMessage !== "string") {
+      return jsonResponse(400, {
+        ok: false,
+        error: "Missing 'message' in request body",
+      });
+    }
+
+    // Resolve current user
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
+
+    if (userErr || !user) {
+      console.error("[dipsy-text] auth.getUser error:", userErr);
+      return jsonResponse(401, {
+        ok: false,
+        error: "Unable to resolve user from token",
+      });
+    }
+
+    const userId = user.id;
+
+    // Resolve org_id via user_orgs
+    const { data: userOrg, error: orgErr } = await supabase
+      .from("user_orgs")
+      .select("org_id")
+      .eq("user_id", userId)
+      .single();
+
+    if (orgErr || !userOrg?.org_id) {
+      console.error("[dipsy-text] user_orgs lookup error:", orgErr);
+      return jsonResponse(403, {
+        ok: false,
+        error:
+          "You do not belong to an active org, or org context could not be resolved.",
+      });
+    }
+
+    const orgId = userOrg.org_id as string;
+
+    console.log("[dipsy-text] user:", userId, "org:", orgId);
+    console.log("[dipsy-text] incoming message:", userMessage);
+
+    const userContext = { userId, orgId };
+
+    // Initialize or carry forward context memory
+    const contextMemory: ContextMemory = conversationState?.context ?? {};
+
+    // Build messages from conversation state
+    const { messages, updatedHistory } = buildMessages(
       userMessage,
       conversationState,
-      userContext
-    );
-
-    // 3) Call OpenAI with tools
-    const response = await callOpenAIWithTools(
-      messages,
       userContext,
-      conversationHistory,
-      conversationState
+      contextMemory
     );
 
-    return response;
-  } catch (error) {
-    console.error("❌ Dipsy Error:", error);
-    return {
-      success: false,
-      message: `Oops! Something went wrong: ${error.message}`,
-      usedAI: false,
-      conversationHistory: conversationState?.conversationHistory || [],
-    };
+    // Call OpenAI with tools
+    const { answer, usedTool, newHistory, updatedContext } =
+      await callOpenAIWithTools(
+        messages,
+        userContext,
+        updatedHistory,
+        supabase,
+        conversationState,
+        accessToken,
+        contextMemory
+      );
+
+    return jsonResponse(200, {
+      ok: true,
+      org_id: orgId,
+      answer,
+      used_tool: usedTool,
+      conversation_state: {
+        ...(conversationState ?? {}),
+        conversationHistory: newHistory,
+        context: updatedContext,
+      },
+    });
+  } catch (err) {
+    console.error("[dipsy-text] Unhandled error:", err);
+    return jsonResponse(500, {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
-}
+});
 
-/**
- * Get user context (org, role, etc.)
- * NOTE: We rely on RLS, so we never inject org filters manually into queries.
- */
-async function getUserContext(userId) {
-  const { data: userOrg, error } = await supabase
-    .from("user_orgs")
-    .select("org_id")
-    .eq("user_id", userId)
-    .single();
+// ------------------------------ Helpers ------------------------------
 
-  console.log(
-    "[Dipsy/getUserContext] userId:",
-    userId,
-    "userOrg:",
-    userOrg,
-    "error:",
-    error
-  );
-
-  return {
-    userId,
-    orgId: userOrg?.org_id ?? null,
-  };
-}
-
-/**
- * Build messages array for OpenAI AND return updated conversation history
- */
-function buildMessages(userMessage, conversationState, userContext) {
-  // Start with system message
-  const messages = [
-    {
-      role: "system",
-      content: getSystemPrompt(conversationState, userContext),
+function jsonResponse(status: number, data: unknown): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
     },
-  ];
+  });
+}
 
-  // Get existing conversation history or start fresh
-  let conversationHistory = conversationState?.conversationHistory || [];
+function buildMessages(
+  userMessage: string,
+  conversationState: ConversationState | null,
+  userContext: { userId: string; orgId: string },
+  contextMemory: ContextMemory
+): {
+  messages: ConversationMessage[];
+  updatedHistory: ConversationMessage[];
+} {
+  const messages: ConversationMessage[] = [];
 
-  // Only keep user + assistant messages for the model.
-  // Tool messages are appended but not fed back in, to avoid "tool/tool_call" shape errors.
-  const recentHistory = conversationHistory
+  const systemPrompt = getSystemPrompt(
+    conversationState,
+    userContext,
+    contextMemory
+  );
+  messages.push({ role: "system", content: systemPrompt });
+
+  let history = conversationState?.conversationHistory ?? [];
+
+  // Only include user + assistant messages to avoid tool message ordering issues
+  const recent = history
     .filter((m) => m.role === "user" || m.role === "assistant")
     .slice(-10);
 
-  if (recentHistory.length > 0) {
-    messages.push(...recentHistory);
+  for (const m of recent) {
+    messages.push({ role: m.role, content: m.content });
   }
 
-  // Add the new user message
-  const newUserMessage = {
+  const newUserMsg: ConversationMessage = {
     role: "user",
     content: userMessage,
   };
-  messages.push(newUserMessage);
+  messages.push(newUserMsg);
 
-  // Update conversation history with the new user message
-  conversationHistory = [...conversationHistory, newUserMessage];
+  history = [...history, newUserMsg];
 
-  return { messages, conversationHistory };
+  return { messages, updatedHistory: history };
 }
 
-/**
- * System prompt that defines Dipsy's personality and capabilities
- */
-function getSystemPrompt(conversationState, userContext) {
-  const todayIso = new Date().toISOString().split("T")[0];
-  const tomorrowIso = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+function getSystemPrompt(
+  conversationState: ConversationState | null,
+  userContext: { userId: string; orgId: string },
+  contextMemory: ContextMemory
+): string {
+  const today = new Date().toISOString().split("T")[0];
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
 
-  return `You are Dipsy, an intelligent AI dispatch assistant for Atlas Command TMS.
+  const activeTaskLine =
+    conversationState && conversationState.mode
+      ? `- Active task: ${conversationState.mode}`
+      : "";
 
-========================
-PERSONALITY & STYLE
-========================
-- Friendly, efficient, and action-oriented.
-- Use emojis occasionally (📦, 🚛, 💰, 📍, ✅) but don't overdo it.
-- Be concise and practical, like a sharp dispatcher.
-- Celebrate completed tasks with enthusiasm when appropriate.
+  // Build context section from memory
+  let contextSection = "";
 
-========================
-CONTEXT
-========================
-- User ID: ${userContext.userId}
-- Organization: ${userContext.orgId}
-- Today's date: ${todayIso}
-${conversationState ? "- Active task: " + conversationState.mode : ""}
-
-You always have access to recent conversation messages (user + assistant).
-You MUST use that history to understand what "that load", "this driver", or "assign them" refers to.
-
-========================
-CORE CAPABILITIES (TOOLS)
-========================
-You can use these tools:
-
-1) search_loads
-   - Find loads by status, origin, destination.
-2) search_drivers
-   - Find drivers by status and notes (location text, etc.).
-3) search_trucks_all_sources
-   - Find truck locations across Motive, Samsara, and Atlas Dummy fleets.
-4) search_drivers_hos_aware
-   - Ask the HOS-aware Edge Function which drivers are best for a given load window.
-5) create_load
-   - Create new loads in the system.
-6) update_load
-   - Update fields on an existing load (status, rate, dates, etc.).
-7) assign_driver_to_load
-   - Assign a driver to a load (and update driver/load status).
-8) get_load_details
-   - Get full details for a specific load.
-9) mark_load_delivered
-   - Mark a load as delivered and clean up flags.
-10) mark_load_problem
-    - Mark a load as PROBLEM and set problem flags.
-11) get_driver_location
-    - Get a driver's current GPS location from their assigned truck.
-    - USE THIS when recommending loads, finding road service, checking ETAs, or any location-aware task.
-12) web_search
-    - Generic web search (placeholder).
-
-========================
-LOCATION-AWARE DISPATCH (NEW!)
-========================
-
-You now have GPS awareness for drivers through get_driver_location.
-
-USE get_driver_location WHEN:
-- Recommending loads: "Driver X is near Sacramento, here's a backhaul..."
-- Road service needed: "Driver is near Reno on I-80, here are nearby tire shops..."
-- ETA questions: "Your driver is 47 miles out, about 50 minutes away"
-- Weather alerts: "Driver Mike is approaching a storm cell on I-70"
-- Any question about where a driver currently is
-
-The tool returns:
-- driver_name, phone, status
-- vehicle_name (their assigned truck)
-- latitude, longitude, speed_mph, heading
-- location_label (city, state if available)
-- located_at (timestamp of last GPS ping)
-
-If a driver has no truck assigned, it will tell you - suggest the dispatcher assign one.
-
-========================
-DISPATCH FLOW (END-TO-END)
-========================
-
-Your job is to behave like a dispatcher who can actually DO the work:
-
-A) When the user describes a new load:
-   - Examples:
-     - "Make a load for me."
-     - "Picks up in Sacramento tomorrow at 6pm, delivers in Salt Lake City next day at 3pm, $5300, 45k lbs of server racks."
-   - You MUST extract:
-     - origin
-     - destination
-     - rate (if given)
-     - pickup_date
-     - delivery_date
-     - optional: weight, commodity, miles
-   - Date handling:
-     - "tomorrow" = ${tomorrowIso}
-     - "Friday" = the next upcoming Friday (based on today's date).
-   - If the user provides ALL core fields (origin, destination, rate, pickup_date, delivery_date),
-     you SHOULD call create_load.
-   - Core required fields for create_load:
-     - origin
-     - destination
-     - rate
-     - pickup_date (YYYY-MM-DD)
-     - delivery_date (YYYY-MM-DD)
-   - Helpful but NOT required (you can default them):
-     - shipper
-     - equipment_type
-     - customer_reference
-
-   DEFAULTS WHEN MISSING:
-   - If shipper is not specified:
-       shipper = "Unknown shipper"
-   - If equipment_type is not specified:
-       equipment_type = "Dry van"
-   - If customer_reference is not specified:
-       customer_reference = the generated load number.
-
-   MULTI-TURN BEHAVIOR (IMPORTANT):
-   - If the user first says "Make a load for me" and THEN in the next message gives the actual details
-     (origin, destination, dates, rate, cargo, etc.), you MUST treat those messages together as ONE
-     complete spec and call create_load once you have the core fields.
-   - If you summarize the load back:
-       "Origin: X, Destination: Y, Pickup: A, Delivery: B, Rate: R, Cargo: C"
-     and the user responds with:
-       "Yes", "That's it", "That's all", "Build the load", "That's the load"
-     you MUST NOT ask for those details again. You MUST call create_load using the details already
-     present in the conversation.
-   - It is FORBIDDEN to get stuck in a loop asking for origin/destination/dates/rate again when those
-     fields are clearly visible in recent conversation history.
-
-   AFTER create_load:
-   - Confirm creation with:
-     - New load reference (e.g., LD-2025-1234)
-     - Short human-readable summary (origin, destination, dates, rate, commodity if known)
-     - Example:
-       "✅ Created load LD-2025-1234: Sacramento, CA → Salt Lake City, UT, picking up 2025-11-29,
-       delivering 2025-11-30, rate $5300, 45k lbs of server racks."
-
-B) Choosing and assigning a driver for that load:
-   - For questions like:
-     - "Who should I send on a 5-hour run from Stockton today at 2 PM?"
-     - "Recommend a driver for a 6-hour load from Sacramento."
-   - You MUST:
-     1) Use the HOS-aware tool search_drivers_hos_aware whenever:
-        - The user mentions hours, HOS, drive time, long run / 5-hour / 6-hour, or timing windows.
-        - You have or can infer an approximate pickup_time.
-        - Use min_drive_remaining_min that roughly matches the run:
-          - 5-hour run → about 300 minutes
-          - 6-hour run → about 360 minutes
-     2) Use plain search_drivers when the user just wants a list like:
-        - "Show me all drivers."
-        - "Show me drivers whose status is ACTIVE."
-     3) When you recommend a driver, you MUST explain WHY in terms of:
-        - HOS drive time remaining
-        - Shift/cycle remaining (if relevant)
-        - Status (DRIVING, ON_DUTY, OFF_DUTY/RESTING)
-        - Any location or notes if present.
-     4) ALSO use get_driver_location to check where recommended drivers currently are!
-        - "Black Panther is near Fresno and has 9h drive time - perfect for this Sacramento pickup"
-
-   EXAMPLE EXPLANATION:
-   - "I recommend Black Panther because they are ACTIVE, currently RESTING, and have 9h 54m of drive
-      time left, which is more than enough for a 5-hour run. They're currently near Stockton so pickup is quick."
-
-   WHEN USER SAYS "WHO SHOULD I SEND?":
-   - You MUST propose 1–3 best candidates, not just dump a list.
-   - You MUST base your answer on the tool result (HOS-aware search if used).
-   - BONUS: Include their current location if you can get it!
-
-   WHEN USER SAYS "Assign <NAME> please":
-   - Look at the recent conversation:
-     - If you just discussed a specific load ("that 5-hour run from Stockton") and gave driver options,
-       assume "<NAME>" is a driver and the referenced load is that last discussed load.
-   - You MUST call assign_driver_to_load, not just respond with text:
-     - driver_name = the name the user gave (e.g., "Black Panther").
-     - load_reference = the reference of the most recently discussed load, or the one explicitly named.
-   - Only ask for clarification if there is REAL ambiguity:
-     - Multiple loads in play with no clear "last discussed".
-     - Multiple drivers with the same name.
-
-C) Marking loads delivered or problematic:
-   - When user says:
-     - "Mark that load delivered."
-     - "That Sacramento to Salt Lake City load is delivered."
-   → You MUST call mark_load_delivered with the load reference (from recent conversation or explicit).
-   - When user says:
-     - "Mark that load as a problem."
-     - "This load has issues / is at risk."
-   → You MUST call mark_load_problem with the load reference (from recent conversation or explicit).
-   - After the tool, respond with a short confirmation:
-     - "✅ Marked LD-2025-1234 as DELIVERED."
-     - "⚠️ Marked LD-2025-5678 as PROBLEM and flagged it for review."
-
-D) Road service and emergencies:
-   - When user says:
-     - "Driver has a blown tire"
-     - "Need road service for Mark"
-     - "Truck broke down"
-   → FIRST call get_driver_location to find where the driver is
-   → THEN you can suggest nearby services or help coordinate
-
-========================
-DRIVER & HOS RULES
-========================
-
-1) READY-TO-GO DRIVERS:
-   - A driver is considered "ready to go today" if:
-     - Their status is "ACTIVE".
-   - The search_drivers tool always returns:
-     - a numeric "count"
-     - an array "drivers"
-   - You MUST ALWAYS inspect "count".
-   - If count > 0, you MUST say that there ARE drivers and list them (at least names + status).
-   - It is FORBIDDEN to say "there are no drivers", "no drivers in the system", or "no active drivers"
-     when count > 0.
-   - Only say "no drivers available" or "no drivers in the system" when count === 0.
-
-2) HOS-AWARE TOOL (search_drivers_hos_aware):
-   - Use this when:
-     - The question is about who can LEGALLY cover a run based on hours.
-     - The user mentions "hours of service", "drive time left", "5-hour run", "6-hour run", etc.
-   - You provide:
-     - origin_city, origin_state (if known or implied)
-     - pickup_time (ISO string)
-     - min_drive_remaining_min (minimum drive required for this load)
-     - max_distance_miles (optional; can be null for now)
-   - The tool will return a structured JSON with drivers, HOS minutes, and sometimes explanations.
-   - You MUST base your reasoning on that result.
-
-3) HOS STATUS:
-   - When describing a driver, if HOS info is available, include:
-     - "He has 6h 20m drive remaining and is currently RESTING."
-   - Prefer drivers who:
-     - Are ACTIVE.
-     - Have enough drive and shift remaining for the asked window.
-   - Avoid picking drivers very close to running out of hours for long loads, unless the user insists.
-
-========================
-TRUCK LOCATION TRUTH RULES (FLEET MAP PARITY)
-========================
-
-- When the user asks where a truck is (e.g.,
-  "Where is truck 4812ca12?",
-  "Where is Truck 2203?"),
-  you MUST call search_trucks_all_sources.
-- This tool checks Motive, Samsara, AND Atlas Dummy tables – it is the single source of truth.
-- You MUST NOT guess locations. Base your answer ONLY on the tool result.
-- You may only say a truck "does not appear in the current data" or "I can't find that truck"
-  when success === false and reason === "NOT_FOUND".
-- If the tool returns success === true, you MUST treat that as authoritative and answer with:
-  - provider,
-  - rough location (city/state if you can infer it from coordinates or description),
-  - and speed/movement.
-
-========================
-DRIVER LOCATION RULES (NEW!)
-========================
-
-- When the user asks where a DRIVER is (not a truck):
-  "Where is Mark?"
-  "Where's Black Panther right now?"
-  → Use get_driver_location with their name
-- This looks up the driver's assigned truck and returns GPS coordinates
-- If driver has no truck assigned, tell the dispatcher and suggest assigning one
-- Use this proactively when recommending drivers for loads!
-
-========================
-CONVERSATION CONTEXT RULES
-========================
-
-You MUST use conversation context intelligently:
-
-- "that load" / "this load" / "the load"
-  → The most recently discussed load.
-- "that driver" / "this driver" / "him" / "her"
-  → The most recently discussed driver.
-- First names only (e.g., "John"):
-  → Use search_drivers to find a driver with that name in the user's org.
-- Load shorthand like "4404":
-  → Treat as a reference fragment and search loads with reference ILIKE '%4404%'.
-
-ACTION-FIRST:
-- Do NOT ask "Shall I create?" if all required data is available. Just create the load.
-- Do NOT ask "Do you want me to assign?" if the user already asked to assign. Just assign.
-- Only ask clarifying questions when there is TRUE ambiguity.
-
-Remember: You have recent messages in the conversation. Use them to avoid repeating questions.`;
-}
-
-/**
- * Helper to sanitize messages before sending to OpenAI.
- * Ensures content is always a string or an array (as required by the API).
- */
-function sanitizeMessageForOpenAI(msg) {
-  const safe = { ...msg };
-
-  if (
-    safe.content !== undefined &&
-    safe.content !== null &&
-    typeof safe.content !== "string" &&
-    !Array.isArray(safe.content)
-  ) {
-    try {
-      safe.content = JSON.stringify(safe.content);
-    } catch {
-      safe.content = String(safe.content);
+  if (contextMemory.lastLoadReference) {
+    contextSection += `\n- LAST DISCUSSED LOAD: ${contextMemory.lastLoadReference}`;
+    if (contextMemory.lastLoadOrigin && contextMemory.lastLoadDestination) {
+      contextSection += ` (${contextMemory.lastLoadOrigin} → ${contextMemory.lastLoadDestination})`;
+    }
+    if (contextMemory.lastLoadRate) {
+      contextSection += ` at $${contextMemory.lastLoadRate}`;
     }
   }
 
+  if (contextMemory.lastDriverName) {
+    contextSection += `\n- LAST DISCUSSED DRIVER: ${contextMemory.lastDriverName}`;
+    if (contextMemory.lastDriverHOSMinutes) {
+      const hours = Math.floor(contextMemory.lastDriverHOSMinutes / 60);
+      const mins = contextMemory.lastDriverHOSMinutes % 60;
+      contextSection += ` (${hours}h ${mins}m drive remaining)`;
+    }
+    if (contextMemory.lastDriverStatus) {
+      contextSection += ` - ${contextMemory.lastDriverStatus}`;
+    }
+  }
+
+  if (contextMemory.pendingProblemLoadReference) {
+    contextSection += `\n- PENDING: Waiting for problem reason for load ${contextMemory.pendingProblemLoadReference}`;
+  }
+
+  return `You are Dipsy, an intelligent AI dispatch assistant for Atlas Command TMS.
+
+PERSONALITY:
+- Friendly, efficient, and action-oriented.
+- Use emojis occasionally (📦, 🚛, 💰, 📍, ✅) but not excessively.
+- Be concise and practical.
+- Celebrate completed tasks with enthusiasm when appropriate.
+
+CURRENT CONTEXT:
+- User ID: ${userContext.userId}
+- Organization: ${userContext.orgId}
+- Today's date: ${today}
+- Tomorrow's date: ${tomorrow}
+${activeTaskLine}
+${contextSection}
+
+═══════════════════════════════════════════════════════════════════════════════
+CRITICAL: DATE & YEAR HANDLING (REAL DATES ONLY)
+═══════════════════════════════════════════════════════════════════════════════
+
+When you create or update loads from documents (rate confirmations, PODs, emails, PDFs) or user messages:
+
+- If the date includes a year (e.g. "1/7/21", "01/07/2021", "2021-01-07"):
+  • You MUST treat that year literally.
+  • "21" means 2021, "22" means 2022, etc.
+  • DO NOT silently change 2021 → 2025 or "this year".
+  • DO NOT "helpfully" move old loads into the current year unless the user explicitly tells you to reschedule.
+
+- When you call the create_load tool and pass pickup_date or delivery_date:
+  • Preserve the year from the source date (especially for dates extracted from PDFs or rate cons).
+  • If the source is clearly in 2021, you pass a 2021 date to the tool.
+  • If multiple candidate dates are present and you are unsure which is pickup vs delivery, ask one concise clarifying question before calling create_load.
+
+- Only change the year if the USER explicitly says to reschedule, e.g.:
+  • "Use these details but schedule it for next week / this year / next month."
+  • "Take this old 2021 load and put it in January 2026."
+
+- If the user says "tomorrow" or "next day", then:
+  • Use today's date (${today}) and tomorrow (${tomorrow}) like you already do.
+  • For "next day" after pickup, use pickup_date + 1 day.
+
+- When working from DOCUMENT TEXT (e.g. extracted PDF content passed in the conversation):
+  • Treat any explicit date strings in that text as ground truth.
+  • Do NOT reinterpret or normalize years to the present unless the user clearly instructs you to.
+
+═══════════════════════════════════════════════════════════════════════════════
+CRITICAL: CONTEXT MEMORY - USE THIS FOR "THAT LOAD" / "THAT DRIVER"
+═══════════════════════════════════════════════════════════════════════════════
+
+When the user says:
+- "that load", "this load", "the load" → Use LAST DISCUSSED LOAD from context above
+- "that driver", "this driver", "him", "her" → Use LAST DISCUSSED DRIVER from context above
+- "assign him to that load" → Combine LAST DISCUSSED DRIVER + LAST DISCUSSED LOAD
+
+You MUST use the context memory shown above. DO NOT ask "which load?" or "which driver?"
+if the context memory already has this information.
+
+═══════════════════════════════════════════════════════════════════════════════
+CORE CAPABILITIES (TOOLS YOU CAN CALL)
+═══════════════════════════════════════════════════════════════════════════════
+
+1) search_loads              → Find loads by status, origin, destination
+2) search_drivers            → List drivers by status or location
+3) search_trucks_all_sources → Locate trucks across Motive, Samsara, Atlas fleets
+4) search_drivers_hos_aware  → Find drivers based on HOS for a run duration
+5) create_load               → Create a new load
+6) update_load               → Update load fields
+7) assign_driver_to_load     → Assign driver to load, update statuses + assignments
+8) get_load_details          → Get full load info including driver assignment
+9) mark_load_delivered       → Mark load DELIVERED, set pod_status to PENDING
+10) confirm_pod_received     → Confirm POD received, free driver to AVAILABLE and clear assignment
+11) release_driver_without_pod → Safety valve: free driver but keep pod_status PENDING
+12) mark_load_problem        → Flag load as PROBLEM with reason
+13) get_load_board_status    → Read from dipsy_load_board_status to see the entire board:
+                               all loads, their drivers (if any), and HOS-aware driver status.
+14) get_load_history         → Read the event timeline for a specific load from load_history_view
+                               (CREATED, STATUS_CHANGED, DRIVER_ASSIGNED, POD events, etc.).
+15) get_driver_location      → Get a driver's current GPS location from their assigned truck.
+                               Use for "Where is [driver]?", road service dispatch, ETA calculations,
+                               and location-aware load recommendations.
+16) find_nearby_services     → Find nearby truck services (tire shops, tow trucks, mechanics, fuel).
+                               Use AFTER get_driver_location to help with roadside emergencies.
+                               Returns business name, address, phone, distance, and open/closed status.
+
+You MUST rely on these tools for real data. Never invent driver, truck, or load data.
+
+Use get_load_board_status when the user asks board-level questions, e.g.:
+- "Which loads currently have a driver assigned?"
+- "List all drivers who are currently assigned to active loads."
+- "Is Tony Stark assigned to any loads right now?"
+- "Show me all active loads that don't have a driver yet."
+- "Show me the real-time status of every load in my org."
+
+Use get_load_history when the user asks load-timeline questions, e.g.:
+- "Show me the full history on LD-2025-0376."
+- "When was this load created and when was it delivered?"
+- "Who created this load, and who was assigned when it delivered?"
+
+Use get_driver_location when the user asks about driver whereabouts, e.g.:
+- "Where is Mark Tishkun?"
+- "Where's Black Panther right now?"
+- "Find road service near [driver]"
+- When recommending drivers for loads, use this to show their current location/proximity.
+
+Use find_nearby_services when the user needs roadside assistance:
+- "Find a tire shop near Mark"
+- "Driver has a flat tire" (after getting location)
+- "Need a tow truck for Tony"
+- "Where can my driver fuel up?"
+
+═══════════════════════════════════════════════════════════════════════════════
+DISPATCH FLOW A: CREATING LOADS
+═══════════════════════════════════════════════════════════════════════════════
+
+User patterns:
+- "Make a load for me" / "Create a new load" → Ask for details
+- "Picks up in Sacramento tomorrow at 6pm, delivers in Denver next day at 3pm, rate 5300, 45k of wine"
+  → Parse and call create_load immediately
+
+Required fields for create_load:
+- origin, destination, rate, pickup_date (YYYY-MM-DD), delivery_date (YYYY-MM-DD)
+
+DATE RULES:
+- If the user or a DOCUMENT (PDF, email, rate confirmation, BOL, POD, etc.) provides explicit dates with a year (like 1/7/21, 01/07/2021, 2021-01-07),
+  you MUST keep that year when passing pickup_date and delivery_date to create_load.
+- Do NOT "fix" or "update" the year to the current year unless the user explicitly instructs you to reschedule.
+- If the user uses relative terms like "tomorrow" and "next day", then:
+  - "tomorrow" = ${tomorrow}
+  - "next day" (after pickup) = pickup_date + 1 day
+  - "today" = ${today}
+
+Defaults:
+- shipper: "Unknown shipper" if not provided
+- equipment_type: "Dry van" if not provided
+- customer_reference: use the generated load number if not provided
+
+DOCUMENT-BASED LOAD CREATION (IMPORTANT):
+- When the conversation includes extracted text from a rate confirmation / PDF / document that clearly contains:
+  • origin,
+  • destination,
+  • pickup date,
+  • delivery date,
+  • rate,
+  you should:
+  • Parse those fields directly from the document text.
+  • Call create_load in the SAME TURN without first giving a long summary.
+- Only ask follow-up questions when a truly required field is missing or ambiguous (e.g., two possible pickup dates).
+- After you have enough fields to create the load, call create_load immediately and THEN summarize what you did.
+
+MULTI-TURN: If user says "Make a load" then gives details in the next message,
+parse ALL fields and call create_load. Do NOT ask again for fields already provided.
+
+AFTER create_load SUCCESS:
+- State: "✅ Created load [REFERENCE]: [origin] → [destination], pickup [date], delivery [date], $[rate]"
+- Offer: "Need help finding a driver?"
+
+═══════════════════════════════════════════════════════════════════════════════
+DISPATCH FLOW B: RECOMMENDING & ASSIGNING DRIVERS (HOS-AWARE + LOCATION-AWARE)
+═══════════════════════════════════════════════════════════════════════════════
+
+User patterns:
+- "I have a 5-hour run from Stockton today at 2 PM — who should I send?"
+- "Who has the most drive time left?"
+- "Recommend a driver for this load"
+
+When to use search_drivers_hos_aware:
+- User mentions run duration, hours, HOS, drive time
+- You can infer pickup time
+
+HOS BUFFER RULE:
+- For runs under 6 hours: add 1 hour buffer (5h run → search for 360 min)
+- For runs 6+ hours: add 1.5 hour buffer (8h run → search for ~570 min)
+
+LOCATION-AWARE RECOMMENDATIONS (NEW!):
+- After getting HOS-aware driver candidates, use get_driver_location on top picks
+- Include their current location in your recommendation:
+  "Black Panther is near Stockton with 9h 54m drive time - perfect for this Sacramento pickup"
+
+TIERED BEHAVIOR (IMPORTANT):
+- First, try a conservative HOS-aware search (with buffer) using search_drivers_hos_aware.
+- If no drivers come back or the tool result indicates nobody meets the HOS requirement:
+  • You may try a slightly less strict search (smaller buffer / lower min_drive_remaining_min).
+- AFTER you have tried a strict and a medium search:
+  • Do NOT keep repeating "no drivers available" over and over.
+  • Clearly state that no driver has enough legal hours to safely cover the run.
+  • Leave the load UNASSIGNED.
+  • Propose 1–3 concrete alternatives, such as:
+    - Move the pickup time.
+    - Split the load between two drivers.
+    - Use a team driver if available.
+    - Re-evaluate run length or expectations.
+
+When recommending:
+- Provide top pick + 1–2 alternates
+- Explain WHY: HOS remaining, current status, location, any compliance issues
+
+Example response:
+"For a 5-hour run from Stockton, I recommend:
+
+🥇 **Black Panther** - Near Stockton, 9h 54m drive remaining, RESTING (ideal)
+🥈 Pay Driver - Near Sacramento, 9h 1m drive remaining, ON_DUTY
+🥉 Mark Tishkun - Near Fresno, 8h 33m drive remaining, RESTING
+
+Should I assign Black Panther to this run?"
+
+ASSIGNING DRIVERS:
+- "Assign Black Panther please" → Use LAST DISCUSSED LOAD from context
+- "Assign him to that load" → Use LAST DISCUSSED DRIVER + LAST DISCUSSED LOAD
+- "Send Pay Driver on the Sacramento to Denver load" → Parse explicitly
+
+Call assign_driver_to_load with driver_name and load_reference.
+
+AFTER assign_driver_to_load SUCCESS:
+- State: "✅ Assigned [DRIVER] to [LOAD REFERENCE]"
+- Note driver HOS status if relevant
+
+═══════════════════════════════════════════════════════════════════════════════
+DISPATCH FLOW C: DELIVERY + POD WORKFLOW
+═══════════════════════════════════════════════════════════════════════════════
+
+This is the PROPER delivery workflow for long-term data integrity:
+
+STEP 1 - Mark Delivered:
+User says: "Mark that load delivered" / "LD-2025-1234 is delivered"
+→ Call mark_load_delivered
+→ Sets status=DELIVERED, delivered_at=now, pod_status=PENDING
+→ Driver STAYS ASSIGNED (until POD confirmed)
+→ Response: "✅ Marked [LOAD] as DELIVERED. Driver [NAME] is still assigned until POD is uploaded.
+   Say 'POD received' when you have it or 'release the driver' if you must free them without POD."
+
+STEP 2 - Confirm POD:
+User says: "POD received" / "Got the POD" / "POD is in"
+→ Call confirm_pod_received
+→ Sets pod_status=RECEIVED, pod_uploaded_at=now
+→ Driver status → AVAILABLE
+→ ALSO clears loads.assigned_driver_id + loads.driver_name so the load no longer shows a driver.
+→ Response: "✅ POD confirmed for [LOAD]. [DRIVER] is now AVAILABLE for new assignments."
+
+SAFETY VALVE - Release Without POD:
+User says: "Release the driver anyway" / "Free up [DRIVER] without POD"
+→ Call release_driver_without_pod
+→ Driver status → AVAILABLE
+→ Load keeps pod_status=PENDING (flagged for follow-up)
+→ ALSO clears loads.assigned_driver_id + loads.driver_name
+→ Response: "✅ Released [DRIVER] - they're now AVAILABLE. Note: [LOAD] still needs POD uploaded."
+
+═══════════════════════════════════════════════════════════════════════════════
+DISPATCH FLOW D: PROBLEM LOADS
+═══════════════════════════════════════════════════════════════════════════════
+
+User says: "Mark that load as a problem" / "This load has issues" / "Flag LD-2025-1234"
+→ FIRST ask: "What's the issue? (e.g., breakdown, detention, refused delivery)"
+→ THEN call mark_load_problem with load_reference AND problem_reason
+
+If user provides reason upfront: "That load has a flat tire"
+→ Call mark_load_problem immediately with reason "flat tire"
+
+AFTER mark_load_problem SUCCESS:
+- State: "🚨 Flagged [LOAD] as PROBLEM: [reason]"
+- Note: "I've set problem_flag=true and recorded the issue."
+
+═══════════════════════════════════════════════════════════════════════════════
+DISPATCH FLOW E: ROAD SERVICE & EMERGENCIES (ENHANCED!)
+═══════════════════════════════════════════════════════════════════════════════
+
+When user says:
+- "Driver has a blown tire"
+- "Need road service for Mark"
+- "Truck broke down"
+- "Find a tire shop near my driver"
+
+→ STEP 1: Call get_driver_location to find where the driver is
+→ STEP 2: Call find_nearby_services with the GPS coordinates and service_type:
+   - "tire" for flat tires, blowouts
+   - "tow" for breakdowns needing tow
+   - "mechanic" for general repairs
+   - "fuel" or "truck_stop" for fueling
+
+→ STEP 3: Present the top 3-5 results with:
+   - Business name
+   - Address
+   - Phone number (if available)
+   - Distance from driver
+   - Open now status
+
+Example response:
+"📍 Mark Tishkun is near Reno, NV on I-80.
+
+🔧 Nearby tire shops:
+1. **Les Schwab Tire Center** - 1.2 mi away
+   📞 (775) 555-1234 | ✅ Open now
+   1234 E McCarran Blvd, Reno, NV
+
+2. **Big O Tires** - 2.8 mi away
+   📞 (775) 555-5678 | ✅ Open now
+   567 S Virginia St, Reno, NV
+
+3. **Truck Tire Service Inc** - 4.1 mi away
+   📞 (775) 555-9012 | ❌ Closed
+   890 Industrial Way, Sparks, NV
+
+Should I flag this load as PROBLEM?"
+
+═══════════════════════════════════════════════════════════════════════════════
+BOARD-LEVEL GLOBAL VIEW (USE get_load_board_status)
+═══════════════════════════════════════════════════════════════════════════════
+
+For questions about the entire board, ALWAYS call get_load_board_status:
+
+Examples:
+- "Which loads currently have a driver assigned?"
+  → Call get_load_board_status with { assigned_only: true }
+
+- "List all drivers who are currently assigned to active loads."
+  → Call get_load_board_status with { status: "IN_TRANSIT", assigned_only: true }
+
+- "Which loads currently have no driver?"
+  → Call get_load_board_status with { unassigned_only: true }
+
+- "Is Tony Stark assigned to any loads right now?"
+  → Call get_load_board_status with { driver_name: "Tony Stark", assigned_only: true }
+
+- "Show me the real-time status of every load in my org."
+  → Call get_load_board_status with no filters or with { limit: 100 }.
+
+You MUST base your answers on the board data returned. Do NOT contradict it.
+
+═══════════════════════════════════════════════════════════════════════════════
+LOAD-LEVEL HISTORY VIEW (USE get_load_history)
+═══════════════════════════════════════════════════════════════════════════════
+
+For questions about the full timeline of a single load, ALWAYS call get_load_history:
+
+Examples:
+- "Show me the full history on LD-2025-0376."
+- "Who created that load and when was it delivered?"
+- "When was a driver first assigned to this load?"
+
+You MUST base your answer on the events returned by get_load_history.
+
+═══════════════════════════════════════════════════════════════════════════════
+DRIVER LOCATION (USE get_driver_location)
+═══════════════════════════════════════════════════════════════════════════════
+
+For questions about where a DRIVER is (not a truck):
+- "Where is Mark Tishkun?"
+- "Where's Black Panther right now?"
+
+→ Use get_driver_location with their name
+→ This looks up: Driver → Truck (real equipment) → GPS Vehicle → Location
+→ Returns: driver info, truck info, GPS coordinates, speed, location label
+
+If driver has no truck assigned, tell the dispatcher and suggest assigning one.
+If truck has no GPS source linked, tell the dispatcher and suggest linking one.
+
+Use this PROACTIVELY when recommending drivers for loads to show proximity!
+
+═══════════════════════════════════════════════════════════════════════════════
+DRIVER & HOS RULES
+═══════════════════════════════════════════════════════════════════════════════
+
+- A driver is "ready to go" if status is ACTIVE.
+- search_drivers returns { count, drivers[] }.
+- If count > 0, you MUST list drivers. NEVER say "no drivers" when count > 0.
+- Only say "no drivers available" when count === 0 AND you've already tried a reasonable HOS search (strict + medium) and explained the situation.
+
+HOS Status meanings:
+- DRIVING: Currently driving (clock running)
+- ON_DUTY: Working but not driving
+- RESTING: Off duty, good for upcoming runs
+- OFF_DUTY: Off duty
+- SLEEPER_BERTH: In sleeper berth
+
+═══════════════════════════════════════════════════════════════════════════════
+TRUCK LOCATION RULES
+═══════════════════════════════════════════════════════════════════════════════
+
+When the user asks "Where is truck 2203?":
+→ Call search_trucks_all_sources
+→ This is the source of truth for Motive/Samsara/Atlas fleets
+→ Only say "can't find that truck" if tool returns not found
+
+═══════════════════════════════════════════════════════════════════════════════
+CONVERSATION CONTEXT RULES
+═══════════════════════════════════════════════════════════════════════════════
+
+- "that load" / "this load" → LAST DISCUSSED LOAD from context memory
+- "that driver" / "him" / "her" → LAST DISCUSSED DRIVER from context memory
+- A bare number like "2400" → search for load reference containing that fragment
+
+DO NOT ask the user to repeat information that's already in context memory.
+
+═══════════════════════════════════════════════════════════════════════════════
+ACTION-FIRST PRINCIPLE
+═══════════════════════════════════════════════════════════════════════════════
+
+- If you have enough info to call a tool, CALL IT. Don't ask permission.
+- When the user uploads or references a document (rate con, BOL, POD, PDF text) that clearly contains all required load fields, your FIRST action is to create or update the load via tools (not just summarize).
+- Only ask questions for REAL ambiguity or missing critical data.
+- After creating/assigning/marking, confirm what you did clearly, and you may briefly summarize the document or situation if useful.
+`;
+}
+
+// Ensure content is a string before sending to OpenAI
+function sanitizeMessageForOpenAI(msg: ConversationMessage): any {
+  const safe: any = { ...msg };
+  if (
+    safe.content !== undefined &&
+    safe.content !== null &&
+    typeof safe.content !== "string"
+  ) {
+    safe.content = String(safe.content);
+  }
   return safe;
 }
 
-/**
- * Call OpenAI with function calling capabilities
- */
-async function callOpenAIWithTools(
-  messages,
-  userContext,
-  conversationHistory,
-  conversationState = null,
-  maxIterations = 5
-) {
-  let iteration = 0;
-  let currentMessages = [...messages];
-  let updatedConversationHistory = [...conversationHistory];
+// ------------------------------ OpenAI + Tools ------------------------------
 
-  const apiKey = getOpenAIApiKey();
+async function callOpenAIWithTools(
+  messages: ConversationMessage[],
+  userContext: { userId: string; orgId: string },
+  history: ConversationMessage[],
+  supabase: ReturnType<typeof createClient>,
+  conversationState: ConversationState | null,
+  accessToken: string,
+  contextMemory: ContextMemory,
+  maxIterations = 5
+): Promise<{
+  answer: string;
+  usedTool: boolean;
+  newHistory: ConversationMessage[];
+  updatedContext: ContextMemory;
+}> {
+  let iteration = 0;
+  let currentMessages: any[] = messages.map(sanitizeMessageForOpenAI);
+  let usedTool = false;
+  let updatedHistory = [...history];
+  let updatedContext = { ...contextMemory };
+
+  if (!OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is not set");
+  }
 
   while (iteration < maxIterations) {
     iteration++;
-    console.log(`🔄 OpenAI Call #${iteration}`);
-
-    // Sanitize messages so we never send invalid content shapes
-    const safeMessages = currentMessages.map(sanitizeMessageForOpenAI);
+    console.log(`[dipsy-text] OpenAI call #${iteration}`);
 
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
         model: "gpt-4.1-mini",
-        messages: safeMessages,
+        messages: currentMessages,
         tools: getToolDefinitions(),
         tool_choice: "auto",
       }),
     });
 
     if (!res.ok) {
-      let errorText = "";
-      try {
-        const errorData = await res.json();
-        console.error("[Dipsy/OpenAI] Error body:", errorData);
-        errorText =
-          errorData?.error?.message ||
-          JSON.stringify(errorData, null, 2) ||
-          `HTTP ${res.status}`;
-      } catch (e) {
-        console.error("[Dipsy/OpenAI] Failed to parse error body", e);
-        errorText = `HTTP ${res.status}`;
-      }
-
-      throw new Error(`OpenAI API error: ${res.status} – ${errorText}`);
+      const errBody = await res.text();
+      console.error("[dipsy-text] OpenAI error:", res.status, errBody);
+      throw new Error(`OpenAI error ${res.status}: ${errBody}`);
     }
 
     const data = await res.json();
-    const assistantMessage = data.choices[0]?.message;
+    const assistantMessage = data.choices?.[0]?.message;
 
     if (!assistantMessage) {
-      throw new Error("OpenAI returned no message.");
+      throw new Error("OpenAI returned no message");
     }
 
-    // If no tool calls, return final response with updated conversation history
     if (
       !assistantMessage.tool_calls ||
       assistantMessage.tool_calls.length === 0
     ) {
-      console.log("✅ Final response (no tools needed)");
-
-      // Add assistant's final message to conversation history
-      updatedConversationHistory.push({
-        role: "assistant",
-        content: assistantMessage.content,
-      });
-
-      const text = assistantMessage.content?.toLowerCase?.() || "";
-      const needsMoreInfo =
-        text.includes("need") ||
-        text.includes("provide") ||
-        text.includes("can you");
-
-      if (needsMoreInfo && conversationState?.mode === "creating_load") {
-        return {
-          success: true,
-          message: assistantMessage.content,
-          usedAI: true,
-          needsMoreInfo: true,
-          conversationHistory: updatedConversationHistory,
-        };
-      }
+      // Final assistant answer
+      const content = assistantMessage.content ?? "";
+      updatedHistory.push({ role: "assistant", content });
 
       return {
-        success: true,
-        message: assistantMessage.content,
-        usedAI: true,
-        conversationHistory: updatedConversationHistory,
+        answer: typeof content === "string" ? content : String(content),
+        usedTool,
+        newHistory: updatedHistory,
+        updatedContext,
       };
     }
 
-    // We have tool calls – add assistant message and then execute tools
+    // There ARE tool calls
     currentMessages.push(assistantMessage);
 
     for (const toolCall of assistantMessage.tool_calls) {
-      console.log(`🔧 Executing: ${toolCall.function.name}`);
-
-      // Be defensive when parsing arguments
-      let functionArgs = {};
+      usedTool = true;
+      const toolName = toolCall.function.name;
+      let args: any = {};
       try {
-        functionArgs = toolCall.function.arguments
+        args = toolCall.function.arguments
           ? JSON.parse(toolCall.function.arguments)
           : {};
       } catch (e) {
-        console.error(
-          "[Dipsy] Failed to parse tool arguments:",
-          e,
-          toolCall.function.arguments
-        );
-        functionArgs = {};
+        console.error("[dipsy-text] Failed to parse tool args:", e);
       }
 
-      const result = await executeTool(toolCall.function.name, {
-        ...functionArgs,
+      // Inject context memory for "that load" / "that driver" resolution
+      if (!args.load_reference && updatedContext.lastLoadReference) {
+        args._contextLoadReference = updatedContext.lastLoadReference;
+      }
+      if (!args.driver_name && updatedContext.lastDriverName) {
+        args._contextDriverName = updatedContext.lastDriverName;
+      }
+
+      const result = await executeTool(toolName, {
+        ...args,
         ...userContext,
+        supabase,
+        accessToken,
       });
 
-      console.log("✅ Tool result:", result);
+      // Update context memory based on tool results
+      updatedContext = updateContextFromToolResult(
+        toolName,
+        args,
+        result,
+        updatedContext
+      );
 
       const toolMessage = {
         role: "tool",
@@ -566,58 +855,184 @@ async function callOpenAIWithTools(
         content: JSON.stringify(result),
       };
 
-      currentMessages.push(toolMessage);
-      updatedConversationHistory.push(toolMessage);
+      currentMessages.push(toolMessage as any);
+      updatedHistory.push(toolMessage as any);
     }
   }
 
-  // Hit max iterations - still return something
-  const fallbackMessage =
-    "I've completed the task as far as I can. Let me know if you need anything else.";
-
-  updatedConversationHistory.push({
-    role: "assistant",
-    content: fallbackMessage,
-  });
+  const fallback =
+    "I've done as much as I can. Let me know what you'd like next.";
+  updatedHistory.push({ role: "assistant", content: fallback });
 
   return {
-    success: true,
-    message: fallbackMessage,
-    usedAI: true,
-    conversationHistory: updatedConversationHistory,
+    answer: fallback,
+    usedTool,
+    newHistory: updatedHistory,
+    updatedContext,
   };
 }
 
 /**
- * Define all available tools for OpenAI
+ * Update context memory based on tool results
  */
-function getToolDefinitions() {
+function updateContextFromToolResult(
+  toolName: string,
+  args: any,
+  result: any,
+  context: ContextMemory
+): ContextMemory {
+  const updated = { ...context };
+
+  switch (toolName) {
+    case "create_load":
+      if (result.success && result.load) {
+        updated.lastLoadReference = result.load.reference;
+        updated.lastLoadOrigin = result.load.origin;
+        updated.lastLoadDestination = result.load.destination;
+        updated.lastLoadRate = result.load.rate;
+        updated.lastLoadId = result.load.id;
+        console.log("[context] Updated lastLoad:", updated.lastLoadReference);
+      }
+      break;
+
+    case "get_load_details":
+    case "update_load":
+    case "mark_load_delivered":
+    case "confirm_pod_received":
+      if (result.success && result.load) {
+        updated.lastLoadReference = result.load.reference;
+        updated.lastLoadOrigin = result.load.origin;
+        updated.lastLoadDestination = result.load.destination;
+        updated.lastLoadRate = result.load.rate;
+        updated.lastLoadId = result.load.id;
+      }
+      break;
+
+    case "search_loads":
+      // If only one load returned, set it as context
+      if (result.success && result.loads?.length === 1) {
+        const load = result.loads[0];
+        updated.lastLoadReference = load.reference;
+        updated.lastLoadOrigin = load.origin;
+        updated.lastLoadDestination = load.destination;
+        updated.lastLoadRate = load.rate;
+        updated.lastLoadId = load.id;
+      }
+      break;
+
+    case "get_load_board_status":
+      // If exactly one board row returned, set both load + driver context
+      if (result.success && result.board?.length === 1) {
+        const row = result.board[0];
+        if (row.load_reference) {
+          updated.lastLoadReference = row.load_reference;
+          updated.lastLoadOrigin = row.origin;
+          updated.lastLoadDestination = row.destination;
+          updated.lastLoadRate = row.rate;
+          updated.lastLoadId = row.load_id;
+        }
+        if (row.driver_full_name || row.driver_name) {
+          updated.lastDriverName = row.driver_full_name || row.driver_name;
+          updated.lastDriverId = row.assigned_driver_id;
+          updated.lastDriverHOSMinutes = row.hos_drive_remaining_min;
+          updated.lastDriverStatus = row.hos_status || row.driver_status;
+          console.log(
+            "[context] Updated lastDriver from board:",
+            updated.lastDriverName
+          );
+        }
+      }
+      break;
+
+    case "search_drivers":
+    case "search_drivers_hos_aware":
+      // If drivers returned, set top recommendation as context
+      if (result.success || result.ok) {
+        const drivers = result.drivers || [];
+        if (drivers.length > 0) {
+          const topDriver = drivers[0];
+          updated.lastDriverName =
+            topDriver.full_name ||
+            `${topDriver.first_name || ""} ${
+              topDriver.last_name || ""
+            }`.trim();
+          updated.lastDriverId = topDriver.id;
+          updated.lastDriverHOSMinutes = topDriver.hos_drive_remaining_min;
+          updated.lastDriverStatus =
+            topDriver.hos_status || topDriver.status;
+          console.log("[context] Updated lastDriver:", updated.lastDriverName);
+        }
+      }
+      break;
+
+    case "get_driver_location":
+      // Update driver context from location lookup
+      if (result.success) {
+        updated.lastDriverName = result.driver_name;
+        updated.lastDriverId = result.driver_id;
+        updated.lastDriverStatus = result.status;
+        console.log(
+          "[context] Updated lastDriver from location:",
+          updated.lastDriverName
+        );
+      }
+      break;
+
+    case "assign_driver_to_load":
+      if (result.success) {
+        // Clear pending context after successful assignment
+        updated.lastDriverName = result.driver;
+        updated.lastLoadReference = result.load_reference;
+      }
+      break;
+
+    case "mark_load_problem":
+      // Clear pending problem after it's been logged
+      updated.pendingProblemLoadReference = undefined;
+      break;
+
+    case "get_load_history":
+      // Use the load from history to set context
+      if (result.success && Array.isArray(result.events) && result.events.length) {
+        const lastEvent = result.events[result.events.length - 1];
+        const ref =
+          lastEvent.load_number ||
+          lastEvent.load_reference ||
+          result.load_number ||
+          result.load_reference;
+        if (ref) {
+          updated.lastLoadReference = ref;
+        }
+        if (lastEvent.origin) {
+          updated.lastLoadOrigin = lastEvent.origin;
+        }
+        if (lastEvent.destination) {
+          updated.lastLoadDestination = lastEvent.destination;
+        }
+      }
+      break;
+  }
+
+  return updated;
+}
+
+function getToolDefinitions(): any[] {
   return [
     {
       type: "function",
       function: {
         name: "search_loads",
-        description: "Search for loads by status or criteria",
+        description: "Search for loads by status or criteria.",
         parameters: {
           type: "object",
           properties: {
             status: {
               type: "string",
               enum: ["AVAILABLE", "IN_TRANSIT", "DELIVERED", "PROBLEM", "all"],
-              description: "Load status to filter by",
             },
-            destination: {
-              type: "string",
-              description: "Filter by destination city/state",
-            },
-            origin: {
-              type: "string",
-              description: "Filter by origin city/state",
-            },
-            limit: {
-              type: "number",
-              description: "Max number of results (default 10)",
-            },
+            destination: { type: "string" },
+            origin: { type: "string" },
+            limit: { type: "number" },
           },
         },
       },
@@ -626,24 +1041,20 @@ function getToolDefinitions() {
       type: "function",
       function: {
         name: "search_drivers",
-        description: "Search for drivers, typically by status or location text",
+        description:
+          "Search for drivers in the current org. Use for general driver queries.",
         parameters: {
           type: "object",
           properties: {
             status: {
               type: "string",
               enum: ["ACTIVE", "ASSIGNED", "all"],
-              description: "Driver status filter",
             },
             location: {
               type: "string",
-              description:
-                "Search driver notes for location keywords (e.g., 'Chicago')",
+              description: "Search driver notes for location keywords.",
             },
-            limit: {
-              type: "number",
-              description: "Max results (default 10)",
-            },
+            limit: { type: "number" },
           },
         },
       },
@@ -653,14 +1064,13 @@ function getToolDefinitions() {
       function: {
         name: "search_trucks_all_sources",
         description:
-          "Search for a truck's current location across Motive, Samsara, and Atlas Dummy fleets. Use for questions like 'Where is truck 4812ca12?'",
+          "Search for a truck's current location across Motive, Samsara, and Atlas dummy fleets.",
         parameters: {
           type: "object",
           properties: {
             truck_query: {
               type: "string",
-              description:
-                "Truck identifier text. Can be a truck number/code, partial name, or phrase like 'truck 4812ca12'.",
+              description: "Truck identifier (number, code, or name).",
             },
           },
           required: ["truck_query"],
@@ -672,35 +1082,22 @@ function getToolDefinitions() {
       function: {
         name: "search_drivers_hos_aware",
         description:
-          "Search for drivers using Hours of Service (HOS) constraints for a particular load window.",
+          "Search for drivers using HOS constraints for a run duration. Use when user mentions hours, run duration, or HOS.",
         parameters: {
           type: "object",
           properties: {
-            origin_city: {
-              type: "string",
-              description:
-                "Origin city of the load (used for context; can be null).",
-            },
-            origin_state: {
-              type: "string",
-              description:
-                "Origin state of the load (used for context; can be null).",
-            },
+            origin_city: { type: "string" },
+            origin_state: { type: "string" },
             pickup_time: {
               type: "string",
-              description:
-                "Pickup time as an ISO timestamp (e.g., 2025-11-29T14:00:00Z).",
+              description: "Pickup time as ISO timestamp.",
             },
             min_drive_remaining_min: {
               type: "number",
               description:
-                "Minimum drive minutes remaining the driver must have (e.g., 300 for a ~5 hour run).",
+                "Minimum drive minutes required. Add 60 min buffer for runs under 6h, 90 min for longer.",
             },
-            max_distance_miles: {
-              type: "number",
-              description:
-                "Maximum distance in miles from origin (optional; can be null for now).",
-            },
+            max_distance_miles: { type: "number" },
           },
           required: ["pickup_time"],
         },
@@ -711,7 +1108,7 @@ function getToolDefinitions() {
       function: {
         name: "get_driver_location",
         description:
-          "Get a driver's current GPS location from their assigned truck. Use when dispatcher asks where a driver is, when recommending drivers for loads (to show proximity), when coordinating road service, or for ETA calculations.",
+          "Get a driver's current GPS location from their assigned truck. Use when dispatcher asks where a driver is, when recommending drivers for loads (to show proximity), when coordinating road service, or for ETA calculations. Follows chain: Driver → Truck → GPS Vehicle → Location.",
         parameters: {
           type: "object",
           properties: {
@@ -730,49 +1127,63 @@ function getToolDefinitions() {
     {
       type: "function",
       function: {
-        name: "create_load",
+        name: "find_nearby_services",
         description:
-          "Create a new load. Call when you have core details (origin, destination, rate, pickup_date, delivery_date).",
+          "Find nearby truck services (tire shops, tow trucks, mechanics, fuel/truck stops) using GPS coordinates. Use AFTER getting driver location with get_driver_location. Essential for roadside emergencies and breakdowns.",
         parameters: {
           type: "object",
           properties: {
-            origin: { type: "string", description: "Pickup location" },
-            destination: {
-              type: "string",
-              description: "Delivery location",
+            latitude: {
+              type: "number",
+              description: "GPS latitude from get_driver_location result",
             },
-            rate: { type: "number", description: "Rate in dollars" },
+            longitude: {
+              type: "number",
+              description: "GPS longitude from get_driver_location result",
+            },
+            service_type: {
+              type: "string",
+              enum: ["tire", "tow", "mechanic", "fuel", "truck_stop", "all"],
+              description:
+                "Type of service needed. Use 'tire' for flat tires/blowouts, 'tow' for towing, 'mechanic' for repairs, 'fuel' or 'truck_stop' for fuel/rest.",
+            },
+            radius_miles: {
+              type: "number",
+              description: "Search radius in miles (default 15, max 50)",
+            },
+          },
+          required: ["latitude", "longitude", "service_type"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "create_load",
+        description:
+          "Create a new load. Requires origin, destination, rate, pickup_date, delivery_date. When dates come from a document, ALWAYS keep the original year (for example, 2021 stays 2021).",
+        parameters: {
+          type: "object",
+          properties: {
+            origin: { type: "string" },
+            destination: { type: "string" },
+            rate: { type: "number" },
             pickup_date: {
               type: "string",
-              description: "Pickup date (YYYY-MM-DD)",
+              description:
+                "YYYY-MM-DD. If this comes from a document like 1/7/21, you MUST treat it as 2021-01-07 (not the current year).",
             },
             delivery_date: {
               type: "string",
-              description: "Delivery date (YYYY-MM-DD)",
-            },
-            shipper: {
-              type: "string",
-              description: "Shipper/customer name (optional; default if missing)",
-            },
-            equipment_type: {
-              type: "string",
               description:
-                "Equipment type (dry van, reefer, flatbed, etc). Optional; defaults to Dry van.",
+                "YYYY-MM-DD. If this comes from a document like 1/8/21, you MUST treat it as 2021-01-08 (not the current year).",
             },
-            customer_reference: {
-              type: "string",
-              description:
-                "Customer PO/reference number. Optional; defaults to the load number.",
-            },
-            weight: {
-              type: "number",
-              description: "Weight in pounds",
-            },
-            commodity: {
-              type: "string",
-              description: "What is being shipped",
-            },
-            miles: { type: "number", description: "Distance in miles" },
+            shipper: { type: "string" },
+            equipment_type: { type: "string" },
+            customer_reference: { type: "string" },
+            weight: { type: "number" },
+            commodity: { type: "string" },
+            miles: { type: "number" },
           },
           required: [
             "origin",
@@ -788,17 +1199,13 @@ function getToolDefinitions() {
       type: "function",
       function: {
         name: "update_load",
-        description: "Update details of an existing load",
+        description: "Update details of an existing load.",
         parameters: {
           type: "object",
           properties: {
-            load_reference: {
-              type: "string",
-              description: "Load reference number (e.g., LD-2025-1234)",
-            },
+            load_reference: { type: "string" },
             updates: {
               type: "object",
-              description: "Fields to update",
               properties: {
                 rate: { type: "number" },
                 pickup_date: { type: "string" },
@@ -819,17 +1226,19 @@ function getToolDefinitions() {
       function: {
         name: "assign_driver_to_load",
         description:
-          "Assign a driver to a load. Use after you've chosen a driver for a specific load.",
+          "Assign a driver to a load. Updates driver to ASSIGNED and load to IN_TRANSIT (if it was AVAILABLE), and writes to load_driver_assignments + loads.assigned_driver_id/driver_name.",
         parameters: {
           type: "object",
           properties: {
             driver_name: {
               type: "string",
-              description: "Driver full name (e.g., 'Black Panther')",
+              description:
+                "Driver name. If not provided, uses last discussed driver from context.",
             },
             load_reference: {
               type: "string",
-              description: "Load reference number or fragment (e.g., 'LD-2025-4404' or '4404')",
+              description:
+                "Load reference. If not provided, uses last discussed load from context.",
             },
           },
           required: ["driver_name", "load_reference"],
@@ -840,14 +1249,11 @@ function getToolDefinitions() {
       type: "function",
       function: {
         name: "get_load_details",
-        description: "Get full details about a specific load",
+        description: "Get full details about a specific load.",
         parameters: {
           type: "object",
           properties: {
-            load_reference: {
-              type: "string",
-              description: "Load reference number or fragment",
-            },
+            load_reference: { type: "string" },
           },
           required: ["load_reference"],
         },
@@ -858,15 +1264,41 @@ function getToolDefinitions() {
       function: {
         name: "mark_load_delivered",
         description:
-          "Mark a load as DELIVERED and clear problem/at-risk flags. Use when the user says a load is delivered.",
+          "Mark a load as DELIVERED. Sets delivered_at, pod_status=PENDING. Driver stays ASSIGNED until POD confirmed.",
         parameters: {
           type: "object",
           properties: {
-            load_reference: {
-              type: "string",
-              description:
-                "Load reference number or fragment (e.g., 'LD-2025-1234' or '1234').",
-            },
+            load_reference: { type: "string" },
+          },
+          required: ["load_reference"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "confirm_pod_received",
+        description:
+          "Confirm POD has been received for a delivered load. Sets pod_status=RECEIVED and frees driver to AVAILABLE, clears current assignment, and closes the assignment row.",
+        parameters: {
+          type: "object",
+          properties: {
+            load_reference: { type: "string" },
+          },
+          required: ["load_reference"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "release_driver_without_pod",
+        description:
+          "Safety valve: Release driver to AVAILABLE without POD. Load keeps pod_status=PENDING for follow-up, clears the current driver assignment, and closes the assignment row.",
+        parameters: {
+          type: "object",
+          properties: {
+            load_reference: { type: "string" },
           },
           required: ["load_reference"],
         },
@@ -877,247 +1309,383 @@ function getToolDefinitions() {
       function: {
         name: "mark_load_problem",
         description:
-          "Mark a load as PROBLEM and set problem flags. Use when the user says a load has issues.",
+          "Mark a load as PROBLEM with a reason. Sets problem_flag=true and records problem_note.",
         parameters: {
           type: "object",
           properties: {
-            load_reference: {
+            load_reference: { type: "string" },
+            problem_reason: {
               type: "string",
               description:
-                "Load reference number or fragment (e.g., 'LD-2025-1234' or '1234').",
+                "Reason for the problem (breakdown, detention, refused, etc.)",
             },
           },
-          required: ["load_reference"],
+          required: ["load_reference", "problem_reason"],
         },
       },
     },
     {
       type: "function",
       function: {
-        name: "web_search",
+        name: "get_load_board_status",
         description:
-          "Search the web for current information (weather, traffic, fuel prices, news, etc.)",
+          "Board-level snapshot from dipsy_load_board_status. Use for questions about all loads and driver assignments.",
         parameters: {
           type: "object",
           properties: {
-            query: { type: "string", description: "Search query" },
+            status: {
+              type: "string",
+              enum: ["AVAILABLE", "IN_TRANSIT", "DELIVERED", "PROBLEM", "all"],
+              description: "Optional filter by load_status.",
+            },
+            assigned_only: {
+              type: "boolean",
+              description:
+                "If true, only return loads that currently have an assigned driver.",
+            },
+            unassigned_only: {
+              type: "boolean",
+              description:
+                "If true, only return loads that currently have NO assigned driver.",
+            },
+            driver_name: {
+              type: "string",
+              description:
+                "Optional fuzzy filter by driver_full_name to see loads for a specific driver.",
+            },
+            reference_fragment: {
+              type: "string",
+              description:
+                "Optional filter for load_reference containing this fragment.",
+            },
+            limit: {
+              type: "number",
+              description: "Maximum rows to return (default 50).",
+            },
           },
-          required: ["query"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_load_history",
+        description:
+          "Get the full history timeline for a specific load (CREATED, STATUS_CHANGED, DRIVER_* events, POD changes) from load_history_view.",
+        parameters: {
+          type: "object",
+          properties: {
+            load_reference: {
+              type: "string",
+              description:
+                "Primary load reference, e.g. 'LD-2025-0376'. If omitted, the last discussed load from context may be used.",
+            },
+            load_number: {
+              type: "string",
+              description:
+                "Alternate field for load number; usually same as load_reference in this schema.",
+            },
+            limit: {
+              type: "number",
+              description:
+                "Max number of events to return (default 200, max 500).",
+            },
+          },
         },
       },
     },
   ];
 }
 
-/**
- * Execute a tool function
- */
-async function executeTool(toolName, params) {
-  console.log(`🔧 Tool: ${toolName}`, params);
+// ------------------------------ Tool execution ------------------------------
 
-  try {
-    switch (toolName) {
-      case "search_loads":
-        return await toolSearchLoads(params);
+async function executeTool(toolName: string, params: any): Promise<any> {
+  console.log("[dipsy-text] Executing tool:", toolName);
+  const supabase: ReturnType<typeof createClient> = params.supabase;
 
-      case "search_drivers":
-        return await toolSearchDrivers(params);
+  // Use context fallbacks for load_reference and driver_name
+  if (params._contextLoadReference && !params.load_reference) {
+    params.load_reference = params._contextLoadReference;
+    console.log(
+      "[dipsy-text] Using context load_reference:",
+      params.load_reference
+    );
+  }
+  if (params._contextDriverName && !params.driver_name) {
+    params.driver_name = params._contextDriverName;
+    console.log(
+      "[dipsy-text] Using context driver_name:",
+      params.driver_name
+    );
+  }
 
-      case "search_trucks_all_sources":
-        return await toolSearchTrucksAllSources(params);
+  switch (toolName) {
+    case "search_loads":
+      return await toolSearchLoads(supabase, params);
 
-      case "search_drivers_hos_aware":
-        return await toolSearchDriversHosAware(params);
+    case "search_drivers":
+      return await toolSearchDrivers(supabase, params);
 
-      case "get_driver_location":
-        return await toolGetDriverLocation(params);
+    case "search_trucks_all_sources":
+      return await toolSearchTrucksAllSources(supabase, params);
 
-      case "create_load":
-        return await toolCreateLoad(params);
+    case "search_drivers_hos_aware":
+      return await toolSearchDriversHosAware(supabase, params);
 
-      case "update_load":
-        return await toolUpdateLoad(params);
+    case "get_driver_location":
+      return await toolGetDriverLocation(supabase, params);
 
-      case "assign_driver_to_load":
-        return await toolAssignDriver(params);
+    case "find_nearby_services":
+      return await toolFindNearbyServices(params);
 
-      case "get_load_details":
-        return await toolGetLoadDetails(params);
+    case "create_load":
+      return await toolCreateLoad(supabase, params);
 
-      case "mark_load_delivered":
-        return await toolMarkLoadDelivered(params);
+    case "update_load":
+      return await toolUpdateLoad(supabase, params);
 
-      case "mark_load_problem":
-        return await toolMarkLoadProblem(params);
+    case "assign_driver_to_load":
+      return await toolAssignDriverToLoad(supabase, params);
 
-      case "web_search":
-        return await toolWebSearch(params);
+    case "get_load_details":
+      return await toolGetLoadDetails(supabase, params);
 
-      default:
-        return { error: `Unknown tool: ${toolName}` };
-    }
-  } catch (error) {
-    console.error("❌ Tool error:", error);
-    return { error: error.message };
+    case "mark_load_delivered":
+      return await toolMarkLoadDelivered(supabase, params);
+
+    case "confirm_pod_received":
+      return await toolConfirmPodReceived(supabase, params);
+
+    case "release_driver_without_pod":
+      return await toolReleaseDriverWithoutPod(supabase, params);
+
+    case "mark_load_problem":
+      return await toolMarkLoadProblem(supabase, params);
+
+    case "get_load_board_status":
+      return await toolGetLoadBoardStatus(supabase, params);
+
+    case "get_load_history":
+      return await toolGetLoadHistory(supabase, params);
+
+    default:
+      return { error: `Unknown tool: ${toolName}` };
   }
 }
 
-// ========== TOOL IMPLEMENTATIONS ==========
+// ==================== TOOL IMPLEMENTATIONS ====================
 
-async function toolSearchLoads(params) {
+// ---- search_loads ----
+async function toolSearchLoads(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
   let query = supabase
     .from("loads")
     .select(
-      "id, reference, origin, destination, status, rate, pickup_date, delivery_date"
-    );
-
-  // Trust RLS for org isolation; don't force org_id filter here.
-  query = query
+      `
+      id,
+      reference,
+      origin,
+      destination,
+      status,
+      rate,
+      pickup_date,
+      delivery_date,
+      pod_status,
+      assigned_driver_id,
+      driver_name
+    `
+    )
     .order("created_at", { ascending: false })
     .limit(params.limit || 10);
 
   if (params.status && params.status !== "all") {
     query = query.eq("status", params.status);
   }
-
   if (params.destination) {
     query = query.ilike("destination", `%${params.destination}%`);
   }
-
   if (params.origin) {
     query = query.ilike("origin", `%${params.origin}%`);
   }
 
   const { data, error } = await query;
-
-  console.log(
-    "[Dipsy/toolSearchLoads] orgId:",
-    params.orgId,
-    "status:",
-    params.status,
-    "error:",
-    error,
-    "rows:",
-    data?.length
-  );
-
   if (error) throw error;
 
   return {
     success: true,
-    count: data.length,
-    loads: data,
+    count: data?.length ?? 0,
+    loads: data ?? [],
   };
 }
 
-async function toolSearchDrivers(params) {
+// ---- search_drivers ----
+async function toolSearchDrivers(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
   let query = supabase
     .from("drivers")
-    .select("id, full_name, phone, cdl_class, status, med_exp, cdl_exp, notes");
-
-  // 🔑 IMPORTANT: rely on RLS for org isolation, don't filter by org_id here.
-  query = query
-    .order("full_name", { ascending: true })
-    .limit(params.limit || 10);
+    .select(
+      `
+      id, org_id, first_name, last_name, email, phone,
+      license_number, license_class, license_expiry, med_card_expiry,
+      status, notes,
+      hos_drive_remaining_min, hos_shift_remaining_min, hos_cycle_remaining_min,
+      hos_status, full_name
+    `
+    )
+    .order("last_name", { ascending: true })
+    .order("first_name", { ascending: true })
+    .limit(params.limit || 20);
 
   if (params.status && params.status !== "all") {
     query = query.eq("status", params.status);
   }
-
   if (params.location) {
     query = query.ilike("notes", `%${params.location}%`);
   }
 
   const { data, error } = await query;
-
-  console.log(
-    "[Dipsy/toolSearchDrivers] orgId:",
-    params.orgId,
-    "status:",
-    params.status,
-    "error:",
-    error,
-    "rows:",
-    data?.length
-  );
-
   if (error) throw error;
 
   const today = new Date();
-  const driversWithStatus = data.map((d) => ({
-    ...d,
-    medExpired: d.med_exp && new Date(d.med_exp) < today,
-    cdlExpired: d.cdl_exp && new Date(d.cdl_exp) < today,
-  }));
+  const drivers = (data ?? []).map((d: any) => {
+    const full_name =
+      d.full_name ||
+      `${d.first_name || ""} ${d.last_name || ""}`.trim() ||
+      null;
+    const medExpired =
+      d.med_card_expiry && new Date(d.med_card_expiry) < today;
+    const cdlExpired = d.license_expiry && new Date(d.license_expiry) < today;
+
+    return { ...d, full_name, medExpired, cdlExpired };
+  });
 
   return {
     success: true,
-    count: data.length,
-    drivers: driversWithStatus,
+    count: drivers.length,
+    drivers,
   };
 }
 
-// ---------- GET DRIVER LOCATION (v2 - Proper Architecture) ----------
-//
-// Chain: Driver → Truck (real equipment) → GPS Vehicle (ELD/dummy)
-//
-// The proper model is:
-//   1. Driver is assigned to a Truck (via trucks.current_driver_id or trucks.driver_id)
-//   2. Truck is linked to a GPS source (via trucks.gps_vehicle_id + trucks.gps_provider)
-//   3. GPS source has location data (dummy/motive/samsara tables)
+// ---- search_drivers_hos_aware (calls Edge Function) ----
+async function toolSearchDriversHosAware(
+  _supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  try {
+    const accessToken: string = params.accessToken;
 
-async function toolGetDriverLocation(params) {
-  const { orgId, driver_name, driver_id } = params;
+    const body = {
+      origin_city: params.origin_city || null,
+      origin_state: params.origin_state || null,
+      pickup_time: params.pickup_time || new Date().toISOString(),
+      min_drive_remaining_min:
+        typeof params.min_drive_remaining_min === "number"
+          ? params.min_drive_remaining_min
+          : null,
+      max_distance_miles:
+        typeof params.max_distance_miles === "number"
+          ? params.max_distance_miles
+          : null,
+    };
 
-  console.log("[Dipsy/toolGetDriverLocation] Looking up driver:", {
-    driver_name,
-    driver_id,
-    orgId,
-  });
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // 1) Find the driver by ID or name
-  // ─────────────────────────────────────────────────────────────────────────
-  let driverQuery = supabase
-    .from("drivers")
-    .select("id, full_name, first_name, last_name, phone, status");
-
-  if (driver_id) {
-    driverQuery = driverQuery.eq("id", driver_id);
-  } else if (driver_name) {
-    // Fuzzy match on name
-    driverQuery = driverQuery.or(
-      `full_name.ilike.%${driver_name}%,first_name.ilike.%${driver_name}%,last_name.ilike.%${driver_name}%`
+    const res = await fetch(
+      `${SUPABASE_URL}/functions/v1/search-drivers-hos-aware`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify(body),
+      }
     );
-  } else {
+
+    if (!res.ok) {
+      const txt = await res.text();
+      console.error(
+        "[toolSearchDriversHosAware] Edge Function error:",
+        res.status,
+        txt
+      );
+      return {
+        ok: false,
+        error: `HOS-aware search failed: HTTP ${res.status}`,
+      };
+    }
+
+    return await res.json();
+  } catch (error) {
+    console.error("[toolSearchDriversHosAware] error:", error);
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "HOS search failed",
+    };
+  }
+}
+
+// ---- search_trucks_all_sources ----
+async function toolSearchTrucksAllSources(
+  _supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  const orgId: string = params.orgId;
+  const queryText: string = (params.truck_query ?? "").trim();
+
+  if (!orgId || !queryText) {
+    return { success: false, reason: "MISSING_ORG_OR_QUERY" };
+  }
+
+  console.log("[toolSearchTrucksAllSources] org:", orgId, "query:", queryText);
+
+  // TODO: Implement Motive/Samsara/Dummy lookups
+  return {
+    success: false,
+    reason: "TRUCK_SEARCH_NOT_YET_IMPLEMENTED",
+  };
+}
+
+// ---- get_driver_location ----
+async function toolGetDriverLocation(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  const driverName = params.driver_name;
+  const driverId = params.driver_id;
+
+  console.log("[toolGetDriverLocation] Looking up driver:", { driverName, driverId });
+
+  // 1) Find the driver
+  let driver: any = null;
+
+  if (driverId) {
+    const { data } = await supabase
+      .from("drivers")
+      .select("id, full_name, first_name, last_name, phone, status")
+      .eq("id", driverId)
+      .limit(1);
+    driver = data?.[0];
+  } else if (driverName) {
+    driver = await findDriverByName(supabase, driverName);
+  }
+
+  if (!driver) {
     return {
       success: false,
-      error: "Please provide a driver name or ID.",
+      error: `Driver "${driverName || driverId}" not found.`,
     };
   }
 
-  const { data: drivers, error: driverError } = await driverQuery.limit(1);
+  const displayName =
+    driver.full_name ||
+    `${driver.first_name || ""} ${driver.last_name || ""}`.trim();
 
-  if (driverError) {
-    console.error("[Dipsy/toolGetDriverLocation] Driver query error:", driverError);
-    return { success: false, error: driverError.message };
-  }
+  console.log("[toolGetDriverLocation] Found driver:", driver.id, displayName);
 
-  if (!drivers || drivers.length === 0) {
-    return {
-      success: false,
-      error: `Driver "${driver_name || driver_id}" not found.`,
-    };
-  }
-
-  const driver = drivers[0];
-  const displayName = driver.full_name || `${driver.first_name} ${driver.last_name}`.trim();
-
-  console.log("[Dipsy/toolGetDriverLocation] Found driver:", driver);
-
-  // ─────────────────────────────────────────────────────────────────────────
   // 2) Find the truck assigned to this driver
-  // ─────────────────────────────────────────────────────────────────────────
   const { data: trucks, error: truckError } = await supabase
     .from("trucks")
     .select("id, unit_number, truck_number, make, model, year, gps_vehicle_id, gps_provider")
@@ -1125,7 +1693,7 @@ async function toolGetDriverLocation(params) {
     .limit(1);
 
   if (truckError) {
-    console.error("[Dipsy/toolGetDriverLocation] Truck query error:", truckError);
+    console.error("[toolGetDriverLocation] Truck query error:", truckError);
     return { success: false, error: truckError.message };
   }
 
@@ -1141,13 +1709,15 @@ async function toolGetDriverLocation(params) {
   }
 
   const truck = trucks[0];
-  const truckDisplayName = truck.unit_number || truck.truck_number || `${truck.make} ${truck.model}`.trim() || "Unknown Truck";
+  const truckDisplayName =
+    truck.unit_number ||
+    truck.truck_number ||
+    `${truck.make || ""} ${truck.model || ""}`.trim() ||
+    "Unknown Truck";
 
-  console.log("[Dipsy/toolGetDriverLocation] Found truck:", truck);
+  console.log("[toolGetDriverLocation] Found truck:", truck.id, truckDisplayName);
 
-  // ─────────────────────────────────────────────────────────────────────────
   // 3) Check if truck has GPS source linked
-  // ─────────────────────────────────────────────────────────────────────────
   if (!truck.gps_vehicle_id) {
     return {
       success: false,
@@ -1164,13 +1734,11 @@ async function toolGetDriverLocation(params) {
   const gpsProvider = truck.gps_provider || "dummy";
   const gpsVehicleId = truck.gps_vehicle_id;
 
-  console.log("[Dipsy/toolGetDriverLocation] GPS source:", { gpsProvider, gpsVehicleId });
+  console.log("[toolGetDriverLocation] GPS source:", { gpsProvider, gpsVehicleId });
 
-  // ─────────────────────────────────────────────────────────────────────────
   // 4) Get location from the appropriate GPS provider
-  // ─────────────────────────────────────────────────────────────────────────
-  let location = null;
-  let gpsVehicleName = null;
+  let location: any = null;
+  let gpsVehicleName: string | null = null;
 
   if (gpsProvider === "dummy") {
     // Get dummy vehicle info
@@ -1194,11 +1762,10 @@ async function toolGetDriverLocation(params) {
       .single();
 
     if (locErr) {
-      console.error("[Dipsy/toolGetDriverLocation] Dummy location error:", locErr);
+      console.error("[toolGetDriverLocation] Dummy location error:", locErr);
     } else {
       location = loc;
     }
-
   } else if (gpsProvider === "motive") {
     // Motive has a combined view with vehicle + location
     const { data: loc, error: locErr } = await supabase
@@ -1210,12 +1777,11 @@ async function toolGetDriverLocation(params) {
       .single();
 
     if (locErr) {
-      console.error("[Dipsy/toolGetDriverLocation] Motive location error:", locErr);
+      console.error("[toolGetDriverLocation] Motive location error:", locErr);
     } else {
       location = loc;
       gpsVehicleName = loc.name || loc.vehicle_number;
     }
-
   } else if (gpsProvider === "samsara") {
     // Get samsara vehicle info
     const { data: veh } = await supabase
@@ -1238,15 +1804,13 @@ async function toolGetDriverLocation(params) {
       .single();
 
     if (locErr) {
-      console.error("[Dipsy/toolGetDriverLocation] Samsara location error:", locErr);
+      console.error("[toolGetDriverLocation] Samsara location error:", locErr);
     } else {
       location = loc;
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
   // 5) If no location found
-  // ─────────────────────────────────────────────────────────────────────────
   if (!location) {
     return {
       success: false,
@@ -1262,10 +1826,8 @@ async function toolGetDriverLocation(params) {
     };
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
   // 6) Reverse geocode for a friendly location label
-  // ─────────────────────────────────────────────────────────────────────────
-  let locationLabel = null;
+  let locationLabel: string | null = null;
   if (location.latitude && location.longitude) {
     try {
       const geoUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${location.latitude}&lon=${location.longitude}`;
@@ -1287,13 +1849,11 @@ async function toolGetDriverLocation(params) {
         }
       }
     } catch (geoErr) {
-      console.warn("[Dipsy/toolGetDriverLocation] Geocode failed:", geoErr);
+      console.warn("[toolGetDriverLocation] Geocode failed:", geoErr);
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
   // 7) Return the full location info
-  // ─────────────────────────────────────────────────────────────────────────
   return {
     success: true,
     driver_id: driver.id,
@@ -1318,446 +1878,367 @@ async function toolGetDriverLocation(params) {
   };
 }
 
-// ---------- HOS-AWARE DRIVER SEARCH (Edge Function) ----------
+// ---- find_nearby_services (NEW!) ----
+async function toolFindNearbyServices(params: any) {
+  const { latitude, longitude, service_type, radius_miles } = params;
 
-async function toolSearchDriversHosAware(params) {
-  try {
-    const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
+  console.log("[toolFindNearbyServices] Searching:", {
+    latitude,
+    longitude,
+    service_type,
+    radius_miles,
+  });
 
-    if (sessionError) {
-      console.error(
-        "[Dipsy/toolSearchDriversHosAware] getSession error:",
-        sessionError
-      );
-      return {
-        ok: false,
-        error: sessionError.message || "Failed to get user session.",
-      };
-    }
-
-    const accessToken = session?.access_token || null;
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-
-    const body = {
-      origin_city: params.origin_city || null,
-      origin_state: params.origin_state || null,
-      pickup_time: params.pickup_time || new Date().toISOString(),
-      min_drive_remaining_min:
-        typeof params.min_drive_remaining_min === "number"
-          ? params.min_drive_remaining_min
-          : null,
-      max_distance_miles:
-        typeof params.max_distance_miles === "number"
-          ? params.max_distance_miles
-          : null,
+  if (!GOOGLE_MAPS_API_KEY) {
+    return {
+      success: false,
+      error: "Google Maps API key not configured. Contact your administrator.",
     };
+  }
 
-    const res = await fetch(
-      `${supabaseUrl}/functions/v1/search-drivers-hos-aware`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify(body),
-      }
+  if (!latitude || !longitude) {
+    return {
+      success: false,
+      error: "Missing latitude/longitude. Call get_driver_location first.",
+    };
+  }
+
+  // Convert miles to meters (Google uses meters)
+  const radiusMiles = Math.min(radius_miles || 15, 50);
+  const radiusMeters = Math.round(radiusMiles * 1609.34);
+
+  // Map service_type to Google Places search terms
+  const searchTermMap: Record<string, string> = {
+    tire: "truck tire repair",
+    tow: "tow truck service",
+    mechanic: "truck repair shop",
+    fuel: "truck stop fuel",
+    truck_stop: "truck stop",
+    all: "truck service",
+  };
+
+  const searchTerm = searchTermMap[service_type] || searchTermMap.all;
+
+  try {
+    // Use Google Places Nearby Search API
+    const url = new URL(
+      "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
     );
+    url.searchParams.set("location", `${latitude},${longitude}`);
+    url.searchParams.set("radius", String(radiusMeters));
+    url.searchParams.set("keyword", searchTerm);
+    url.searchParams.set("key", GOOGLE_MAPS_API_KEY);
+
+    console.log("[toolFindNearbyServices] Calling Google Places API");
+
+    const res = await fetch(url.toString());
 
     if (!res.ok) {
-      const txt = await res.text();
-      console.error(
-        "[Dipsy/toolSearchDriversHosAware] Edge Function error:",
-        res.status,
-        txt
-      );
+      const errText = await res.text();
+      console.error("[toolFindNearbyServices] Google API error:", res.status, errText);
       return {
-        ok: false,
-        error: `Edge function search-drivers-hos-aware failed: HTTP ${res.status}`,
+        success: false,
+        error: `Google Places API error: ${res.status}`,
       };
     }
 
-    const json = await res.json();
+    const data = await res.json();
 
-    console.log(
-      "[Dipsy/toolSearchDriversHosAware] result for org",
-      params.orgId,
-      json
+    if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+      console.error("[toolFindNearbyServices] Google API status:", data.status, data.error_message);
+      return {
+        success: false,
+        error: `Google Places error: ${data.status} - ${data.error_message || "Unknown error"}`,
+      };
+    }
+
+    const results = data.results || [];
+
+    if (results.length === 0) {
+      return {
+        success: true,
+        count: 0,
+        services: [],
+        message: `No ${service_type} services found within ${radiusMiles} miles.`,
+      };
+    }
+
+    // Process and format results (top 5)
+    const services = await Promise.all(
+      results.slice(0, 5).map(async (place: any) => {
+        // Calculate distance from driver
+        const placeLat = place.geometry?.location?.lat;
+        const placeLng = place.geometry?.location?.lng;
+        let distanceMiles: number | null = null;
+
+        if (placeLat && placeLng) {
+          distanceMiles = haversineDistance(
+            latitude,
+            longitude,
+            placeLat,
+            placeLng
+          );
+        }
+
+        // Get phone number via Place Details API (optional, costs extra)
+        let phoneNumber: string | null = null;
+        if (place.place_id) {
+          try {
+            const detailsUrl = new URL(
+              "https://maps.googleapis.com/maps/api/place/details/json"
+            );
+            detailsUrl.searchParams.set("place_id", place.place_id);
+            detailsUrl.searchParams.set("fields", "formatted_phone_number");
+            detailsUrl.searchParams.set("key", GOOGLE_MAPS_API_KEY);
+
+            const detailsRes = await fetch(detailsUrl.toString());
+            if (detailsRes.ok) {
+              const detailsData = await detailsRes.json();
+              phoneNumber = detailsData.result?.formatted_phone_number || null;
+            }
+          } catch (e) {
+            // Ignore phone lookup errors
+          }
+        }
+
+        return {
+          name: place.name,
+          address: place.vicinity || place.formatted_address,
+          phone: phoneNumber,
+          distance_miles: distanceMiles ? Math.round(distanceMiles * 10) / 10 : null,
+          rating: place.rating || null,
+          total_ratings: place.user_ratings_total || null,
+          open_now: place.opening_hours?.open_now ?? null,
+          place_id: place.place_id,
+        };
+      })
     );
 
-    // We just return the Edge Function JSON so the model can interpret it.
-    return json;
-  } catch (error) {
-    console.error("[Dipsy/toolSearchDriversHosAware] error:", error);
+    // Sort by distance
+    services.sort((a: any, b: any) => {
+      if (a.distance_miles === null) return 1;
+      if (b.distance_miles === null) return -1;
+      return a.distance_miles - b.distance_miles;
+    });
+
     return {
-      ok: false,
-      error: error.message || "Unexpected error in HOS-aware driver search.",
+      success: true,
+      count: services.length,
+      service_type,
+      search_radius_miles: radiusMiles,
+      driver_coordinates: { latitude, longitude },
+      services,
+    };
+  } catch (error) {
+    console.error("[toolFindNearbyServices] Error:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to search for services",
     };
   }
 }
 
-// ---------- TRUCK SEARCH HELPERS & TOOL (Motive + Samsara + Dummy) ----------
-
-function normalizeMotiveTruckRow(row) {
-  const {
-    motive_vehicle_id,
-    vehicle_number,
-    name,
-    vin,
-    license_plate,
-    make,
-    model,
-    year,
-    availability_status,
-    status,
-    latitude,
-    longitude,
-    heading_degrees,
-    speed_mph,
-    odometer_miles,
-    ignition_on,
-    located_at,
-    last_synced_at,
-  } = row;
-
-  const displayName =
-    vehicle_number ||
-    name ||
-    license_plate ||
-    `Motive Vehicle ${motive_vehicle_id}`;
-
-  return {
-    provider: "motive",
-    providerLabel: "Motive",
-    vehicleId: String(motive_vehicle_id),
-    displayName,
-    licensePlate: license_plate || null,
-    vin: vin || null,
-    make: make || null,
-    model: model || null,
-    year: year || null,
-    status: status || null,
-    availabilityStatus: availability_status || null,
-    latitude,
-    longitude,
-    headingDegrees: heading_degrees ?? null,
-    speedMph: speed_mph ?? null,
-    odometerMiles: odometer_miles ?? null,
-    ignitionOn: ignition_on ?? null,
-    locatedAt: located_at,
-    lastSyncedAt: last_synced_at,
-  };
+// Haversine formula to calculate distance between two GPS points
+function haversineDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const R = 3958.8; // Earth's radius in miles
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
 }
 
-function normalizeSamsaraTruckRow(locationRow, vehicleRow) {
-  const {
-    samsara_vehicle_id,
-    latitude,
-    longitude,
-    heading_degrees,
-    speed_mph,
-    odometer_miles,
-    ignition_on,
-    located_at,
-    last_synced_at,
-  } = locationRow;
-
-  const {
-    name,
-    license_plate,
-    license_plate_state,
-    vin,
-    make,
-    model,
-    model_year,
-    status,
-    is_active,
-  } = vehicleRow || {};
-
-  const displayName =
-    name || license_plate || `Samsara Vehicle ${samsara_vehicle_id}`;
-
-  return {
-    provider: "samsara",
-    providerLabel: "Samsara",
-    vehicleId: String(samsara_vehicle_id),
-    displayName,
-    licensePlate: license_plate || null,
-    licensePlateState: license_plate_state || null,
-    vin: vin || null,
-    make: make || null,
-    model: model || null,
-    year: model_year || null,
-    status: status || null,
-    availabilityStatus: is_active ? "active" : "inactive",
-    latitude,
-    longitude,
-    headingDegrees: heading_degrees ?? null,
-    speedMph: speed_mph ?? null,
-    odometerMiles: odometer_miles ?? null,
-    ignitionOn: ignition_on ?? null,
-    locatedAt: located_at,
-    lastSyncedAt: last_synced_at,
-  };
+function toRad(deg: number): number {
+  return deg * (Math.PI / 180);
 }
 
-function normalizeDummyTruckRow(locationRow, vehicleRow) {
-  const {
-    dummy_vehicle_id,
-    latitude,
-    longitude,
-    heading_degrees,
-    speed_mph,
-    odometer_miles,
-    ignition_on,
-    located_at,
-    last_synced_at,
-  } = locationRow;
+// ---- get_load_board_status ----
+async function toolGetLoadBoardStatus(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  let query = supabase
+    .from("dipsy_load_board_status")
+    .select(
+      `
+      load_id,
+      load_org_id,
+      load_reference,
+      load_status,
+      pod_status,
+      origin,
+      destination,
+      pickup_date,
+      delivery_date,
+      rate,
+      assigned_driver_id,
+      driver_name,
+      driver_org_id,
+      driver_full_name,
+      driver_status,
+      hos_status,
+      hos_drive_remaining_min,
+      hos_shift_remaining_min,
+      hos_cycle_remaining_min,
+      assignment_id,
+      assigned_at,
+      unassigned_at,
+      has_assigned_driver,
+      has_active_assignment_row
+    `
+    )
+    .order("load_reference", { ascending: true })
+    .limit(params.limit && params.limit > 0 ? params.limit : 50);
 
-  const { name, code, make, model, year, is_active } = vehicleRow || {};
+  if (params.status && params.status !== "all") {
+    query = query.eq("load_status", params.status);
+  }
 
-  const displayName = name || code || `Dummy Vehicle ${dummy_vehicle_id}`;
+  if (params.assigned_only) {
+    query = query.eq("has_assigned_driver", true);
+  }
 
-  return {
-    provider: "dummy",
-    providerLabel: "Atlas Dummy",
-    vehicleId: String(dummy_vehicle_id),
-    displayName,
-    licensePlate: null,
-    licensePlateState: null,
-    vin: null,
-    make: make || null,
-    model: model || null,
-    year: year || null,
-    status: is_active ? "active" : "inactive",
-    availabilityStatus: is_active ? "active" : "inactive",
-    latitude,
-    longitude,
-    headingDegrees: heading_degrees ?? null,
-    speedMph: speed_mph ?? null,
-    odometerMiles: odometer_miles ?? null,
-    ignitionOn: ignition_on ?? null,
-    locatedAt: located_at,
-    lastSyncedAt: last_synced_at,
-  };
-}
+  if (params.unassigned_only) {
+    query = query.eq("has_assigned_driver", false);
+  }
 
-async function findMotiveTruck(orgId, identifier) {
-  if (!identifier) return null;
+  if (params.driver_name) {
+    query = query.ilike("driver_full_name", `%${params.driver_name}%`);
+  }
 
-  const clean = identifier.trim();
-  if (!clean) return null;
+  if (params.reference_fragment) {
+    query = query.ilike("load_reference", `%${params.reference_fragment}%`);
+  }
 
-  const orFilters = [
-    `vehicle_number.ilike.%${clean}%`,
-    `name.ilike.%${clean}%`,
-    `motive_vehicle_id.eq.${clean}`,
-    `license_plate.ilike.%${clean}%`,
-  ].join(",");
-
-  const { data, error } = await supabase
-    .from("motive_vehicle_locations_current")
-    .select("*")
-    .eq("org_id", orgId)
-    .or(orFilters)
-    .order("located_at", { ascending: false })
-    .limit(1);
-
+  const { data, error } = await query;
   if (error) {
-    console.error(
-      "[Dipsy/toolSearchTrucksAllSources] Motive query error",
-      error
-    );
-    return null;
-  }
-  if (!data || data.length === 0) return null;
-
-  return normalizeMotiveTruckRow(data[0]);
-}
-
-async function findSamsaraTruck(orgId, identifier) {
-  if (!identifier) return null;
-
-  const clean = identifier.trim();
-  if (!clean) return null;
-
-  const orFilters = [
-    `name.ilike.%${clean}%`,
-    `license_plate.ilike.%${clean}%`,
-    `samsara_vehicle_id.eq.${clean}`,
-  ].join(",");
-
-  const { data: vehicles, error: vehErr } = await supabase
-    .from("samsara_vehicles")
-    .select("*")
-    .eq("org_id", orgId)
-    .or(orFilters)
-    .limit(3);
-
-  if (vehErr) {
-    console.error(
-      "[Dipsy/toolSearchTrucksAllSources] Samsara veh query error",
-      vehErr
-    );
-    return null;
-  }
-  if (!vehicles || vehicles.length === 0) return null;
-
-  const vehicleIds = vehicles.map((v) => v.samsara_vehicle_id);
-
-  const { data: locations, error: locErr } = await supabase
-    .from("samsara_vehicle_locations_current")
-    .select("*")
-    .eq("org_id", orgId)
-    .in("samsara_vehicle_id", vehicleIds)
-    .order("located_at", { ascending: false })
-    .limit(1);
-
-  if (locErr) {
-    console.error(
-      "[Dipsy/toolSearchTrucksAllSources] Samsara loc query error",
-      locErr
-    );
-    return null;
-  }
-  if (!locations || locations.length === 0) return null;
-
-  const locationRow = locations[0];
-  const vehicleRow = vehicles.find(
-    (v) => v.samsara_vehicle_id === locationRow.samsara_vehicle_id
-  );
-
-  return normalizeSamsaraTruckRow(locationRow, vehicleRow);
-}
-
-async function findDummyTruck(orgId, identifier) {
-  if (!identifier) return null;
-
-  const cleanRaw = identifier.trim();
-  if (!cleanRaw) return null;
-
-  // Extra cleaning for phrases like "truck 4812ca12"
-  const clean = cleanRaw.toLowerCase().replace(/truck/gi, "").trim();
-
-  const orFilters = [
-    `name.ilike.%${clean}%`,
-    `code.ilike.%${clean}%`,
-    `id.eq.${clean}`,
-  ].join(",");
-
-  const { data: vehicles, error: vehErr } = await supabase
-    .from("atlas_dummy_vehicles")
-    .select("*")
-    .eq("org_id", orgId)
-    .or(orFilters)
-    .limit(3);
-
-  if (vehErr) {
-    console.error(
-      "[Dipsy/toolSearchTrucksAllSources] Dummy veh query error",
-      vehErr
-    );
-    return null;
-  }
-  if (!vehicles || vehicles.length === 0) return null;
-
-  const vehicleIds = vehicles.map((v) => v.id);
-
-  const { data: locations, error: locErr } = await supabase
-    .from("atlas_dummy_vehicle_locations_current")
-    .select("*")
-    .eq("org_id", orgId)
-    .in("dummy_vehicle_id", vehicleIds)
-    .order("located_at", { ascending: false })
-    .limit(1);
-
-  if (locErr) {
-    console.error(
-      "[Dipsy/toolSearchTrucksAllSources] Dummy loc query error",
-      locErr
-    );
-    return null;
-  }
-  if (!locations || locations.length === 0) return null;
-
-  const locationRow = locations[0];
-  const vehicleRow = vehicles.find((v) => v.id === locationRow.dummy_vehicle_id);
-
-  return normalizeDummyTruckRow(locationRow, vehicleRow);
-}
-
-async function toolSearchTrucksAllSources(params) {
-  const { orgId, truck_query } = params;
-
-  if (!orgId) {
-    console.warn(
-      "[Dipsy/toolSearchTrucksAllSources] Missing orgId – cannot search trucks."
-    );
-    return { success: false, reason: "MISSING_ORG" };
-  }
-
-  const identifier = (truck_query || "").trim();
-  if (!identifier) {
-    return { success: false, reason: "EMPTY_QUERY" };
-  }
-
-  console.log(
-    "[Dipsy/toolSearchTrucksAllSources] Searching for truck across providers",
-    { orgId, identifier }
-  );
-
-  const [motive, samsara, dummy] = await Promise.all([
-    findMotiveTruck(orgId, identifier),
-    findSamsaraTruck(orgId, identifier),
-    findDummyTruck(orgId, identifier),
-  ]);
-
-  const candidate = motive || samsara || dummy;
-  if (!candidate) {
-    console.log(
-      "[Dipsy/toolSearchTrucksAllSources] No truck found in Motive/Samsara/Dummy for",
-      identifier
-    );
-    return { success: false, reason: "NOT_FOUND" };
+    console.error("[toolGetLoadBoardStatus] error:", error);
+    return {
+      success: false,
+      error: error.message || "Failed to load board status",
+    };
   }
 
   return {
     success: true,
-    provider: candidate.provider,
-    provider_label: candidate.providerLabel,
-    truck_id: candidate.vehicleId,
-    truck_display_name: candidate.displayName,
-    latitude: candidate.latitude,
-    longitude: candidate.longitude,
-    speed_mph: candidate.speedMph,
-    heading_degrees: candidate.headingDegrees,
-    located_at: candidate.locatedAt,
-    last_synced_at: candidate.lastSyncedAt,
+    count: data?.length ?? 0,
+    board: data ?? [],
   };
 }
 
-async function toolCreateLoad(params) {
+// ---- get_load_history ----
+async function toolGetLoadHistory(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  const orgId: string = params.orgId;
+  const loadRef: string | null =
+    typeof params.load_reference === "string" && params.load_reference.trim()
+      ? params.load_reference.trim()
+      : null;
+  const loadNumber: string | null =
+    typeof params.load_number === "string" && params.load_number.trim()
+      ? params.load_number.trim()
+      : null;
+
+  const limit: number =
+    typeof params.limit === "number" && params.limit > 0
+      ? Math.min(params.limit, 500)
+      : 200;
+
+  if (!orgId) {
+    return { success: false, error: "Missing org_id in context." };
+  }
+
+  if (!loadRef && !loadNumber) {
+    return {
+      success: false,
+      error:
+        "You must provide load_reference or load_number (or rely on context).",
+    };
+  }
+
+  let query = supabase
+    .from("load_history_view")
+    .select(
+      `
+      event_id,
+      org_id,
+      load_id,
+      load_number,
+      load_reference,
+      origin,
+      destination,
+      customer,
+      broker,
+      current_status,
+      event_type,
+      event_at,
+      from_status,
+      to_status,
+      from_driver_name,
+      to_driver_name,
+      metadata,
+      created_by,
+      logged_at
+    `
+    )
+    .eq("org_id", orgId)
+    .order("event_at", { ascending: true })
+    .limit(limit);
+
+  if (loadRef) {
+    query = query.eq("load_reference", loadRef);
+  }
+  if (loadNumber) {
+    query = query.eq("load_number", loadNumber);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error("[toolGetLoadHistory] error:", error);
+    return {
+      success: false,
+      error: error.message || "Failed to load history",
+    };
+  }
+
+  const events = data ?? [];
+  return {
+    success: true,
+    org_id: orgId,
+    load_reference: loadRef,
+    load_number: loadNumber,
+    count: events.length,
+    events,
+  };
+}
+
+// ---- create_load ----
+async function toolCreateLoad(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
   const loadNumber = `LD-${new Date().getFullYear()}-${String(
     Math.floor(Math.random() * 10000)
   ).padStart(4, "0")}`;
 
-  const shipper =
-    params.shipper && String(params.shipper).trim()
-      ? String(params.shipper).trim()
-      : "Unknown shipper";
+  const shipper = params.shipper?.trim() || "Unknown shipper";
+  const equipmentType = params.equipment_type?.trim() || "Dry van";
+  const customerRef = params.customer_reference?.trim() || loadNumber;
 
-  const equipmentType =
-    params.equipment_type && String(params.equipment_type).trim()
-      ? String(params.equipment_type).trim()
-      : "Dry van";
-
-  const customerRef =
-    params.customer_reference && String(params.customer_reference).trim()
-      ? String(params.customer_reference).trim()
-      : loadNumber;
+  const nowIso = new Date().toISOString();
 
   const { data, error } = await supabase
     .from("loads")
@@ -1771,21 +2252,22 @@ async function toolCreateLoad(params) {
       rate: params.rate,
       pickup_date: params.pickup_date,
       delivery_date: params.delivery_date,
-      shipper: shipper,
+      shipper,
       equipment_type: equipmentType,
       customer_reference: customerRef,
       weight: params.weight || null,
       commodity: params.commodity || null,
       miles: params.miles || null,
       status: "AVAILABLE",
+      pod_status: "NONE",
       problem_flag: false,
       at_risk: false,
       breach_flag: false,
       fuel_surcharge: 0,
       accessorials: {},
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      status_changed_at: new Date().toISOString(),
+      created_at: nowIso,
+      updated_at: nowIso,
+      status_changed_at: nowIso,
     })
     .select()
     .single();
@@ -1799,45 +2281,15 @@ async function toolCreateLoad(params) {
   };
 }
 
-async function toolUpdateLoad(params) {
-  console.log("🔍 Looking for load with reference:", params.load_reference);
-  console.log("🔍 Org ID (for logging only):", params.orgId);
-
-  let query = supabase.from("loads").select("id, reference");
-
-  query = query.ilike("reference", `%${params.load_reference}%`);
-
-  const { data: loads, error: searchError } = await query;
-
-  console.log("🔍 Search error:", searchError);
-  console.log("🔍 Found loads:", loads);
-
-  let load;
-
-  if (!loads || loads.length === 0) {
-    const justNumber = params.load_reference.replace(/[^0-9]/g, "");
-    console.log("🔍 Trying with just number:", justNumber);
-
-    let query2 = supabase.from("loads").select("id, reference");
-
-    query2 = query2.ilike("reference", `%${justNumber}%`);
-
-    const { data: loads2 } = await query2;
-
-    console.log("🔍 Second attempt found:", loads2);
-
-    if (!loads2 || loads2.length === 0) {
-      return {
-        error: `Load ${params.load_reference} not found in your organization`,
-      };
-    }
-
-    load = loads2[0];
-  } else {
-    load = loads[0];
+// ---- update_load ----
+async function toolUpdateLoad(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  const load = await findLoadByReference(supabase, params.load_reference);
+  if (!load) {
+    return { error: `Load ${params.load_reference} not found` };
   }
-
-  console.log("✅ Using load:", load);
 
   const updates = {
     ...params.updates,
@@ -1851,10 +2303,7 @@ async function toolUpdateLoad(params) {
     .select()
     .single();
 
-  if (error) {
-    console.error("❌ Update error:", error);
-    throw error;
-  }
+  if (error) throw error;
 
   return {
     success: true,
@@ -1863,217 +2312,128 @@ async function toolUpdateLoad(params) {
   };
 }
 
-async function toolAssignDriver(params) {
+// ---- assign_driver_to_load ----
+async function toolAssignDriverToLoad(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
   try {
     console.log(
-      "🔍 Assigning driver:",
+      "[toolAssignDriverToLoad] driver:",
       params.driver_name,
-      "to load:",
+      "load:",
       params.load_reference
     );
-    console.log("🔍 Params received:", JSON.stringify(params, null, 2));
 
-    let driverQuery = supabase
-      .from("drivers")
-      .select("id, full_name, status")
-      .ilike("full_name", `%${params.driver_name}%`);
-
-    const { data: driver, error: driverError } = await driverQuery.single();
-
-    console.log("🔍 Driver search result:", driver, driverError);
-
-    if (driverError || !driver) {
-      console.error("❌ Driver not found:", driverError);
+    // Find driver (now uses rpc_search_drivers_by_text under the hood)
+    const driver = await findDriverByName(supabase, params.driver_name);
+    if (!driver) {
       return { error: `Driver "${params.driver_name}" not found` };
     }
 
-    console.log("✅ Found driver:", driver);
-
-    let loadQuery = supabase
-      .from("loads")
-      .select("id, reference, status")
-      .ilike("reference", `%${params.load_reference}%`);
-
-    const { data: loads, error: loadError } = await loadQuery;
-
-    console.log("🔍 Load search result:", loads, loadError);
-
-    let load;
-
-    if (loadError || !loads || loads.length === 0) {
-      const justNumber = params.load_reference.replace(/[^0-9]/g, "");
-      console.log("🔍 Trying with just number:", justNumber);
-
-      let loadQuery2 = supabase
-        .from("loads")
-        .select("id, reference, status")
-        .ilike("reference", `%${justNumber}%`);
-
-      const { data: loads2, error: load2Error } = await loadQuery2;
-
-      console.log("🔍 Second attempt result:", loads2, load2Error);
-
-      if (load2Error || !loads2 || loads2.length === 0) {
-        console.error("❌ Load not found:", load2Error);
-        return { error: `Load "${params.load_reference}" not found` };
-      }
-
-      load = loads2[0];
-    } else {
-      load = loads[0];
-    }
-
-    console.log("✅ Using load:", load);
+    const driverName =
+      driver.full_name ||
+      `${driver.first_name || ""} ${driver.last_name || ""}`.trim();
 
     if (driver.status === "ASSIGNED") {
       return {
-        error: `${driver.full_name} is already assigned to another load. Unassign them first.`,
+        error: `${driverName} is already assigned to another load. Unassign them first.`,
       };
     }
 
-    console.log("🔧 Creating assignment...");
+    // Find load
+    const load = await findLoadByReference(supabase, params.load_reference);
+    if (!load) {
+      return { error: `Load "${params.load_reference}" not found` };
+    }
+
+    const nowIso = new Date().toISOString();
+
+    // Create assignment history row (unassigned_at defaults to NULL -> active assignment)
     const { error: assignError } = await supabase
       .from("load_driver_assignments")
       .insert({
         load_id: load.id,
         driver_id: driver.id,
-        assigned_at: new Date().toISOString(),
+        assigned_at: nowIso,
       });
 
     if (assignError) {
-      console.error("❌ Assignment error:", assignError);
       return { error: `Failed to assign: ${assignError.message}` };
     }
 
-    console.log("✅ Assignment created");
-
-    console.log("🔧 Updating driver status...");
+    // Update driver status (kept same as your existing pattern)
     await supabase
       .from("drivers")
       .update({ status: "ASSIGNED" })
       .eq("id", driver.id);
 
+    // Canonical truth: write assignment directly on loads as well.
+    await supabase
+      .from("loads")
+      .update({
+        assigned_driver_id: driver.id,
+        driver_name: driverName,
+        updated_at: nowIso,
+      })
+      .eq("id", load.id);
+
+    // Update load status if AVAILABLE → IN_TRANSIT
     if (load.status === "AVAILABLE") {
-      console.log("🔧 Updating load status...");
       await supabase
         .from("loads")
-        .update({ status: "IN_TRANSIT", status_changed_at: new Date().toISOString() })
+        .update({
+          status: "IN_TRANSIT",
+          status_changed_at: nowIso,
+        })
         .eq("id", load.id);
     }
 
-    console.log("✅ Assignment complete!");
-
     return {
       success: true,
-      message: `✅ Assigned ${driver.full_name} to load ${load.reference}!`,
+      message: `Assigned ${driverName} to load ${load.reference}.`,
+      driver: driverName,
+      load_reference: load.reference,
     };
   } catch (error) {
-    console.error("❌ Unexpected error in toolAssignDriver:", error);
-    return { error: `Unexpected error: ${error.message}` };
-  }
-}
-
-async function toolGetLoadDetails(params) {
-  console.log("🔍 Getting details for load:", params.load_reference);
-
-  let query = supabase.from("loads").select(
-    `
-      *,
-      load_driver_assignments (
-        driver:drivers (
-          id,
-          full_name,
-          phone,
-          status
-        )
-      )
-    `
-  );
-
-  query = query.ilike("reference", `%${params.load_reference}%`);
-
-  const { data: loads } = await query;
-
-  if (!loads || loads.length === 0) {
-    const justNumber = params.load_reference.replace(/[^0-9]/g, "");
-
-    let query2 = supabase.from("loads").select(
-      `
-        *,
-        load_driver_assignments (
-          driver:drivers (
-            id,
-            full_name,
-            phone,
-            status
-          )
-        )
-      `
-    );
-
-    query2 = query2.ilike("reference", `%${justNumber}%`);
-
-    const { data: loads2 } = await query2;
-
-    if (!loads2 || loads2.length === 0) {
-      return { error: `Load ${params.load_reference} not found` };
-    }
-
+    console.error("[toolAssignDriverToLoad] error:", error);
     return {
-      success: true,
-      load: loads2[0],
+      error: error instanceof Error ? error.message : "Assignment failed",
     };
   }
-
-  return {
-    success: true,
-    load: loads[0],
-  };
 }
 
-async function toolMarkLoadDelivered(params) {
-  console.log("🔧 Marking load delivered:", params.load_reference);
+// ---- get_load_details ----
+async function toolGetLoadDetails(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  const load = await findLoadByReference(supabase, params.load_reference, true);
+  if (!load) {
+    return { error: `Load ${params.load_reference} not found` };
+  }
 
-  let query = supabase.from("loads").select("id, reference");
+  return { success: true, load };
+}
 
-  query = query.ilike("reference", `%${params.load_reference}%`);
-
-  const { data: loads, error: searchError } = await query;
-
-  console.log("[toolMarkLoadDelivered] search error:", searchError);
-  console.log("[toolMarkLoadDelivered] found loads:", loads);
-
-  let load;
-
-  if (!loads || loads.length === 0) {
-    const justNumber = params.load_reference.replace(/[^0-9]/g, "");
-    console.log("[toolMarkLoadDelivered] Trying with just number:", justNumber);
-
-    let query2 = supabase.from("loads").select("id, reference");
-
-    query2 = query2.ilike("reference", `%${justNumber}%`);
-
-    const { data: loads2 } = await query2;
-
-    console.log("[toolMarkLoadDelivered] second attempt:", loads2);
-
-    if (!loads2 || loads2.length === 0) {
-      return {
-        error: `Load ${params.load_reference} not found in your organization`,
-      };
-    }
-
-    load = loads2[0];
-  } else {
-    load = loads[0];
+// ---- mark_load_delivered ----
+async function toolMarkLoadDelivered(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  const load = await findLoadByReference(supabase, params.load_reference);
+  if (!load) {
+    return { error: `Load ${params.load_reference} not found` };
   }
 
   const nowIso = new Date().toISOString();
 
-  const { data, error: updateError } = await supabase
+  const { data, error } = await supabase
     .from("loads")
     .update({
       status: "DELIVERED",
+      delivered_at: nowIso,
+      pod_status: "PENDING",
       problem_flag: false,
       at_risk: false,
       updated_at: nowIso,
@@ -2083,62 +2443,189 @@ async function toolMarkLoadDelivered(params) {
     .select()
     .single();
 
-  if (updateError) {
-    console.error("[toolMarkLoadDelivered] update error:", updateError);
-    return { error: updateError.message || "Failed to mark load delivered." };
+  if (error) {
+    return { error: error.message || "Failed to mark delivered" };
+  }
+
+  // Get current assigned driver name for response (only active assignment rows)
+  const { data: assignments } = await supabase
+    .from("load_driver_assignments")
+    .select("driver:drivers(id, full_name, first_name, last_name)")
+    .eq("load_id", load.id)
+    .is("unassigned_at", null)
+    .order("assigned_at", { ascending: false })
+    .limit(1);
+
+  let driverName = "the driver";
+  if (assignments?.[0]?.driver) {
+    const d = assignments[0].driver as any;
+    driverName =
+      d.full_name || `${d.first_name || ""} ${d.last_name || ""}`.trim();
   }
 
   return {
     success: true,
     load: data,
-    message: `Marked load ${data.reference} as DELIVERED.`,
+    driver_name: driverName,
+    message: `Marked ${data.reference} as DELIVERED. POD status is PENDING. ${driverName} is still assigned until POD is confirmed.`,
   };
 }
 
-async function toolMarkLoadProblem(params) {
-  console.log("🔧 Marking load as PROBLEM:", params.load_reference);
-
-  let query = supabase.from("loads").select("id, reference");
-
-  query = query.ilike("reference", `%${params.load_reference}%`);
-
-  const { data: loads, error: searchError } = await query;
-
-  console.log("[toolMarkLoadProblem] search error:", searchError);
-  console.log("[toolMarkLoadProblem] found loads:", loads);
-
-  let load;
-
-  if (!loads || loads.length === 0) {
-    const justNumber = params.load_reference.replace(/[^0-9]/g, "");
-    console.log("[toolMarkLoadProblem] Trying with just number:", justNumber);
-
-    let query2 = supabase.from("loads").select("id, reference");
-
-    query2 = query2.ilike("reference", `%${justNumber}%`);
-
-    const { data: loads2 } = await query2;
-
-    console.log("[toolMarkLoadProblem] second attempt:", loads2);
-
-    if (!loads2 || loads2.length === 0) {
-      return {
-        error: `Load ${params.load_reference} not found in your organization`,
-      };
-    }
-
-    load = loads2[0];
-  } else {
-    load = loads[0];
+// ---- confirm_pod_received ----
+async function toolConfirmPodReceived(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  const load = await findLoadByReference(supabase, params.load_reference);
+  if (!load) {
+    return { error: `Load ${params.load_reference} not found` };
   }
 
   const nowIso = new Date().toISOString();
 
-  const { data, error: updateError } = await supabase
+  // Update load POD status and clear current assignment on the load itself
+  const { data, error } = await supabase
+    .from("loads")
+    .update({
+      pod_status: "RECEIVED",
+      pod_uploaded_at: nowIso,
+      assigned_driver_id: null,
+      driver_name: null,
+      updated_at: nowIso,
+    })
+    .eq("id", load.id)
+    .select()
+    .single();
+
+  if (error) {
+    return { error: error.message || "Failed to confirm POD" };
+  }
+
+  // Find latest assigned driver (for messaging + status update)
+  const { data: assignments } = await supabase
+    .from("load_driver_assignments")
+    .select("driver_id, driver:drivers(id, full_name, first_name, last_name)")
+    .eq("load_id", load.id)
+    .order("assigned_at", { ascending: false })
+    .limit(1);
+
+  let driverName = "the driver";
+  let driverId: string | null = null;
+
+  if (assignments?.[0]) {
+    driverId = assignments[0].driver_id;
+    const d = assignments[0].driver as any;
+    driverName =
+      d?.full_name || `${d?.first_name || ""} ${d?.last_name || ""}`.trim();
+  }
+
+  // Set driver back to ACTIVE (AVAILABLE for your UI)
+  if (driverId) {
+    await supabase
+      .from("drivers")
+      .update({ status: "ACTIVE" })
+      .eq("id", driverId);
+  }
+
+  // Close out ANY open assignment history rows for this load
+  await supabase
+    .from("load_driver_assignments")
+    .update({ unassigned_at: nowIso })
+    .eq("load_id", load.id)
+    .is("unassigned_at", null);
+
+  return {
+    success: true,
+    load: data,
+    driver_name: driverName,
+    message: `POD confirmed for ${data.reference}. ${driverName} is now AVAILABLE and the load no longer shows a current driver assignment.`,
+  };
+}
+
+// ---- release_driver_without_pod ----
+async function toolReleaseDriverWithoutPod(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  const load = await findLoadByReference(supabase, params.load_reference);
+  if (!load) {
+    return { error: `Load ${params.load_reference} not found` };
+  }
+
+  const nowIso = new Date().toISOString();
+
+  // Find assigned driver from current assignment
+  const { data: assignments } = await supabase
+    .from("load_driver_assignments")
+    .select(
+      "id, driver_id, driver:drivers(id, full_name, first_name, last_name)"
+    )
+    .eq("load_id", load.id)
+    .is("unassigned_at", null)
+    .order("assigned_at", { ascending: false })
+    .limit(1);
+
+  let driverName = "the driver";
+  if (assignments?.[0]) {
+    const assignmentId = assignments[0].id;
+    const driverId = assignments[0].driver_id;
+    const d = assignments[0].driver as any;
+    driverName =
+      d?.full_name || `${d?.first_name || ""} ${d?.last_name || ""}`.trim();
+
+    // Close the assignment row
+    await supabase
+      .from("load_driver_assignments")
+      .update({ unassigned_at: nowIso })
+      .eq("id", assignmentId);
+
+    // Set driver to ACTIVE (free for new work)
+    await supabase
+      .from("drivers")
+      .update({ status: "ACTIVE" })
+      .eq("id", driverId);
+  }
+
+  // Canonical truth: clear current assignment on the load, leave pod_status alone (usually PENDING)
+  await supabase
+    .from("loads")
+    .update({
+      assigned_driver_id: null,
+      driver_name: null,
+      updated_at: nowIso,
+    })
+    .eq("id", load.id);
+
+  return {
+    success: true,
+    load_reference: load.reference,
+    driver_name: driverName,
+    message: `Released ${driverName} - now AVAILABLE. Note: ${load.reference} still needs POD uploaded (pod_status remains ${
+      load.pod_status ?? "PENDING"
+    }).`,
+  };
+}
+
+// ---- mark_load_problem ----
+async function toolMarkLoadProblem(
+  supabase: ReturnType<typeof createClient>,
+  params: any
+) {
+  const load = await findLoadByReference(supabase, params.load_reference);
+  if (!load) {
+    return { error: `Load ${params.load_reference} not found` };
+  }
+
+  const nowIso = new Date().toISOString();
+  const reason = params.problem_reason || "Unspecified issue";
+
+  const { data, error } = await supabase
     .from("loads")
     .update({
       status: "PROBLEM",
       problem_flag: true,
+      problem_note: reason,
+      problem_flagged_at: nowIso,
       at_risk: true,
       updated_at: nowIso,
       status_changed_at: nowIso,
@@ -2147,24 +2634,106 @@ async function toolMarkLoadProblem(params) {
     .select()
     .single();
 
-  if (updateError) {
-    console.error("[toolMarkLoadProblem] update error:", updateError);
-    return { error: updateError.message || "Failed to mark load as PROBLEM." };
+  if (error) {
+    return { error: error.message || "Failed to mark as problem" };
   }
 
   return {
     success: true,
     load: data,
-    message: `Marked load ${data.reference} as PROBLEM.`,
+    message: `Flagged ${data.reference} as PROBLEM: "${reason}"`,
   };
 }
 
-async function toolWebSearch(params) {
-  // Placeholder for future integration with a real search API
-  return {
-    success: true,
-    query: params.query,
-    message:
-      "Web search capability coming soon! For now, I can help with your loads, drivers, and trucks.",
-  };
+// ==================== HELPER FUNCTIONS ====================
+
+async function findLoadByReference(
+  supabase: ReturnType<typeof createClient>,
+  reference: string,
+  includeAssignments = false
+): Promise<any | null> {
+  const selectClause = includeAssignments
+    ? `*, load_driver_assignments(driver:drivers(id, full_name, first_name, last_name, phone, status))`
+    : `
+      id,
+      reference,
+      origin,
+      destination,
+      status,
+      rate,
+      pod_status,
+      pickup_date,
+      delivery_date,
+      assigned_driver_id,
+      driver_name
+    `;
+
+  let { data: loads } = await supabase
+    .from("loads")
+    .select(selectClause)
+    .ilike("reference", `%${reference}%`)
+    .limit(1);
+
+  if (!loads || loads.length === 0) {
+    const justNumber = reference.replace(/[^0-9]/g, "");
+    if (justNumber) {
+      const { data: loads2 } = await supabase
+        .from("loads")
+        .select(selectClause)
+        .ilike("reference", `%${justNumber}%`)
+        .limit(1);
+      loads = loads2;
+    }
+  }
+
+  return loads?.[0] || null;
+}
+
+// 🔎 driver lookup that **always hits RPC truth first**
+async function findDriverByName(
+  supabase: ReturnType<typeof createClient>,
+  name: string
+): Promise<any | null> {
+  const searchText = (name || "").trim();
+  if (!searchText) return null;
+
+  try {
+    const { data, error } = await supabase.rpc(
+      "rpc_search_drivers_by_text",
+      { search_text: searchText }
+    );
+
+    if (error) {
+      console.error("[findDriverByName] rpc_search_drivers_by_text error:", error);
+    } else if (data && data.length > 0) {
+      // Already org-scoped and RLS-safe inside the RPC
+      return data[0];
+    }
+  } catch (e) {
+    console.error("[findDriverByName] rpc_search_drivers_by_text threw:", e);
+  }
+
+  // Fallback – old direct RLS-safe search on drivers
+  let { data: drivers } = await supabase
+    .from("drivers")
+    .select("id, full_name, first_name, last_name, status")
+    .ilike("full_name", `%${searchText}%`)
+    .limit(1);
+
+  if (!drivers || drivers.length === 0) {
+    const nameParts = searchText.split(" ");
+    const first = nameParts[0] ?? "";
+    const last = nameParts.slice(1).join(" ");
+
+    const { data: drivers2 } = await supabase
+      .from("drivers")
+      .select("id, full_name, first_name, last_name, status")
+      .ilike("first_name", `%${first}%`)
+      .ilike("last_name", last ? `%${last}%` : "%")
+      .limit(1);
+
+    drivers = drivers2;
+  }
+
+  return drivers?.[0] || null;
 }

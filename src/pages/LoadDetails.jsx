@@ -167,7 +167,10 @@ function RouteMap({ stops, onRouteCalculated }) {
   const [error, setError] = useState("");
 
   const activeStops = useMemo(
-    () => (stops || []).filter((s) => s && (s.city || s.address_line1 || s.location_name)),
+    () =>
+      (stops || []).filter(
+        (s) => s && (s.city || s.address_line1 || s.location_name)
+      ),
     [stops]
   );
 
@@ -191,12 +194,12 @@ function RouteMap({ stops, onRouteCalculated }) {
 
         for (const stop of activeStops) {
           let addr = buildStopAddress(stop);
-          
+
           // If buildStopAddress returns empty, use location_name as fallback
           if (!addr && stop.location_name) {
             addr = stop.location_name;
           }
-          
+
           if (!addr) continue;
 
           const url =
@@ -209,11 +212,11 @@ function RouteMap({ stops, onRouteCalculated }) {
 
           if (data.status === "OK" && data.results?.[0]) {
             const { lat, lng } = data.results[0].geometry.location;
-            results.push({ 
-              lat, 
+            results.push({
+              lat,
               lng,
-              name: stop.location_name || stop.city || 'Stop',
-              stopType: stop.stop_type
+              name: stop.location_name || stop.city || "Stop",
+              stopType: stop.stop_type,
             });
           }
         }
@@ -244,10 +247,8 @@ function RouteMap({ stops, onRouteCalculated }) {
     if (!coords.length) {
       return { lat: 39.5, lng: -98.35 };
     }
-    const lat =
-      coords.reduce((sum, c) => sum + c.lat, 0) / coords.length;
-    const lng =
-      coords.reduce((sum, c) => sum + c.lng, 0) / coords.length;
+    const lat = coords.reduce((sum, c) => sum + c.lat, 0) / coords.length;
+    const lng = coords.reduce((sum, c) => sum + c.lng, 0) / coords.length;
     return { lat, lng };
   }, [coords]);
 
@@ -294,9 +295,7 @@ function RouteMap({ stops, onRouteCalculated }) {
     return (
       <div className="text-sm text-amber-300/80">
         Google Maps API key is not configured. Set
-        <span className="font-mono px-2">
-          VITE_GOOGLE_MAPS_API_KEY
-        </span>
+        <span className="font-mono px-2">VITE_GOOGLE_MAPS_API_KEY</span>
         in your <code>.env</code>.
       </div>
     );
@@ -313,8 +312,8 @@ function RouteMap({ stops, onRouteCalculated }) {
   if (!activeStops.length) {
     return (
       <div className="text-sm text-slate-300/80">
-        No stops found for this load yet. Add at least one pickup
-        and one delivery to see the route.
+        No stops found for this load yet. Add at least one pickup and one
+        delivery to see the route.
       </div>
     );
   }
@@ -448,6 +447,9 @@ export default function LoadDetails() {
   const [showWeatherAlerts, setShowWeatherAlerts] = useState(true); // NEW
   const [showChainAlerts, setShowChainAlerts] = useState(true); // NEW
 
+  // NEW: ready for billing button loading state
+  const [markingBillingReady, setMarkingBillingReady] = useState(false);
+
   const loadKey = load?.id?.slice(0, 6) ?? "—";
 
   /* -------- keyboard shortcuts -------- */
@@ -508,7 +510,7 @@ export default function LoadDetails() {
       if (load?.miles) {
         const calculation = await calculateFuelCost(load.miles);
         setFuelCalculation(calculation);
-        console.log('[LoadDetails] Fuel calculation updated:', calculation);
+        console.log("[LoadDetails] Fuel calculation updated:", calculation);
       }
     };
 
@@ -517,8 +519,11 @@ export default function LoadDetails() {
 
   /* -------- Callback for when route is calculated in map -------- */
   const handleRouteCalculated = useCallback(async (waypoints) => {
-    console.log('[LoadDetails] Route calculated, checking weather and chain requirements for waypoints:', waypoints);
-    
+    console.log(
+      "[LoadDetails] Route calculated, checking weather and chain requirements for waypoints:",
+      waypoints
+    );
+
     if (!waypoints || waypoints.length < 2) return;
 
     try {
@@ -526,25 +531,28 @@ export default function LoadDetails() {
       setLoadingWeatherAlerts(true);
       const weatherAlerts = await getRouteWeatherAlerts(waypoints);
       setRouteWeatherAlerts(weatherAlerts);
-      console.log('[LoadDetails] Weather alerts received:', weatherAlerts);
-      
+      console.log("[LoadDetails] Weather alerts received:", weatherAlerts);
+
       // Auto-expand weather alerts section if there are alerts
       if (weatherAlerts && weatherAlerts.length > 0) {
         setShowWeatherAlerts(true);
       }
-      
+
       // Check chain control requirements
       setLoadingChainAlerts(true);
       const chainAlerts = await getChainControlAlerts(waypoints);
       setChainControlAlerts(chainAlerts);
-      console.log('[LoadDetails] Chain control alerts received:', chainAlerts);
-      
+      console.log(
+        "[LoadDetails] Chain control alerts received:",
+        chainAlerts
+      );
+
       // Auto-expand chain alerts section if there are alerts
       if (chainAlerts && chainAlerts.length > 0) {
         setShowChainAlerts(true);
       }
     } catch (error) {
-      console.error('[LoadDetails] Error fetching route alerts:', error);
+      console.error("[LoadDetails] Error fetching route alerts:", error);
     } finally {
       setLoadingWeatherAlerts(false);
       setLoadingChainAlerts(false);
@@ -894,7 +902,10 @@ export default function LoadDetails() {
 
       if (updateErr) throw updateErr;
 
-      await logActivity("Stop status updated", `Stop ${stopId}: ${newStatus}`);
+      await logActivity(
+        "Stop status updated",
+        `Stop ${stopId}: ${newStatus}`
+      );
       await fetchData();
       setEditingStopStatus(null);
     } catch (err) {
@@ -925,25 +936,52 @@ export default function LoadDetails() {
       <body>
         <h1>Rate Confirmation</h1>
         <div class="section">
-          <div><span class="label">Load Number:</span> ${load.load_number || loadKey}</div>
-          <div><span class="label">Status:</span> ${load.status || "AVAILABLE"}</div>
-          <div><span class="label">Equipment:</span> ${load.equipment_type || "DRY_VAN"}</div>
+          <div><span class="label">Load Number:</span> ${
+            load.load_number || loadKey
+          }</div>
+          <div><span class="label">Status:</span> ${
+            load.status || "AVAILABLE"
+          }</div>
+          <div><span class="label">Equipment:</span> ${
+            load.equipment_type || "DRY_VAN"
+          }</div>
         </div>
         <div class="section">
-          <div><span class="label">Pickup:</span> ${pickupStop ? buildStopAddress(pickupStop) : "TBD"}</div>
-          <div><span class="label">Pickup Time:</span> ${formatDateTime(pickupStop?.scheduled_start || load.pickup_at)}</div>
+          <div><span class="label">Pickup:</span> ${
+            pickupStop ? buildStopAddress(pickupStop) : "TBD"
+          }</div>
+          <div><span class="label">Pickup Time:</span> ${formatDateTime(
+            pickupStop?.scheduled_start || load.pickup_at
+          )}</div>
         </div>
         <div class="section">
-          <div><span class="label">Delivery:</span> ${deliveryStop ? buildStopAddress(deliveryStop) : "TBD"}</div>
-          <div><span class="label">Delivery Time:</span> ${formatDateTime(deliveryStop?.scheduled_end || load.delivery_at)}</div>
+          <div><span class="label">Delivery:</span> ${
+            deliveryStop ? buildStopAddress(deliveryStop) : "TBD"
+          }</div>
+          <div><span class="label">Delivery Time:</span> ${formatDateTime(
+            deliveryStop?.scheduled_end || load.delivery_at
+          )}</div>
         </div>
         <div class="section">
-          <div><span class="label">Miles:</span> ${load.miles || "—"}</div>
-          <div><span class="label">Rate:</span> ${load.rate != null ? load.rate.toLocaleString("en-US", { style: "currency", currency: "USD" }) : "—"}</div>
+          <div><span class="label">Miles:</span> ${
+            load.miles || "—"
+          }</div>
+          <div><span class="label">Rate:</span> ${
+            load.rate != null
+              ? load.rate.toLocaleString("en-US", {
+                  style: "currency",
+                  currency: "USD",
+                })
+              : "—"
+          }</div>
         </div>
         <div class="section">
-          <div><span class="label">Reference:</span> ${load.reference || "—"}</div>
-          <div><span class="label">Commodity:</span> ${load.commodity || "—"}</div>
+          <div><span class="label">Reference:</span> ${
+            load.reference || "—"
+          }</div>
+          <div><span class="label">Commodity:</span> ${
+            load.commodity || "—"
+          }</div>
         </div>
       </body>
       </html>
@@ -1073,6 +1111,39 @@ export default function LoadDetails() {
     }
   };
 
+  /* -------- READY FOR BILLING handler -------- */
+
+  const handleMarkReadyForBilling = async () => {
+    if (!window.confirm("Mark this load as READY FOR BILLING?")) return;
+
+    try {
+      setMarkingBillingReady(true);
+
+      const { error: updateErr } = await supabase
+        .from("loads")
+        // Assumes a boolean column "ready_for_billing" on loads
+        .update({ ready_for_billing: true })
+        .eq("id", load.id);
+
+      if (updateErr) throw updateErr;
+
+      await logActivity("Load marked ready for billing");
+
+      // 🔁 NEW: After marking ready, send the user to the Billing page
+      navigate("/billing");
+    } catch (err) {
+      console.error(
+        "[LoadDetails] mark ready for billing error",
+        err
+      );
+      alert(
+        "Could not mark as ready for billing. Check console for details."
+      );
+    } finally {
+      setMarkingBillingReady(false);
+    }
+  };
+
   /* -------- AI train + instructions helpers -------- */
 
   const handleTrainAI = async () => {
@@ -1150,7 +1221,9 @@ export default function LoadDetails() {
 
     lines.push(`Load ${load.load_number || loadKey}`);
     lines.push(`Pickup: ${pickupAddress}`);
-    lines.push(`Pickup time: ${formatDateTime(pickupDisplayDateTime)}`);
+    lines.push(
+      `Pickup time: ${formatDateTime(pickupDisplayDateTime)}`
+    );
     lines.push(`Delivery: ${deliveryAddress}`);
     lines.push(
       `Delivery time: ${formatDateTime(deliveryDisplayDateTime)}`
@@ -1245,10 +1318,16 @@ export default function LoadDetails() {
         );
       } else {
         setInstructionStatus("Email sent successfully.");
-        await logActivity("Load instructions sent via email", emailTo);
+        await logActivity(
+          "Load instructions sent via email",
+          emailTo
+        );
       }
     } catch (err) {
-      console.error("[LoadDetails] send instructions email error", err);
+      console.error(
+        "[LoadDetails] send instructions email error",
+        err
+      );
       setInstructionStatus(
         "Could not send email. Check console and Supabase logs."
       );
@@ -1380,143 +1459,200 @@ export default function LoadDetails() {
 
   /* -------- AUTO-CALCULATE MILES (moved here to access displayStops) -------- */
 
-  const handleCalculateMiles = useCallback(async () => {
-    if (!GOOGLE_MAPS_API_KEY) {
-      alert("Google Maps API key is not configured. Set VITE_GOOGLE_MAPS_API_KEY in your .env file.");
-      return;
-    }
-
-    console.log('[Auto-Calculate Miles] displayStops:', displayStops);
-    console.log('[Auto-Calculate Miles] actual stops from DB:', stops);
-    
-    if (displayStops.length < 2) {
-      alert("You need at least 2 stops (pickup and delivery) to calculate miles.");
-      return;
-    }
-
-    try {
-      setCalculatingMiles(true);
-
-      // Build waypoints array
-      const waypoints = [];
-      
-      // Check if we have actual stops from load_stops table (not virtual stops)
-      const hasRealStops = stops && stops.length >= 2;
-      
-      if (hasRealStops) {
-        // Scenario 1: Use actual stops from load_stops table (manually created loads)
-        console.log('[Auto-Calculate Miles] Using load_stops records');
-        for (const stop of stops) {
-          let addr = buildStopAddress(stop);
-          console.log('[Auto-Calculate Miles] Stop:', stop.location_name, 'Address from fields:', addr);
-          
-          // If buildStopAddress returns empty, use location_name as fallback
-          if (!addr && stop.location_name) {
-            addr = stop.location_name;
-            console.log('[Auto-Calculate Miles] Using location_name fallback:', addr);
-          }
-          
-          if (addr) waypoints.push(addr);
-        }
-      } else {
-        // Scenario 2: Fallback to loads.origin and loads.destination (OCR loads)
-        console.log('[Auto-Calculate Miles] No load_stops found, using loads.origin and loads.destination');
-        
-        if (load.origin) {
-          waypoints.push(load.origin);
-          console.log('[Auto-Calculate Miles] Added origin:', load.origin);
-        }
-        
-        if (load.destination) {
-          waypoints.push(load.destination);
-          console.log('[Auto-Calculate Miles] Added destination:', load.destination);
-        }
-      }
-
-      console.log('[Auto-Calculate Miles] Final waypoints:', waypoints);
-
-      if (waypoints.length < 2) {
-        alert("Could not build addresses from stops. Please add city/state or location information to your stops.");
+  const handleCalculateMiles = useCallback(
+    async () => {
+      if (!GOOGLE_MAPS_API_KEY) {
+        alert(
+          "Google Maps API key is not configured. Set VITE_GOOGLE_MAPS_API_KEY in your .env file."
+        );
         return;
       }
 
-      // Use Google Maps DirectionsService (no CORS issues)
-      // @ts-ignore - google is loaded via script
-      const directionsService = new google.maps.DirectionsService();
+      console.log("[Auto-Calculate Miles] displayStops:", displayStops);
+      console.log(
+        "[Auto-Calculate Miles] actual stops from DB:",
+        stops
+      );
 
-      // Build request for multi-stop route
-      const origin = waypoints[0];
-      const destination = waypoints[waypoints.length - 1];
-      const waypointsForApi = waypoints.slice(1, -1).map(location => ({
-        location,
-        stopover: true
-      }));
+      if (displayStops.length < 2) {
+        alert(
+          "You need at least 2 stops (pickup and delivery) to calculate miles."
+        );
+        return;
+      }
 
-      const request = {
-        origin,
-        destination,
-        waypoints: waypointsForApi,
-        travelMode: google.maps.TravelMode.DRIVING,
-        unitSystem: google.maps.UnitSystem.IMPERIAL
-      };
+      try {
+        setCalculatingMiles(true);
 
-      console.log('[Auto-Calculate Miles] Directions API request:', request);
+        // Build waypoints array
+        const waypoints = [];
 
-      directionsService.route(request, async (result, status) => {
-        try {
-          if (status === 'OK' && result) {
-            // Calculate total distance from all legs
-            let totalMiles = 0;
-            const route = result.routes[0];
-            
-            if (route && route.legs) {
-              for (const leg of route.legs) {
-                if (leg.distance) {
-                  // Distance is in meters, convert to miles
-                  const miles = leg.distance.value * 0.000621371;
-                  totalMiles += miles;
-                  console.log(`[Auto-Calculate Miles] Leg: ${leg.start_address} → ${leg.end_address}: ${miles.toFixed(2)} miles`);
+        // Check if we have actual stops from load_stops table (not virtual stops)
+        const hasRealStops = stops && stops.length >= 2;
+
+        if (hasRealStops) {
+          // Scenario 1: Use actual stops from load_stops table (manually created loads)
+          console.log(
+            "[Auto-Calculate Miles] Using load_stops records"
+          );
+          for (const stop of stops) {
+            let addr = buildStopAddress(stop);
+            console.log(
+              "[Auto-Calculate Miles] Stop:",
+              stop.location_name,
+              "Address from fields:",
+              addr
+            );
+
+            // If buildStopAddress returns empty, use location_name as fallback
+            if (!addr && stop.location_name) {
+              addr = stop.location_name;
+              console.log(
+                "[Auto-Calculate Miles] Using location_name fallback:",
+                addr
+              );
+            }
+
+            if (addr) waypoints.push(addr);
+          }
+        } else {
+          // Scenario 2: Fallback to loads.origin and loads.destination (OCR loads)
+          console.log(
+            "[Auto-Calculate Miles] No load_stops found, using loads.origin and loads.destination"
+          );
+
+          if (load.origin) {
+            waypoints.push(load.origin);
+            console.log(
+              "[Auto-Calculate Miles] Added origin:",
+              load.origin
+            );
+          }
+
+          if (load.destination) {
+            waypoints.push(load.destination);
+            console.log(
+              "[Auto-Calculate Miles] Added destination:",
+              load.destination
+            );
+          }
+        }
+
+        console.log("[Auto-Calculate Miles] Final waypoints:", waypoints);
+
+        if (waypoints.length < 2) {
+          alert(
+            "Could not build addresses from stops. Please add city/state or location information to your stops."
+          );
+          return;
+        }
+
+        // Use Google Maps DirectionsService (no CORS issues)
+        // @ts-ignore - google is loaded via script
+        const directionsService = new google.maps.DirectionsService();
+
+        // Build request for multi-stop route
+        const origin = waypoints[0];
+        const destination = waypoints[waypoints.length - 1];
+        const waypointsForApi = waypoints.slice(1, -1).map((location) => ({
+          location,
+          stopover: true,
+        }));
+
+        const request = {
+          origin,
+          destination,
+          waypoints: waypointsForApi,
+          travelMode: google.maps.TravelMode.DRIVING,
+          unitSystem: google.maps.UnitSystem.IMPERIAL,
+        };
+
+        console.log(
+          "[Auto-Calculate Miles] Directions API request:",
+          request
+        );
+
+        directionsService.route(request, async (result, status) => {
+          try {
+            if (status === "OK" && result) {
+              // Calculate total distance from all legs
+              let totalMiles = 0;
+              const route = result.routes[0];
+
+              if (route && route.legs) {
+                for (const leg of route.legs) {
+                  if (leg.distance) {
+                    // Distance is in meters, convert to miles
+                    const miles =
+                      leg.distance.value * 0.000621371;
+                    totalMiles += miles;
+                    console.log(
+                      `[Auto-Calculate Miles] Leg: ${leg.start_address} → ${leg.end_address}: ${miles.toFixed(
+                        2
+                      )} miles`
+                    );
+                  }
                 }
               }
-            }
 
-            console.log('[Auto-Calculate Miles] Total miles:', totalMiles);
+              console.log(
+                "[Auto-Calculate Miles] Total miles:",
+                totalMiles
+              );
 
-            if (totalMiles > 0) {
-              const roundedMiles = Math.round(totalMiles);
-              
-              // Update the load with calculated miles
-              const { error: updateErr } = await supabase
-                .from("loads")
-                .update({ miles: roundedMiles })
-                .eq("id", load.id);
+              if (totalMiles > 0) {
+                const roundedMiles = Math.round(totalMiles);
 
-              if (updateErr) throw updateErr;
+                // Update the load with calculated miles
+                const { error: updateErr } = await supabase
+                  .from("loads")
+                  .update({ miles: roundedMiles })
+                  .eq("id", load.id);
 
-              await logActivity("Miles auto-calculated", `${roundedMiles} miles via Google Maps`);
-              await fetchData(); // Refresh the load data
-              
-              alert(`Miles calculated: ${roundedMiles} miles`);
+                if (updateErr) throw updateErr;
+
+                await logActivity(
+                  "Miles auto-calculated",
+                  `${roundedMiles} miles via Google Maps`
+                );
+                await fetchData(); // Refresh the load data
+
+                alert(`Miles calculated: ${roundedMiles} miles`);
+              } else {
+                alert(
+                  "Could not calculate miles. Please check your stops and try again."
+                );
+              }
             } else {
-              alert("Could not calculate miles. Please check your stops and try again.");
+              console.error(
+                "[Auto-Calculate Miles] Directions API error:",
+                status,
+                result
+              );
+              alert(
+                `Could not calculate route: ${status}. Please check that your addresses are valid.`
+              );
             }
-          } else {
-            console.error('[Auto-Calculate Miles] Directions API error:', status, result);
-            alert(`Could not calculate route: ${status}. Please check that your addresses are valid.`);
+          } catch (err) {
+            console.error(
+              "[LoadDetails] calculate miles error",
+              err
+            );
+            alert(
+              "Error calculating miles. Check console for details."
+            );
+          } finally {
+            setCalculatingMiles(false);
           }
-        } catch (err) {
-          console.error("[LoadDetails] calculate miles error", err);
-          alert("Error calculating miles. Check console for details.");
-        } finally {
-          setCalculatingMiles(false);
-        }
-      });
-    } catch (err) {
-      console.error("[LoadDetails] calculate miles error", err);
-      alert("Error calculating miles. Check console for details.");
-      setCalculatingMiles(false);
-    }
-  }, [stops, displayStops, load, GOOGLE_MAPS_API_KEY, fetchData, logActivity]);
+        });
+      } catch (err) {
+        console.error("[LoadDetails] calculate miles error", err);
+        alert("Error calculating miles. Check console for details.");
+        setCalculatingMiles(false);
+      }
+    },
+    [stops, displayStops, load, GOOGLE_MAPS_API_KEY, fetchData]
+  );
 
   // Calculate profitability using REAL diesel prices
   const driverPay = assignedDriver?.rate || 0;
@@ -1524,9 +1660,12 @@ export default function LoadDetails() {
   const profit = (load?.rate || 0) - driverPay - estimatedFuel;
   const profitMargin =
     load?.rate > 0 ? ((profit / load.rate) * 100).toFixed(1) : 0;
-  
+
   // Calculate rate per mile
-  const ratePerMile = (load?.rate && load?.miles) ? (load.rate / load.miles).toFixed(2) : null;
+  const ratePerMile =
+    load?.rate && load?.miles
+      ? (load.rate / load.miles).toFixed(2)
+      : null;
 
   if (loading) {
     return (
@@ -1678,7 +1817,23 @@ export default function LoadDetails() {
 
         {/* Keyboard shortcuts hint */}
         <div className="text-[10px] text-slate-500">
-          Keyboard shortcuts: <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">E</kbd> Edit · <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">I</kbd> Instructions · <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">R</kbd> Refresh · <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">P</kbd> Print
+          Keyboard shortcuts:{" "}
+          <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">
+            E
+          </kbd>{" "}
+          Edit ·{" "}
+          <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">
+            I
+          </kbd>{" "}
+          Instructions ·{" "}
+          <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">
+            R
+          </kbd>{" "}
+          Refresh ·{" "}
+          <kbd className="px-1 py-0.5 rounded bg-slate-800 text-slate-300">
+            P
+          </kbd>{" "}
+          Print
         </div>
       </div>
 
@@ -1763,7 +1918,9 @@ export default function LoadDetails() {
                       handleInlineEdit("miles", load.miles || "")
                     }
                   >
-                    <div className="text-slate-50">{load.miles || "—"}</div>
+                    <div className="text-slate-50">
+                      {load.miles || "—"}
+                    </div>
                     <Edit className="h-3 w-3 text-slate-500 group-hover:text-emerald-400" />
                   </div>
                   <button
@@ -1859,7 +2016,10 @@ export default function LoadDetails() {
                 <div
                   className="flex items-center gap-2 cursor-pointer group"
                   onClick={() =>
-                    handleInlineEdit("reference", load.reference || "")
+                    handleInlineEdit(
+                      "reference",
+                      load.reference || ""
+                    )
                   }
                 >
                   <div className="text-slate-50 truncate">
@@ -1879,7 +2039,8 @@ export default function LoadDetails() {
                 Profitability
               </h3>
               <span className="text-[10px] text-emerald-300/60">
-                (Live diesel: ${fuelCalculation.pricePerGallon}/gal)
+                (Live diesel: $
+                {fuelCalculation.pricePerGallon}/gal)
               </span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-sm">
@@ -1911,7 +2072,9 @@ export default function LoadDetails() {
                 <div
                   className={cx(
                     "font-medium",
-                    profit > 0 ? "text-emerald-300" : "text-rose-300"
+                    profit > 0
+                      ? "text-emerald-300"
+                      : "text-rose-300"
                   )}
                 >
                   {profit.toLocaleString("en-US", {
@@ -1952,15 +2115,15 @@ export default function LoadDetails() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Pickup Weather */}
-            <WeatherCard 
-              city={pickupDisplayCity} 
+            <WeatherCard
+              city={pickupDisplayCity}
               state={pickupDisplayState}
               label="Pickup Weather"
             />
 
             {/* Delivery Weather */}
-            <WeatherCard 
-              city={deliveryDisplayCity} 
+            <WeatherCard
+              city={deliveryDisplayCity}
               state={deliveryDisplayState}
               label="Delivery Weather"
             />
@@ -1982,7 +2145,8 @@ export default function LoadDetails() {
                 <div className="flex items-center gap-2">
                   <Truck className="h-3 w-3 text-slate-400" />
                   <span className="text-xs text-slate-100">
-                    {assignedDriver.first_name} {assignedDriver.last_name}
+                    {assignedDriver.first_name}{" "}
+                    {assignedDriver.last_name}
                   </span>
                 </div>
                 {assignedDriver.phone && (
@@ -2004,7 +2168,8 @@ export default function LoadDetails() {
                 <div className="flex items-center gap-2">
                   <DollarSign className="h-3 w-3 text-slate-400" />
                   <span className="text-xs text-slate-100">
-                    Rate: {assignedDriver.rate?.toLocaleString("en-US", {
+                    Rate:{" "}
+                    {assignedDriver.rate?.toLocaleString("en-US", {
                       style: "currency",
                       currency: "USD",
                     }) || "—"}
@@ -2029,11 +2194,11 @@ export default function LoadDetails() {
             </div>
 
             <div className="text-xs text-slate-300 leading-relaxed">
-              Best-fit driver suggestions are temporarily paused on
-              this page while we stabilize the AI engine. You can
-              still assign drivers from the Loads and Drivers pages,
-              and your feedback there will continue training Atlas
-              AI in the background.
+              Best-fit driver suggestions are temporarily paused on this
+              page while we stabilize the AI engine. You can still
+              assign drivers from the Loads and Drivers pages, and your
+              feedback there will continue training Atlas AI in the
+              background.
             </div>
           </section>
 
@@ -2047,6 +2212,27 @@ export default function LoadDetails() {
                 </h2>
               </div>
               <div className="flex items-center gap-2">
+                {/* Ready for Billing pill / button */}
+                {load.ready_for_billing ? (
+                  <div className="inline-flex items-center gap-1 rounded-full border border-amber-500/60 bg-amber-500/10 px-2.5 py-0.5 text-[11px] text-amber-100">
+                    <CheckCircle2 className="h-3 w-3" />
+                    Ready for Billing
+                  </div>
+                ) : (
+                  <button
+                    onClick={handleMarkReadyForBilling}
+                    disabled={markingBillingReady}
+                    className="inline-flex items-center gap-1 rounded-full border border-amber-500/60 bg-amber-500/10 px-2.5 py-0.5 text-[11px] text-amber-100 hover:bg-amber-500/20 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title="Mark this load as ready for billing"
+                  >
+                    {markingBillingReady ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <DollarSign className="h-3 w-3" />
+                    )}
+                    Ready for Billing
+                  </button>
+                )}
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   className="inline-flex items-center gap-1 rounded-full border border-emerald-500/50 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] text-emerald-100 hover:bg-emerald-500/20"
@@ -2147,7 +2333,8 @@ export default function LoadDetails() {
             </h2>
             {routeWeatherAlerts.length > 0 && (
               <span className="inline-flex items-center rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-200 border border-amber-500/40">
-                {routeWeatherAlerts.length} Alert{routeWeatherAlerts.length !== 1 ? 's' : ''}
+                {routeWeatherAlerts.length} Alert
+                {routeWeatherAlerts.length !== 1 ? "s" : ""}
               </span>
             )}
           </div>
@@ -2163,8 +2350,8 @@ export default function LoadDetails() {
         </button>
 
         {showWeatherAlerts && (
-          <RouteWeatherAlerts 
-            alerts={routeWeatherAlerts} 
+          <RouteWeatherAlerts
+            alerts={routeWeatherAlerts}
             loading={loadingWeatherAlerts}
           />
         )}
@@ -2183,15 +2370,22 @@ export default function LoadDetails() {
               Chain Control & Mountain Passes
             </h2>
             {chainControlAlerts.length > 0 && (
-              <span className={cx(
-                "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border",
-                chainControlAlerts.some(a => a.chainRequirement.code === 'R3')
-                  ? "bg-red-500/20 text-red-200 border-red-500/40"
-                  : chainControlAlerts.some(a => a.chainRequirement.code === 'R2')
-                  ? "bg-amber-500/20 text-amber-200 border-amber-500/40"
-                  : "bg-yellow-500/20 text-yellow-200 border-yellow-500/40"
-              )}>
-                {chainControlAlerts.length} Alert{chainControlAlerts.length !== 1 ? 's' : ''}
+              <span
+                className={cx(
+                  "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border",
+                  chainControlAlerts.some(
+                    (a) => a.chainRequirement.code === "R3"
+                  )
+                    ? "bg-red-500/20 text-red-200 border-red-500/40"
+                    : chainControlAlerts.some(
+                        (a) => a.chainRequirement.code === "R2"
+                      )
+                    ? "bg-amber-500/20 text-amber-200 border-amber-500/40"
+                    : "bg-yellow-500/20 text-yellow-200 border-yellow-500/40"
+                )}
+              >
+                {chainControlAlerts.length} Alert
+                {chainControlAlerts.length !== 1 ? "s" : ""}
               </span>
             )}
           </div>
@@ -2207,8 +2401,8 @@ export default function LoadDetails() {
         </button>
 
         {showChainAlerts && (
-          <ChainControlAlerts 
-            alerts={chainControlAlerts} 
+          <ChainControlAlerts
+            alerts={chainControlAlerts}
             loading={loadingChainAlerts}
           />
         )}
@@ -2238,7 +2432,9 @@ export default function LoadDetails() {
                     Stop {stop.sequence} · {stop.stop_type || "STOP"}
                   </div>
                   <div className="text-sm font-medium text-slate-50">
-                    {stop.location_name || buildStopAddress(stop) || "—"}
+                    {stop.location_name ||
+                      buildStopAddress(stop) ||
+                      "—"}
                   </div>
                   <div className="text-xs text-slate-400">
                     {buildStopAddress(stop)}
@@ -2246,9 +2442,12 @@ export default function LoadDetails() {
                 </div>
                 <div className="text-right text-xs text-slate-400">
                   <div>
-                    Start: {formatDateTime(stop.scheduled_start)}
+                    Start:{" "}
+                    {formatDateTime(stop.scheduled_start)}
                   </div>
-                  <div>End: {formatDateTime(stop.scheduled_end)}</div>
+                  <div>
+                    End: {formatDateTime(stop.scheduled_end)}
+                  </div>
                 </div>
               </div>
 
@@ -2261,7 +2460,10 @@ export default function LoadDetails() {
                       className="rounded bg-slate-900 border border-slate-700 px-2 py-0.5 text-xs text-slate-100"
                       defaultValue={stop.status || "PENDING"}
                       onChange={(e) =>
-                        handleUpdateStopStatus(stop.id, e.target.value)
+                        handleUpdateStopStatus(
+                          stop.id,
+                          e.target.value
+                        )
                       }
                       autoFocus
                     >
@@ -2281,7 +2483,9 @@ export default function LoadDetails() {
                 ) : (
                   <div
                     className="flex items-center gap-2 cursor-pointer group"
-                    onClick={() => setEditingStopStatus(stop.id)}
+                    onClick={() =>
+                      setEditingStopStatus(stop.id)
+                    }
                   >
                     <span
                       className={cx(
@@ -2327,8 +2531,8 @@ export default function LoadDetails() {
           </div>
           <div className="flex items-center gap-2 text-[11px] text-slate-400">
             <span>
-              {showRouteMap ? "Collapse" : "Expand"} · Multi-stop · Dark
-              mode
+              {showRouteMap ? "Collapse" : "Expand"} · Multi-stop ·
+              Dark mode
             </span>
             <ChevronDown
               className={cx(
@@ -2340,8 +2544,8 @@ export default function LoadDetails() {
         </button>
 
         {showRouteMap && (
-          <RouteMap 
-            stops={displayStops} 
+          <RouteMap
+            stops={displayStops}
             onRouteCalculated={handleRouteCalculated}
           />
         )}
@@ -2371,7 +2575,9 @@ export default function LoadDetails() {
           </div>
         </button>
 
-        {showAiSection && <AiRecommendationsForLoad loadId={load.id} />}
+        {showAiSection && (
+          <AiRecommendationsForLoad loadId={load.id} />
+        )}
       </section>
 
       {/* Activity Log (collapsible) */}
@@ -2420,14 +2626,18 @@ export default function LoadDetails() {
                   <div className="h-2 w-2 rounded-full bg-purple-400" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="text-slate-100">{entry.action}</div>
+                  <div className="text-slate-100">
+                    {entry.action}
+                  </div>
                   {entry.details && (
                     <div className="text-slate-400 text-[10px] mt-0.5">
                       {entry.details}
                     </div>
                   )}
                   <div className="text-slate-500 text-[10px] mt-0.5">
-                    {formatDateTime(entry.timestamp || entry.created_at)}{" "}
+                    {formatDateTime(
+                      entry.timestamp || entry.created_at
+                    )}{" "}
                     · {entry.user || "System"}
                   </div>
                 </div>
@@ -2475,7 +2685,8 @@ export default function LoadDetails() {
                 >
                   <div>
                     <div className="text-sm font-medium text-slate-100">
-                      {rel.load_number || rel.id.slice(0, 6)}
+                      {rel.load_number ||
+                        rel.id.slice(0, 6)}
                     </div>
                     <div className="text-xs text-slate-400">
                       PU: {formatDateTime(rel.pickup_at)} · DEL:{" "}
@@ -2530,7 +2741,10 @@ export default function LoadDetails() {
                   className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
                   value={editForm.load_number}
                   onChange={(e) =>
-                    setEditForm({ ...editForm, load_number: e.target.value })
+                    setEditForm({
+                      ...editForm,
+                      load_number: e.target.value,
+                    })
                   }
                 />
               </div>
@@ -2543,7 +2757,10 @@ export default function LoadDetails() {
                   className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
                   value={editForm.status}
                   onChange={(e) =>
-                    setEditForm({ ...editForm, status: e.target.value })
+                    setEditForm({
+                      ...editForm,
+                      status: e.target.value,
+                    })
                   }
                 >
                   {LOAD_STATUSES.map((s) => (
@@ -2580,7 +2797,10 @@ export default function LoadDetails() {
                   className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
                   value={editForm.miles}
                   onChange={(e) =>
-                    setEditForm({ ...editForm, miles: e.target.value })
+                    setEditForm({
+                      ...editForm,
+                      miles: e.target.value,
+                    })
                   }
                 />
               </div>
@@ -2595,7 +2815,10 @@ export default function LoadDetails() {
                   className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
                   value={editForm.rate}
                   onChange={(e) =>
-                    setEditForm({ ...editForm, rate: e.target.value })
+                    setEditForm({
+                      ...editForm,
+                      rate: e.target.value,
+                    })
                   }
                 />
               </div>
@@ -2609,7 +2832,10 @@ export default function LoadDetails() {
                   className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
                   value={editForm.reference}
                   onChange={(e) =>
-                    setEditForm({ ...editForm, reference: e.target.value })
+                    setEditForm({
+                      ...editForm,
+                      reference: e.target.value,
+                    })
                   }
                 />
               </div>
@@ -2623,7 +2849,10 @@ export default function LoadDetails() {
                   className="w-full rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-100 px-3 py-2"
                   value={editForm.commodity}
                   onChange={(e) =>
-                    setEditForm({ ...editForm, commodity: e.target.value })
+                    setEditForm({
+                      ...editForm,
+                      commodity: e.target.value,
+                    })
                   }
                 />
               </div>
@@ -2643,7 +2872,10 @@ export default function LoadDetails() {
                       : ""
                   }
                   onChange={(e) =>
-                    setEditForm({ ...editForm, pickup_at: e.target.value })
+                    setEditForm({
+                      ...editForm,
+                      pickup_at: e.target.value,
+                    })
                   }
                 />
               </div>
@@ -2663,7 +2895,10 @@ export default function LoadDetails() {
                       : ""
                   }
                   onChange={(e) =>
-                    setEditForm({ ...editForm, delivery_at: e.target.value })
+                    setEditForm({
+                      ...editForm,
+                      delivery_at: e.target.value,
+                    })
                   }
                 />
               </div>
@@ -2762,7 +2997,9 @@ export default function LoadDetails() {
             <textarea
               className="w-full rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-100 p-3 resize-none h-40"
               value={instructionsText}
-              onChange={(e) => setInstructionsText(e.target.value)}
+              onChange={(e) =>
+                setInstructionsText(e.target.value)
+              }
             />
 
             <div className="space-y-3">
@@ -2775,7 +3012,9 @@ export default function LoadDetails() {
                   placeholder="driver@example.com"
                   className="w-full rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-100 px-3 py-2 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                   value={emailTo}
-                  onChange={(e) => setEmailTo(e.target.value)}
+                  onChange={(e) =>
+                    setEmailTo(e.target.value)
+                  }
                 />
               </div>
 
@@ -2788,7 +3027,9 @@ export default function LoadDetails() {
                   placeholder="+1 555 123 4567"
                   className="w-full rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-100 px-3 py-2 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                   value={smsTo}
-                  onChange={(e) => setSmsTo(e.target.value)}
+                  onChange={(e) =>
+                    setSmsTo(e.target.value)
+                  }
                 />
               </div>
             </div>

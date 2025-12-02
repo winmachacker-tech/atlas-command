@@ -10,6 +10,8 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import "./index.css";
 
+import { Analytics } from "@vercel/analytics/react";
+
 /* Supabase */
 import { supabase } from "./lib/supabase";
 
@@ -523,6 +525,7 @@ function AppRoutes() {
     </BrowserRouter>
   );
 }
+
 if (import.meta.env.DEV) {
   attachDipsyBoardTester();
 }
@@ -532,5 +535,6 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     <MfaGate>
       <AppRoutes />
     </MfaGate>
+    <Analytics />
   </StrictMode>
 );

@@ -20,7 +20,10 @@ import { useNavigate } from "react-router-dom";
 import useAIStream from "../hooks/useAIStream";
 import { useDipsy } from "../layout/MainLayout";
 import { supabase } from "../lib/supabase";
-import { sendDipsyTextMessage } from "../lib/dipsyTextClient";
+import {
+  askDipsy,
+  loadDipsyConversationState,
+} from "../lib/dipsyTextClient";
 
 function cx(...a) {
   return a.filter(Boolean).join(" ");
@@ -66,12 +69,30 @@ export default function DipsyAIAssistant({ className = "" }) {
   const outRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  // Get current user
+  // Get current user (not critical for Dipsy, but leaving your existing logic)
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       const uid = data?.user?.id;
       setUserId(uid);
     });
+  }, []);
+
+  // ✅ NEW: Load any existing conversation_state from localStorage on mount
+  useEffect(() => {
+    const existingState = loadDipsyConversationState(null);
+    if (existingState) {
+      console.info(
+        "[DipsyAIAssistant] Loaded conversation_state from storage:",
+        existingState
+      );
+      setConversationState(existingState);
+
+      const historyLength =
+        existingState?.conversationHistory?.length || 0;
+      if (historyLength > 0) {
+        setMessageCount(historyLength);
+      }
+    }
   }, []);
 
   // Auto-scroll when messages change
@@ -182,7 +203,7 @@ export default function DipsyAIAssistant({ className = "" }) {
   };
 
   // 🔐 Read document via direct fetch to Supabase Edge Function (read-document)
-  // Now includes Authorization header with the current Supabase session token.
+  // This avoids the x-client-info CORS issue from supabase.functions.invoke.
   const readDocumentWithAI = async (fileUrl, fileName, fileObject = null) => {
     try {
       console.log("🔮 Reading document via Supabase read-document function:", {
@@ -218,7 +239,7 @@ export default function DipsyAIAssistant({ className = "" }) {
 
       const rawText = extractResult.text;
 
-      // 2) Prepare request to Supabase Edge Function
+      // 2) Send the extracted text to the Supabase Edge Function via direct fetch
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       if (!supabaseUrl) {
         throw new Error(
@@ -226,25 +247,22 @@ export default function DipsyAIAssistant({ className = "" }) {
         );
       }
 
-      // ✅ Get current session to include Authorization header (required by Supabase Functions)
+      // Get the current session for authorization
       const {
         data: { session },
       } = await supabase.auth.getSession();
-
-      const headers = {
-        "Content-Type": "application/json",
-      };
-
-      // If the user is logged in, attach the Bearer token
-      if (session?.access_token) {
-        headers["Authorization"] = `Bearer ${session.access_token}`;
+      if (!session?.access_token) {
+        throw new Error("You must be logged in to read documents.");
       }
 
       const response = await fetch(
         `${supabaseUrl}/functions/v1/read-document`,
         {
           method: "POST",
-          headers,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
           body: JSON.stringify({
             raw_text: rawText,
             file_name: fileName,
@@ -261,9 +279,7 @@ export default function DipsyAIAssistant({ className = "" }) {
           errorText
         );
         throw new Error(
-          `Function error (${response.status}): ${
-            errorText || "Unknown error"
-          }`
+          `Function error (${response.status}): ${errorText || "Unknown error"}`
         );
       }
 
@@ -369,13 +385,20 @@ export default function DipsyAIAssistant({ className = "" }) {
         };
 
         // Update conversation state with document memory
-        setConversationState((prev) => ({
-          ...prev,
-          conversationHistory: [
-            ...(prev?.conversationHistory || []),
-            docMemoryMessage,
-          ],
-        }));
+        setConversationState((prev) => {
+          const nextState = {
+            ...prev,
+            conversationHistory: [
+              ...(prev?.conversationHistory || []),
+              docMemoryMessage,
+            ],
+          };
+          console.log(
+            "💾 Updated conversation_state with document memory:",
+            nextState
+          );
+          return nextState;
+        });
 
         addMessage(
           "assistant",
@@ -401,7 +424,7 @@ export default function DipsyAIAssistant({ className = "" }) {
         conversationState
       );
 
-      const result = await sendDipsyTextMessage(finalMessage, conversationState);
+      const result = await askDipsy(finalMessage, conversationState, null);
 
       console.log("📝 Dipsy text result:", result);
 
@@ -414,15 +437,13 @@ export default function DipsyAIAssistant({ className = "" }) {
         addMessage("assistant", answer, null, null, usedAI);
 
         // ✅ CRITICAL: Store the updated conversation_state for the next call
-        // This includes context memory (lastLoadReference, lastDriverName, etc.)
         if (result.conversation_state) {
           setConversationState(result.conversation_state);
           console.log(
-            "💾 Updated conversation_state:",
+            "💾 Updated conversation_state from dipsy-text:",
             result.conversation_state
           );
 
-          // Update message count from conversation history length
           const historyLength =
             result.conversation_state?.conversationHistory?.length || 0;
           setMessageCount(historyLength);

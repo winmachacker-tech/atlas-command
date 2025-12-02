@@ -22,6 +22,7 @@ import {
   ThumbsUp,
   ThumbsDown,
   Search,
+  DollarSign, // ✅ NEW
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import AddLoadModal from "../components/AddLoadModal";
@@ -37,7 +38,6 @@ import LoadPredictCell from "../components/LoadPredictCell";
 import LearnedSuggestions from "../components/LearnedSuggestions.jsx";
 import AiRecommendationsForLoad from "../components/AiRecommendationsForLoad.jsx";
 import RCUploader from "../components/RCUploader";
-
 
 /** MUST match DB enum/check */
 const STATUS_CHOICES = [
@@ -137,7 +137,6 @@ export default function Loads() {
         driver_id: load.driver.id,
         rating: accepted ? "up" : "down",
         note: note || null,
-        // do NOT send is_interactive; let defaults & DB handle the rest
       };
 
       const { error } = await supabase
@@ -239,7 +238,7 @@ export default function Loads() {
         const shipper = (r.shipper || "").toLowerCase();
         const origin = (r.origin || "").toLowerCase();
         const dest = (r.destination || "").toLowerCase();
-        const driverName = r.driver 
+        const driverName = r.driver
           ? `${r.driver.first_name} ${r.driver.last_name}`.toLowerCase()
           : "";
         const notes = (r.notes || "").toLowerCase();
@@ -257,12 +256,11 @@ export default function Loads() {
       });
     }
 
-    // RLS handles org isolation
-
     if (priorityFilter !== "ALL") {
       rows = rows.filter(
         (r) =>
-          r.status === "PROBLEM" && (r.problem_priority || "") === priorityFilter
+          r.status === "PROBLEM" &&
+          (r.problem_priority || "") === priorityFilter
       );
     } else if (showProblemsOnly) {
       rows = rows.filter((r) => r.status === "PROBLEM");
@@ -272,6 +270,7 @@ export default function Loads() {
   }, [loads, searchTerm, showProblemsOnly, priorityFilter]);
 
   /* --------------------------- CRUD helpers --------------------------- */
+
   async function deleteLoad(id) {
     if (!confirm("Delete this load? This cannot be undone.")) return;
     try {
@@ -280,6 +279,32 @@ export default function Loads() {
       setLoads((prev) => prev.filter((l) => l.id !== id));
     } catch (e) {
       alert(e?.message || "Failed to delete load.");
+    }
+  }
+
+  // ✅ Mark load as ready for billing WITHOUT changing status
+  async function markReadyForBilling(loadId) {
+    try {
+      const { data, error } = await supabase
+        .from("loads")
+        .update({
+          billing_ready: true,
+          billing_marked_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", loadId)
+        .select(`
+          *,
+          driver:drivers!loads_driver_id_fkey(id, first_name, last_name)
+        `)
+        .single();
+
+      if (error) throw error;
+
+      setLoads((prev) => prev.map((l) => (l.id === loadId ? data : l)));
+    } catch (e) {
+      console.warn("[Loads] markReadyForBilling error:", e);
+      alert(e?.message || "Failed to mark load ready for billing.");
     }
   }
 
@@ -324,7 +349,7 @@ export default function Loads() {
     }
   }
 
-  // NEW: Unassign driver from a load (set driver_id to null)
+  // Unassign driver from a load (set driver_id to null)
   async function unassignDriver(loadId) {
     try {
       const { data, error } = await supabase
@@ -409,7 +434,10 @@ export default function Loads() {
   }
 
   async function resolveProblem(loadId) {
-    const basic = { status: "IN_TRANSIT", updated_at: new Date().toISOString() };
+    const basic = {
+      status: "IN_TRANSIT",
+      updated_at: new Date().toISOString(),
+    };
     const full = {
       ...basic,
       problem_note: null,
@@ -531,7 +559,6 @@ export default function Loads() {
         <RCUploader
           onLoadCreated={(data) => {
             console.log("Load data ready:", data);
-            // We'll implement actual load creation in next phase
           }}
         />
       </div>
@@ -562,7 +589,8 @@ export default function Loads() {
         </div>
         {searchTerm && (
           <div className="mt-2 text-xs text-white/60">
-            Found {visibleRows.length} load{visibleRows.length !== 1 ? 's' : ''}
+            Found {visibleRows.length} load
+            {visibleRows.length !== 1 ? "s" : ""}
           </div>
         )}
       </div>
@@ -646,15 +674,17 @@ export default function Loads() {
                     ? "Adjust filters or priority to see more."
                     : "Create your first load to get started."}
                 </p>
-                {!searchTerm && priorityFilter === "ALL" && !showProblemsOnly && (
-                  <button
-                    onClick={() => setIsAddOpen(true)}
-                    className="mt-4 inline-flex items-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400"
-                  >
-                    <Ico as={Plus} />
-                    Add Load
-                  </button>
-                )}
+                {!searchTerm &&
+                  priorityFilter === "ALL" &&
+                  !showProblemsOnly && (
+                    <button
+                      onClick={() => setIsAddOpen(true)}
+                      className="mt-4 inline-flex items-center gap-2 rounded-xl bg-amber-500/90 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400"
+                    >
+                      <Ico as={Plus} />
+                      Add Load
+                    </button>
+                  )}
               </div>
             </div>
           </div>
@@ -675,97 +705,371 @@ export default function Loads() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleRows.map((l) => (
-                    <tr
-                      key={l.id}
-                      className="border-t border-white/10 hover:bg-white/5"
-                    >
-                      <Td className="whitespace-nowrap">
+                  {visibleRows.map((l) => {
+                    const billingReady = !!l.billing_ready;
+
+                    return (
+                      <tr
+                        key={l.id}
+                        className="border-t border-white/10 hover:bg-white/5"
+                      >
+                        <Td className="whitespace-nowrap">
+                          {l.id ? (
+                            <Link
+                              to={`/loads/${l.id}`}
+                              className="text-emerald-400 hover:underline font-medium"
+                            >
+                              {l.reference || "—"}
+                            </Link>
+                          ) : (
+                            l.reference || "—"
+                          )}
+                          <div className="text-xs text-white/50 mt-0.5 truncate max-w-[120px]">
+                            {l.shipper || "—"}
+                          </div>
+                        </Td>
+
+                        <Td>
+                          {l.driver ? (
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 text-xs text-sky-300 whitespace-nowrap">
+                                <Ico as={UserCheck} />
+                                <span className="truncate max-w-[100px]">
+                                  {l.driver.last_name}, {l.driver.first_name}
+                                </span>
+                              </span>
+
+                              {/* Live global fit pill */}
+                              <DriverFitPill driverId={l.driver.id} />
+
+                              {/* Local fit badge */}
+                              <FitBadge load={l} />
+
+                              <ThumbButtons
+                                load={l}
+                                onFeedback={(accepted) =>
+                                  leaveFeedback(l, accepted)
+                                }
+                              />
+                            </div>
+                          ) : (
+                            <span className="text-xs text-white/40">—</span>
+                          )}
+                        </Td>
+
+                        <Td>
+                          <div className="space-y-0.5 max-w-[180px]">
+                            <div className="text-xs">
+                              <span className="text-white/60">From: </span>
+                              <span className="font-medium truncate block">
+                                {l.origin || "—"}
+                              </span>
+                            </div>
+                            <div className="text-xs">
+                              <span className="text-white/60">To: </span>
+                              <span className="font-medium truncate block">
+                                {l.destination || "—"}
+                              </span>
+                            </div>
+                          </div>
+                        </Td>
+
+                        <Td>
+                          <div className="space-y-0.5">
+                            {l.pickup_date ? (
+                              <div className="text-xs">
+                                <div className="text-white/60">Pickup:</div>
+                                <div className="font-medium">
+                                  {new Date(
+                                    l.pickup_date
+                                  ).toLocaleDateString()}
+                                </div>
+                              </div>
+                            ) : null}
+                            {l.delivery_date ? (
+                              <div className="text-xs">
+                                <div className="text-white/60">Delivery:</div>
+                                <div className="font-medium">
+                                  {new Date(
+                                    l.delivery_date
+                                  ).toLocaleDateString()}
+                                </div>
+                              </div>
+                            ) : null}
+                            {!l.pickup_date && !l.delivery_date && (
+                              <span className="text-xs text-white/40">—</span>
+                            )}
+                          </div>
+                        </Td>
+
+                        <Td>
+                          {l.rate ? (
+                            <span className="font-mono text-xs font-medium text-emerald-300 whitespace-nowrap">
+                              $
+                              {parseFloat(l.rate).toLocaleString("en-US", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-white/40">—</span>
+                          )}
+                        </Td>
+
+                        <Td>
+                          <StatusBadge value={l.status} />
+                          {l.status === "PROBLEM" && (
+                            <div className="flex items-center gap-1.5 mt-1">
+                              <PriorityBadge value={l.problem_priority} />
+                              <span className="inline-flex items-center gap-1 text-xs text-white/70 whitespace-nowrap">
+                                <Ico as={Clock} />
+                                {since(l.problem_flagged_at || l.updated_at)}
+                              </span>
+                            </div>
+                          )}
+                        </Td>
+
+                        <Td className="text-right">
+                          <div className="inline-flex items-center gap-1.5 flex-wrap justify-end">
+                            {/* AI Buttons - Compact inline version */}
+                            {!l.driver_id && (
+                              <AutoAssignDriverButtonCompact
+                                load={l}
+                                onAssigned={async (updated) => {
+                                  const fresh = await refreshOne(updated.id);
+                                  if (fresh) {
+                                    setLoads((prev) =>
+                                      prev.map((row) =>
+                                        row.id === fresh.id ? fresh : row
+                                      )
+                                    );
+                                  }
+                                }}
+                              />
+                            )}
+
+                            <LoadPredictCell
+                              loadId={l.id}
+                              origin={l.origin}
+                              destination={l.destination}
+                              size="sm"
+                            />
+
+                            {l.status === "PROBLEM" ? (
+                              <button
+                                onClick={() => resolveProblem(l.id)}
+                                className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors whitespace-nowrap"
+                              >
+                                <Ico as={CheckCircle2} />
+                                <span>Resolve</span>
+                              </button>
+                            ) : l.status === "IN_TRANSIT" ? (
+                              <button
+                                onClick={() => updateStatus(l.id, "DELIVERED")}
+                                className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors whitespace-nowrap"
+                              >
+                                <Ico as={CheckCircle2} />
+                                <span>Delivered</span>
+                              </button>
+                            ) : l.status === "DELIVERED" ? (
+                              <>
+                                <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-2 py-1 text-xs text-emerald-400 whitespace-nowrap">
+                                  <Ico as={CheckCircle2} />
+                                  <span>Complete</span>
+                                </span>
+                                <button
+                                  onClick={() => markReadyForBilling(l.id)}
+                                  disabled={billingReady}
+                                  className={cx(
+                                    "inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs whitespace-nowrap border",
+                                    billingReady
+                                      ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300 cursor-default"
+                                      : "bg-amber-500/20 border-amber-500/40 text-amber-200 hover:bg-amber-500/30 transition-colors"
+                                  )}
+                                  title={
+                                    billingReady
+                                      ? "Already in billing queue"
+                                      : "Mark this load as ready for billing"
+                                  }
+                                >
+                                  <Ico as={DollarSign} />
+                                  <span>
+                                    {billingReady
+                                      ? "Billing Ready"
+                                      : "Ready for Billing"}
+                                  </span>
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={() => setReportingLoad(l)}
+                                className="inline-flex items-center gap-1 rounded-lg bg-red-500/20 border border-red-500/40 px-2 py-1 text-xs text-red-300 hover:bg-red-500/30 transition-colors whitespace-nowrap"
+                              >
+                                <Ico as={AlertTriangle} />
+                                <span>Report</span>
+                              </button>
+                            )}
+
+                            <IconButton
+                              title={
+                                l.driver_id ? "Change Driver" : "Assign Driver"
+                              }
+                              onClick={() => openAssignDriver(l)}
+                            >
+                              <Ico as={UserCheck} />
+                            </IconButton>
+
+                            <IconButton
+                              title="View/Edit Notes"
+                              onClick={() => openNotes(l)}
+                            >
+                              <Ico as={StickyNote} />
+                            </IconButton>
+
+                            <IconButton
+                              title="Documents"
+                              onClick={() => setDocsLoad(l)}
+                            >
+                              <Ico as={FileText} />
+                            </IconButton>
+
+                            <MoreActionsMenu
+                              load={l}
+                              onViewProblem={() => openViewProblem(l.id)}
+                              onSetTransit={() =>
+                                updateStatus(l.id, "IN_TRANSIT")
+                              }
+                              onDelete={() => deleteLoad(l.id)}
+                              onEditLoad={() => setEditingLoad(l)}
+                              onUnassign={() => unassignDriver(l.id)}
+                            />
+                          </div>
+                        </Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile card view */}
+            <div className="lg:hidden space-y-3 p-3">
+              {visibleRows.map((l) => {
+                const billingReady = !!l.billing_ready;
+
+                return (
+                  <div
+                    key={l.id}
+                    className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-3"
+                  >
+                    {/* Header row */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
                         {l.id ? (
                           <Link
                             to={`/loads/${l.id}`}
-                            className="text-emerald-400 hover:underline font-medium"
+                            className="text-emerald-400 hover:underline font-medium text-sm block truncate"
                           >
                             {l.reference || "—"}
                           </Link>
                         ) : (
-                          l.reference || "—"
+                          <div className="text-sm font-medium truncate">
+                            {l.reference || "—"}
+                          </div>
                         )}
-                        <div className="text-xs text-white/50 mt-0.5 truncate max-w-[120px]">
+                        <div className="text-xs text-white/60 mt-0.5 truncate">
                           {l.shipper || "—"}
                         </div>
-                      </Td>
+                      </div>
+                      <StatusBadge value={l.status} />
+                    </div>
 
-                      <Td>
-                        {l.driver ? (
-                          <div className="space-y-1">
-                            <span className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 text-xs text-sky-300 whitespace-nowrap">
-                              <Ico as={UserCheck} />
-                              <span className="truncate max-w-[100px]">
-                                {l.driver.last_name}, {l.driver.first_name}
-                              </span>
-                            </span>
+                    {/* Driver info */}
+                    {l.driver && (
+                      <div className="flex flex-col gap-1.5">
+                        <span className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 text-xs text-sky-300 w-fit">
+                          <Ico as={UserCheck} />
+                          <span className="truncate max-w-[200px]">
+                            {l.driver.last_name}, {l.driver.first_name}
+                          </span>
+                        </span>
 
-                            {/* Live global fit pill */}
-                            <DriverFitPill driverId={l.driver.id} />
+                        {/* Live global fit pill */}
+                        <DriverFitPill driverId={l.driver.id} />
 
-                            {/* Local fit badge */}
-                            <FitBadge load={l} />
+                        {/* Local fit badge */}
+                        <FitBadge load={l} />
 
-                            <ThumbButtons
-                              load={l}
-                              onFeedback={(accepted) => leaveFeedback(l, accepted)}
-                            />
+                        <ThumbButtons
+                          load={l}
+                          onFeedback={(accepted) => leaveFeedback(l, accepted)}
+                        />
+                      </div>
+                    )}
+
+                    {/* Route info */}
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="min-w-0">
+                        <div className="text-white/60">Origin</div>
+                        <div className="font-medium truncate">
+                          {l.origin || "—"}
+                        </div>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-white/60">Destination</div>
+                        <div className="font-medium truncate">
+                          {l.destination || "—"}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Dates */}
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <div className="text-white/60">Pickup</div>
+                        {l.pickup_date ? (
+                          <div>
+                            <div className="font-medium">
+                              {new Date(
+                                l.pickup_date
+                              ).toLocaleDateString()}
+                            </div>
+                            {l.pickup_time && (
+                              <div className="text-white/60">
+                                {l.pickup_time}
+                              </div>
+                            )}
                           </div>
                         ) : (
-                          <span className="text-xs text-white/40">—</span>
+                          <div className="text-white/40">—</div>
                         )}
-                      </Td>
-
-                      <Td>
-                        <div className="space-y-0.5 max-w-[180px]">
-                          <div className="text-xs">
-                            <span className="text-white/60">From: </span>
-                            <span className="font-medium truncate block">
-                              {l.origin || "—"}
-                            </span>
-                          </div>
-                          <div className="text-xs">
-                            <span className="text-white/60">To: </span>
-                            <span className="font-medium truncate block">
-                              {l.destination || "—"}
-                            </span>
-                          </div>
-                        </div>
-                      </Td>
-
-                      <Td>
-                        <div className="space-y-0.5">
-                          {l.pickup_date ? (
-                            <div className="text-xs">
-                              <div className="text-white/60">Pickup:</div>
-                              <div className="font-medium">
-                                {new Date(l.pickup_date).toLocaleDateString()}
-                              </div>
+                      </div>
+                      <div>
+                        <div className="text-white/60">Delivery</div>
+                        {l.delivery_date ? (
+                          <div>
+                            <div className="font-medium">
+                              {new Date(
+                                l.delivery_date
+                              ).toLocaleDateString()}
                             </div>
-                          ) : null}
-                          {l.delivery_date ? (
-                            <div className="text-xs">
-                              <div className="text-white/60">Delivery:</div>
-                              <div className="font-medium">
-                                {new Date(l.delivery_date).toLocaleDateString()}
+                            {l.delivery_time && (
+                              <div className="text-white/60">
+                                {l.delivery_time}
                               </div>
-                            </div>
-                          ) : null}
-                          {!l.pickup_date && !l.delivery_date && (
-                            <span className="text-xs text-white/40">—</span>
-                          )}
-                        </div>
-                      </Td>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-white/40">—</div>
+                        )}
+                      </div>
+                    </div>
 
-                      <Td>
+                    {/* Rate and problem info */}
+                    <div className="flex items-center justify-between gap-2 text-xs flex-wrap">
+                      <div>
                         {l.rate ? (
-                          <span className="font-mono text-xs font-medium text-emerald-300 whitespace-nowrap">
+                          <span className="font-mono text-xs font-medium text-emerald-300">
                             $
                             {parseFloat(l.rate).toLocaleString("en-US", {
                               minimumFractionDigits: 2,
@@ -773,344 +1077,140 @@ export default function Loads() {
                             })}
                           </span>
                         ) : (
-                          <span className="text-xs text-white/40">—</span>
+                          <span className="text-white/40">—</span>
                         )}
-                      </Td>
+                      </div>
+                      {l.status === "PROBLEM" && (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <PriorityBadge value={l.problem_priority} />
+                          <span className="inline-flex items-center gap-1 text-white/70 whitespace-nowrap">
+                            <Ico as={Clock} />
+                            {since(l.problem_flagged_at || l.updated_at)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
 
-                      <Td>
-                        <StatusBadge value={l.status} />
-                        {l.status === "PROBLEM" && (
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <PriorityBadge value={l.problem_priority} />
-                            <span className="inline-flex items-center gap-1 text-xs text-white/70 whitespace-nowrap">
-                              <Ico as={Clock} />
-                              {since(l.problem_flagged_at || l.updated_at)}
-                            </span>
-                          </div>
-                        )}
-                      </Td>
-
-                      <Td className="text-right">
-                        <div className="inline-flex items-center gap-1.5 flex-wrap justify-end">
-                          {/* AI Buttons - Compact inline version */}
-                          {!l.driver_id && (
-                            <AutoAssignDriverButtonCompact
-                              load={l}
-                              onAssigned={async (updated) => {
-                                const fresh = await refreshOne(updated.id);
-                                if (fresh) {
-                                  setLoads((prev) =>
-                                    prev.map((row) =>
-                                      row.id === fresh.id ? fresh : row
-                                    )
-                                  );
-                                }
-                              }}
-                            />
-                          )}
-
-                          <LoadPredictCell
-                            loadId={l.id}
-                            origin={l.origin}
-                            destination={l.destination}
-                            size="sm"
-                          />
-
-                          {l.status === "PROBLEM" ? (
-                            <button
-                              onClick={() => resolveProblem(l.id)}
-                              className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors whitespace-nowrap"
-                            >
-                              <Ico as={CheckCircle2} />
-                              <span>Resolve</span>
-                            </button>
-                          ) : l.status === "IN_TRANSIT" ? (
-                            <button
-                              onClick={() => updateStatus(l.id, "DELIVERED")}
-                              className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors whitespace-nowrap"
-                            >
-                              <Ico as={CheckCircle2} />
-                              <span>Delivered</span>
-                            </button>
-                          ) : l.status === "DELIVERED" ? (
-                            <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-2 py-1 text-xs text-emerald-400 whitespace-nowrap">
-                              <Ico as={CheckCircle2} />
-                              <span>Complete</span>
-                            </span>
-                          ) : (
-                            <button
-                              onClick={() => setReportingLoad(l)}
-                              className="inline-flex items-center gap-1 rounded-lg bg-red-500/20 border border-red-500/40 px-2 py-1 text-xs text-red-300 hover:bg-red-500/30 transition-colors whitespace-nowrap"
-                            >
-                              <Ico as={AlertTriangle} />
-                              <span>Report</span>
-                            </button>
-                          )}
-
-                          <IconButton
-                            title={l.driver_id ? "Change Driver" : "Assign Driver"}
-                            onClick={() => openAssignDriver(l)}
-                          >
-                            <Ico as={UserCheck} />
-                          </IconButton>
-
-                          <IconButton
-                            title="View/Edit Notes"
-                            onClick={() => openNotes(l)}
-                          >
-                            <Ico as={StickyNote} />
-                          </IconButton>
-
-                          <IconButton
-                            title="Documents"
-                            onClick={() => setDocsLoad(l)}
-                          >
-                            <Ico as={FileText} />
-                          </IconButton>
-
-                          <MoreActionsMenu
+                    {/* AI Buttons */}
+                    <div className="flex flex-col gap-2 pt-2 border-t border-white/10">
+                      <div className="flex gap-2">
+                        {!l.driver_id && (
+                          <AutoAssignDriverButton
                             load={l}
-                            onViewProblem={() => openViewProblem(l.id)}
-                            onSetTransit={() => updateStatus(l.id, "IN_TRANSIT")}
-                            onDelete={() => deleteLoad(l.id)}
-                            onEditLoad={() => setEditingLoad(l)}
-                            onUnassign={() => unassignDriver(l.id)}
+                            size="sm"
+                            className="flex-1"
+                            onAssigned={async (updated) => {
+                              const fresh = await refreshOne(updated.id);
+                              if (fresh) {
+                                setLoads((prev) =>
+                                  prev.map((row) =>
+                                    row.id === fresh.id ? fresh : row
+                                  )
+                                );
+                              }
+                            }}
                           />
-                        </div>
-                      </Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Mobile card view */}
-            <div className="lg:hidden space-y-3 p-3">
-              {visibleRows.map((l) => (
-                <div
-                  key={l.id}
-                  className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-3"
-                >
-                  {/* Header row */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      {l.id ? (
-                        <Link
-                          to={`/loads/${l.id}`}
-                          className="text-emerald-400 hover:underline font-medium text-sm block truncate"
-                        >
-                          {l.reference || "—"}
-                        </Link>
-                      ) : (
-                        <div className="text-sm font-medium truncate">
-                          {l.reference || "—"}
-                        </div>
-                      )}
-                      <div className="text-xs text-white/60 mt-0.5 truncate">
-                        {l.shipper || "—"}
-                      </div>
-                    </div>
-                    <StatusBadge value={l.status} />
-                  </div>
-
-                  {/* Driver info */}
-                  {l.driver && (
-                    <div className="flex flex-col gap-1.5">
-                      <span className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 text-xs text-sky-300 w-fit">
-                        <Ico as={UserCheck} />
-                        <span className="truncate max-w-[200px]">
-                          {l.driver.last_name}, {l.driver.first_name}
-                        </span>
-                      </span>
-
-                      {/* Live global fit pill */}
-                      <DriverFitPill driverId={l.driver.id} />
-
-                      {/* Local fit badge */}
-                      <FitBadge load={l} />
-
-                      <ThumbButtons
-                        load={l}
-                        onFeedback={(accepted) => leaveFeedback(l, accepted)}
-                      />
-                    </div>
-                  )}
-
-                  {/* Route info */}
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="min-w-0">
-                      <div className="text-white/60">Origin</div>
-                      <div className="font-medium truncate">
-                        {l.origin || "—"}
-                      </div>
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-white/60">Destination</div>
-                      <div className="font-medium truncate">
-                        {l.destination || "—"}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Dates */}
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <div className="text-white/60">Pickup</div>
-                      {l.pickup_date ? (
-                        <div>
-                          <div className="font-medium">
-                            {new Date(l.pickup_date).toLocaleDateString()}
-                          </div>
-                          {l.pickup_time && (
-                            <div className="text-white/60">
-                              {l.pickup_time}
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="text-white/40">—</div>
-                      )}
-                    </div>
-                    <div>
-                      <div className="text-white/60">Delivery</div>
-                      {l.delivery_date ? (
-                        <div>
-                          <div className="font-medium">
-                            {new Date(l.delivery_date).toLocaleDateString()}
-                          </div>
-                          {l.delivery_time && (
-                            <div className="text-white/60">
-                              {l.delivery_time}
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="text-white/40">—</div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Rate and problem info */}
-                  <div className="flex items-center justify-between gap-2 text-xs flex-wrap">
-                    <div>
-                      {l.rate ? (
-                        <span className="font-mono text-xs font-medium text-emerald-300">
-                          $
-                          {parseFloat(l.rate).toLocaleString("en-US", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </span>
-                      ) : (
-                        <span className="text-white/40">—</span>
-                      )}
-                    </div>
-                    {l.status === "PROBLEM" && (
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <PriorityBadge value={l.problem_priority} />
-                        <span className="inline-flex items-center gap-1 text-white/70 whitespace-nowrap">
-                          <Ico as={Clock} />
-                          {since(l.problem_flagged_at || l.updated_at)}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* AI Buttons */}
-                  <div className="flex flex-col gap-2 pt-2 border-t border-white/10">
-                    <div className="flex gap-2">
-                      {!l.driver_id && (
-                        <AutoAssignDriverButton
-                          load={l}
+                        )}
+                        <LoadPredictCell
+                          loadId={l.id}
+                          origin={l.origin}
+                          destination={l.destination}
                           size="sm"
-                          className="flex-1"
-                          onAssigned={async (updated) => {
-                            const fresh = await refreshOne(updated.id);
-                            if (fresh) {
-                              setLoads((prev) =>
-                                prev.map((row) =>
-                                  row.id === fresh.id ? fresh : row
-                                )
-                              );
-                            }
-                          }}
+                          className={!l.driver_id ? "" : "flex-1"}
                         />
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/10">
+                      {l.status === "PROBLEM" ? (
+                        <button
+                          onClick={() => resolveProblem(l.id)}
+                          className="flex-1 min-w-[120px] inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                        >
+                          <Ico as={CheckCircle2} />
+                          <span>Resolve</span>
+                        </button>
+                      ) : l.status === "IN_TRANSIT" ? (
+                        <button
+                          onClick={() => updateStatus(l.id, "DELIVERED")}
+                          className="flex-1 min-w-[120px] inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+                        >
+                          <Ico as={CheckCircle2} />
+                          <span>Delivered</span>
+                        </button>
+                      ) : l.status === "DELIVERED" ? (
+                        <div className="flex flex-col sm:flex-row gap-2 w-full">
+                          <span className="flex-1 min-w-[120px] inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 text-xs text-emerald-400">
+                            <Ico as={CheckCircle2} />
+                            <span>Complete</span>
+                          </span>
+                          <button
+                            onClick={() => markReadyForBilling(l.id)}
+                            disabled={billingReady}
+                            className={cx(
+                              "flex-1 min-w-[140px] inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs border",
+                              billingReady
+                                ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300 cursor-default"
+                                : "bg-amber-500/20 border-amber-500/40 text-amber-200 hover:bg-amber-500/30 transition-colors"
+                            )}
+                            title={
+                              billingReady
+                                ? "Already in billing queue"
+                                : "Mark this load as ready for billing"
+                            }
+                          >
+                            <Ico as={DollarSign} />
+                            <span>
+                              {billingReady
+                                ? "Billing Ready"
+                                : "Ready for Billing"}
+                            </span>
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setReportingLoad(l)}
+                          className="flex-1 min-w-[120px] inline-flex items-center justify-center gap-1.5 rounded-lg bg-red-500/20 border border-red-500/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/30 transition-colors"
+                        >
+                          <Ico as={AlertTriangle} />
+                          <span>Report</span>
+                        </button>
                       )}
-                      <LoadPredictCell
-                        loadId={l.id}
-                        origin={l.origin}
-                        destination={l.destination}
-                        size="sm"
-                        className={!l.driver_id ? "" : "flex-1"}
+
+                      <IconButton
+                        title={l.driver_id ? "Change Driver" : "Assign Driver"}
+                        onClick={() => openAssignDriver(l)}
+                      >
+                        <Ico as={UserCheck} />
+                      </IconButton>
+
+                      <IconButton
+                        title="View/Edit Notes"
+                        onClick={() => openNotes(l)}
+                      >
+                        <Ico as={StickyNote} />
+                      </IconButton>
+
+                      <IconButton
+                        title="Documents"
+                        onClick={() => setDocsLoad(l)}
+                      >
+                        <Ico as={FileText} />
+                      </IconButton>
+
+                      <MoreActionsMenu
+                        load={l}
+                        onViewProblem={() => openViewProblem(l.id)}
+                        onSetTransit={() => updateStatus(l.id, "IN_TRANSIT")}
+                        onDelete={() => deleteLoad(l.id)}
+                        onEditLoad={() => setEditingLoad(l)}
+                        onUnassign={() => unassignDriver(l.id)}
                       />
                     </div>
                   </div>
-
-                  {/* Actions */}
-                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/10">
-                    {l.status === "PROBLEM" ? (
-                      <button
-                        onClick={() => resolveProblem(l.id)}
-                        className="flex-1 min-w-[120px] inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors"
-                      >
-                        <Ico as={CheckCircle2} />
-                        <span>Resolve</span>
-                      </button>
-                    ) : l.status === "IN_TRANSIT" ? (
-                      <button
-                        onClick={() => updateStatus(l.id, "DELIVERED")}
-                        className="flex-1 min-w-[120px] inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/30 transition-colors"
-                      >
-                        <Ico as={CheckCircle2} />
-                        <span>Delivered</span>
-                      </button>
-                    ) : l.status === "DELIVERED" ? (
-                      <span className="flex-1 min-w-[120px] inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 text-xs text-emerald-400">
-                        <Ico as={CheckCircle2} />
-                        <span>Complete</span>
-                      </span>
-                    ) : (
-                      <button
-                        onClick={() => setReportingLoad(l)}
-                        className="flex-1 min-w-[120px] inline-flex items-center justify-center gap-1.5 rounded-lg bg-red-500/20 border border-red-500/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/30 transition-colors"
-                      >
-                        <Ico as={AlertTriangle} />
-                        <span>Report</span>
-                      </button>
-                    )}
-
-                    <IconButton
-                      title={l.driver_id ? "Change Driver" : "Assign Driver"}
-                      onClick={() => openAssignDriver(l)}
-                    >
-                      <Ico as={UserCheck} />
-                    </IconButton>
-
-                    <IconButton
-                      title="View/Edit Notes"
-                      onClick={() => openNotes(l)}
-                    >
-                      <Ico as={StickyNote} />
-                    </IconButton>
-
-                    <IconButton
-                      title="Documents"
-                      onClick={() => setDocsLoad(l)}
-                    >
-                      <Ico as={FileText} />
-                    </IconButton>
-
-                    <MoreActionsMenu
-                      load={l}
-                      onViewProblem={() => openViewProblem(l.id)}
-                      onSetTransit={() => updateStatus(l.id, "IN_TRANSIT")}
-                      onDelete={() => deleteLoad(l.id)}
-                      onEditLoad={() => setEditingLoad(l)}
-                      onUnassign={() => unassignDriver(l.id)}
-                    />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}
@@ -1118,28 +1218,28 @@ export default function Loads() {
 
       {/* Add Load modal */}
       {isAddOpen && (
-  <AddLoadModal
-    isOpen={isAddOpen}
-    onClose={() => setIsAddOpen(false)}
-    onAdded={(row) => setLoads((prev) => [row, ...prev])}
-  />
-)}
+        <AddLoadModal
+          isOpen={isAddOpen}
+          onClose={() => setIsAddOpen(false)}
+          onAdded={(row) => setLoads((prev) => [row, ...prev])}
+        />
+      )}
 
       {/* Edit Load modal */}
-     {editingLoad && (
-  <EditLoadModal
-    load={editingLoad}
-    onClose={() => setEditingLoad(null)}
-    onSaved={(updated) => {
-      if (updated?.id) {
-        setLoads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
-      }
-      setEditingLoad(null);
-    }}
-  />
-)}
-
-
+      {editingLoad && (
+        <EditLoadModal
+          load={editingLoad}
+          onClose={() => setEditingLoad(null)}
+          onSaved={(updated) => {
+            if (updated?.id) {
+              setLoads((prev) =>
+                prev.map((l) => (l.id === updated.id ? updated : l))
+              );
+            }
+            setEditingLoad(null);
+          }}
+        />
+      )}
 
       {/* Assign Driver modal */}
       {!!assigningDriverLoad && (
