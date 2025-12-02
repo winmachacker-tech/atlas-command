@@ -379,6 +379,10 @@ export default function LoadDetails() {
   const [loading, setLoading] = useState(true);
   const [loadingDocs, setLoadingDocs] = useState(false);
   const [uploading, setUploading] = useState(false);
+
+  // NEW: dedicated POD upload state
+  const [uploadingPod, setUploadingPod] = useState(false);
+
   const [error, setError] = useState("");
 
   // driver info
@@ -437,6 +441,7 @@ export default function LoadDetails() {
   const [loadingChainAlerts, setLoadingChainAlerts] = useState(false);
 
   const fileInputRef = useRef(null);
+  const podFileInputRef = useRef(null); // NEW: POD input
   const quickActionsRef = useRef(null);
 
   // collapse state
@@ -746,6 +751,84 @@ export default function LoadDetails() {
       setUploading(false);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
+      }
+    }
+  };
+
+  // NEW: dedicated POD upload handler
+  const handleUploadPod = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !load?.org_id || !load?.id) return;
+
+    try {
+      setUploadingPod(true);
+      const folder = `${load.org_id}/${load.id}`;
+      const filePath = `${folder}/POD-${Date.now()}-${file.name}`;
+
+      // 1) Upload to Storage
+      const { error: uploadErr } = await supabase.storage
+        .from(DOC_BUCKET)
+        .upload(filePath, file, {
+          upsert: true,
+        });
+
+      if (uploadErr) throw uploadErr;
+
+      // 2) Insert metadata row into load_docs as POD
+      try {
+        const { error: docErr } = await supabase
+          .from("load_docs")
+          .insert({
+            load_id: load.id,
+            org_id: load.org_id,
+            doc_type: "POD",
+            storage_path: filePath,
+          });
+
+        if (docErr) {
+          console.error("[LoadDetails] load_docs insert error", docErr);
+        }
+      } catch (docErr) {
+        console.error("[LoadDetails] load_docs insert error", docErr);
+      }
+
+      // 3) Update loads.pod_url so Billing can see POD presence quickly
+      const { data: publicUrlData } = supabase.storage
+        .from(DOC_BUCKET)
+        .getPublicUrl(filePath);
+
+      const podUrl = publicUrlData?.publicUrl || null;
+
+      try {
+        const { error: updateErr } = await supabase
+          .from("loads")
+          .update({ pod_url: podUrl })
+          .eq("id", load.id);
+
+        if (updateErr) {
+          console.error(
+            "[LoadDetails] failed to update loads.pod_url",
+            updateErr
+          );
+        }
+      } catch (updateErr) {
+        console.error(
+          "[LoadDetails] failed to update loads.pod_url",
+          updateErr
+        );
+      }
+
+      await refreshDocuments();
+      await logActivity("POD uploaded", file.name);
+      await fetchData();
+      alert("POD uploaded and attached to this load.");
+    } catch (err) {
+      console.error("[LoadDetails] POD upload error", err);
+      alert("POD upload failed. Check console for details.");
+    } finally {
+      setUploadingPod(false);
+      if (podFileInputRef.current) {
+        podFileInputRef.current.value = "";
       }
     }
   };
@@ -1129,7 +1212,7 @@ export default function LoadDetails() {
 
       await logActivity("Load marked ready for billing");
 
-      // 🔁 NEW: After marking ready, send the user to the Billing page
+      // After marking ready, send the user to the Billing page
       navigate("/billing");
     } catch (err) {
       console.error(
@@ -1667,6 +1750,8 @@ export default function LoadDetails() {
       ? (load.rate / load.miles).toFixed(2)
       : null;
 
+  const hasPod = !!load?.pod_url; // POD status flag
+
   if (loading) {
     return (
       <div className="p-6 flex items-center justify-center">
@@ -1721,6 +1806,7 @@ export default function LoadDetails() {
                   ? formatDateTime(pickupStop.scheduled_start)
                   : formatDateTime(load.pickup_at)}{" "}
                 · DEL:{" "}
+
                 {deliveryStop
                   ? formatDateTime(deliveryStop.scheduled_end)
                   : formatDateTime(load.delivery_at)}{" "}
@@ -2212,6 +2298,18 @@ export default function LoadDetails() {
                 </h2>
               </div>
               <div className="flex items-center gap-2">
+                {/* POD status pill */}
+                {hasPod ? (
+                  <div className="inline-flex items-center gap-1 rounded-full border border-emerald-500/60 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] text-emerald-100">
+                    <CheckCircle2 className="h-3 w-3" />
+                    POD on file
+                  </div>
+                ) : (
+                  <div className="inline-flex items-center gap-1 rounded-full border border-slate-600 bg-slate-900/80 px-2.5 py-0.5 text-[11px] text-slate-300">
+                    No POD
+                  </div>
+                )}
+
                 {/* Ready for Billing pill / button */}
                 {load.ready_for_billing ? (
                   <div className="inline-flex items-center gap-1 rounded-full border border-amber-500/60 bg-amber-500/10 px-2.5 py-0.5 text-[11px] text-amber-100">
@@ -2233,9 +2331,25 @@ export default function LoadDetails() {
                     Ready for Billing
                   </button>
                 )}
+
+                {/* NEW: Upload POD */}
+                <button
+                  onClick={() => podFileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1 rounded-full border border-emerald-500/80 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-60 disabled:cursor-not-allowed"
+                  disabled={uploadingPod}
+                >
+                  {uploadingPod ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Upload className="h-3 w-3" />
+                  )}
+                  Upload POD
+                </button>
+
+                {/* Existing generic upload for other docs */}
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="inline-flex items-center gap-1 rounded-full border border-emerald-500/50 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] text-emerald-100 hover:bg-emerald-500/20"
+                  className="inline-flex items-center gap-1 rounded-full border border-slate-600 bg-slate-900/80 px-2.5 py-0.5 text-[11px] text-slate-100 hover:bg-slate-800"
                   disabled={uploading}
                 >
                   {uploading ? (
@@ -2243,8 +2357,9 @@ export default function LoadDetails() {
                   ) : (
                     <Upload className="h-3 w-3" />
                   )}
-                  Upload
+                  Upload Doc
                 </button>
+
                 <button
                   onClick={() => refreshDocuments()}
                   className="inline-flex items-center gap-1 rounded-full border border-slate-600 px-2.5 py-0.5 text-[11px] text-slate-100 hover:bg-slate-800"
@@ -2254,6 +2369,14 @@ export default function LoadDetails() {
                   Refresh
                 </button>
               </div>
+
+              {/* Hidden inputs */}
+              <input
+                ref={podFileInputRef}
+                type="file"
+                className="hidden"
+                onChange={handleUploadPod}
+              />
               <input
                 ref={fileInputRef}
                 type="file"
@@ -2276,10 +2399,10 @@ export default function LoadDetails() {
                   No documents yet
                 </div>
                 <button
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => podFileInputRef.current?.click()}
                   className="text-xs text-emerald-300 hover:text-emerald-200"
                 >
-                  Upload your first document
+                  Upload a POD or other document
                 </button>
               </div>
             )}

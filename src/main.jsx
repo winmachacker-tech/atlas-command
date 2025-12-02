@@ -60,6 +60,8 @@ const Login = lazy(() => import("./pages/Login.jsx"));
 const Signup = lazy(() => import("./pages/Signup.jsx"));
 const Customers = lazy(() => import("./pages/Customers.jsx"));
 const CustomerDetail = lazy(() => import("./pages/CustomerDetail.jsx"));
+const Documents = lazy(() => import("./pages/Documents.jsx"));
+const LaneTraining = lazy(() => import("./pages/LaneTraining.jsx"));
 const Sales = lazy(() => import("./pages/Sales.jsx"));
 const Audit = lazy(() => import("./pages/Audit.jsx"));
 const AiLaneIntelligence = lazy(() => import("./pages/AiLaneIntelligence.jsx"));
@@ -116,6 +118,11 @@ const FleetMap = lazy(() => import("./pages/FleetMap.jsx"));
 /* Commander Board Debug – truth-aligned board snapshot */
 const CommanderBoardDebug = lazy(() =>
   import("./pages/CommanderBoardDebug.jsx")
+);
+
+/* Invoice details (printable invoice) */
+const InvoiceDetails = lazy(() =>
+  import("./pages/InvoiceDetails.jsx")
 );
 
 /* ---------------------- LOGIN EVENT WIRING ---------------------- */
@@ -428,6 +435,9 @@ function AppRoutes() {
                   <Route path="trucks/:id" element={<TruckProfile />} />
                   <Route path="customers" element={<Customers />} />
                   <Route path="customers/:id" element={<CustomerDetail />} />
+                  <Route path="documents" element={<Documents />} />
+                  <Route path="lanetraining" element={<LaneTraining />} />
+                  <Route path="LaneTraining/:id" element={<LaneTraining />} />
                   <Route path="sales" element={<Sales />} />
 
                   {/* Fleet Map */}
@@ -455,6 +465,10 @@ function AppRoutes() {
                   <Route
                     path="driver-settlements"
                     element={<DriverSettlements />}
+                  />
+                  <Route
+                    path="invoices/:invoiceId"
+                    element={<InvoiceDetails />}
                   />
 
                   {/* AI */}

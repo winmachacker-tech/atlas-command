@@ -1,4 +1,4 @@
-﻿// FILE: src/pages/Billing.jsx
+﻿// FILE: src/pages/BillingPage.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
@@ -49,9 +49,7 @@ const fmtUSD = (n) =>
   }).format(money(n));
 
 /**
- * We normalize both "ready" loads and invoice rows into a single shape
- * so the table can render them consistently.
- *
+ * Normalized billing row shape:
  * {
  *   kind: "READY" | "INVOICED" | "PAID",
  *   loadId,
@@ -61,6 +59,7 @@ const fmtUSD = (n) =>
  *   shipper,
  *   deliveredAt,
  *   podUrl,
+ *   hasPod,
  *   amount,
  *   invoiceNumber?,
  *   invoiceStatus?,
@@ -73,8 +72,8 @@ const fmtUSD = (n) =>
 export default function BillingPage() {
   const nav = useNavigate();
 
-  // Tab state
-  const [activeTab, setActiveTab] = useState("READY"); // READY | INVOICED | PAID
+  // Tab state: READY | INVOICED | PAID | HISTORY
+  const [activeTab, setActiveTab] = useState("READY");
 
   // Data
   const [rows, setRows] = useState([]);
@@ -97,6 +96,13 @@ export default function BillingPage() {
     [count]
   );
 
+  const isReadyTab = activeTab === "READY";
+  const isPaidTab = activeTab === "PAID";
+  const isHistoryTab = activeTab === "HISTORY";
+  const showPaidColumn = isPaidTab || isHistoryTab;
+
+  const colSpan = isReadyTab ? 7 : showPaidColumn ? 10 : 9;
+
   // Reset page when filters or tab change
   useEffect(() => {
     setPage(1);
@@ -118,12 +124,18 @@ export default function BillingPage() {
 
     try {
       if (activeTab === "READY") {
-        // 1) READY TAB
-        // Loads that:
-        // - are marked ready_for_billing = true
-        // - are NOT cancelled
-        // - have no invoice yet (load_invoices empty)
-        let query = supabase
+        /**
+         * READY TAB
+         *
+         * Loads that:
+         * - status = 'DELIVERED'
+         * - ready_for_billing = true
+         * - have NO invoice rows yet
+         * - If "Require POD" checked:
+         *     hasPod = loads.pod_url IS NOT NULL
+         *              OR at least one load_docs row with doc_type = 'POD'
+         */
+        let loadsQuery = supabase
           .from("loads")
           .select(
             `
@@ -135,32 +147,78 @@ export default function BillingPage() {
             status,
             pod_url,
             rate,
-            load_invoices ( id )
+            load_invoices(id)
           `,
             { count: "exact" }
           )
           .eq("ready_for_billing", true)
-          .neq("status", "CANCELED");
+          .eq("status", "DELIVERED"); // tighten to delivered only
 
-        if (dateFrom) query = query.gte("delivery_date", dateFrom);
-        if (dateTo) query = query.lte("delivery_date", dateTo);
-        if (requirePOD) query = query.not("pod_url", "is", null);
+        if (dateFrom) loadsQuery = loadsQuery.gte("delivery_date", dateFrom);
+        if (dateTo) loadsQuery = loadsQuery.lte("delivery_date", dateTo);
 
-        // Sort newest deliveries first
-        query = query
+        loadsQuery = loadsQuery
           .order("delivery_date", { ascending: false })
           .range(from, to);
 
-        const { data, error, count: total } = await query;
-        if (error) throw error;
+        const {
+          data: loadsData,
+          error: loadsError,
+          count: total,
+        } = await loadsQuery;
+        if (loadsError) throw loadsError;
 
         // Filter out loads that already have an invoice row
-        const readyLoads = (data || []).filter(
+        const readyLoads = (loadsData || []).filter(
           (l) => !l.load_invoices || l.load_invoices.length === 0
         );
 
+        // Build map of load_id -> hasPodDoc by querying load_docs separately
+        let podsByLoadId = {};
+        const loadIds = readyLoads.map((l) => l.id).filter(Boolean);
+
+        if (loadIds.length > 0) {
+          try {
+            const { data: docsData, error: docsError } = await supabase
+              .from("load_docs")
+              .select("load_id, doc_type")
+              .in("load_id", loadIds);
+
+            if (docsError) {
+              console.warn(
+                "[Billing] load_docs lookup failed, falling back to pod_url only:",
+                docsError
+              );
+            } else {
+              podsByLoadId = (docsData || []).reduce((acc, doc) => {
+                if (doc.doc_type === "POD") {
+                  acc[doc.load_id] = true;
+                }
+                return acc;
+              }, {});
+            }
+          } catch (docsCatchError) {
+            console.warn(
+              "[Billing] load_docs secondary query error:",
+              docsCatchError
+            );
+          }
+        }
+
+        // Enrich with hasPod flag (pod_url OR load_docs with doc_type = 'POD')
+        const enriched = readyLoads.map((l) => {
+          const hasPodDoc = !!podsByLoadId[l.id];
+          const hasPod = !!l.pod_url || hasPodDoc;
+          return { ...l, hasPod };
+        });
+
+        // Apply Require POD toggle (client-side) using hasPod
+        const afterPodFilter = requirePOD
+          ? enriched.filter((l) => l.hasPod)
+          : enriched;
+
         // Client-side search by reference/shipper
-        const filtered = applySearchFilterToReady(readyLoads, q);
+        const filtered = applySearchFilterToReady(afterPodFilter, q);
 
         const normalized = filtered.map((l) => ({
           kind: "READY",
@@ -170,7 +228,8 @@ export default function BillingPage() {
           reference: l.reference || "—",
           shipper: l.shipper || "—",
           deliveredAt: l.delivery_date,
-          podUrl: l.pod_url,
+          podUrl: l.pod_url || null,
+          hasPod: !!l.hasPod,
           amount: l.rate || 0,
           invoiceNumber: null,
           invoiceStatus: null,
@@ -179,12 +238,18 @@ export default function BillingPage() {
         }));
 
         setRows(normalized);
-        // Count is approximate with filters; good enough for MVP
+        // Count is approximate with client-side filters; good enough for MVP
         setCount(total ?? normalized.length);
       } else {
-        // 2) INVOICED / PAID TABS
-        const statusFilter = activeTab === "INVOICED" ? "ISSUED" : "PAID";
-
+        /**
+         * INVOICED / PAID / HISTORY TABS
+         *
+         * We pivot around real invoice rows in load_invoices.
+         *
+         * INVOICED  → status = 'ISSUED'
+         * PAID      → status = 'PAID'
+         * HISTORY   → status IN ('ISSUED', 'PAID')
+         */
         let query = supabase
           .from("load_invoices")
           .select(
@@ -208,8 +273,15 @@ export default function BillingPage() {
             )
           `,
             { count: "exact" }
-          )
-          .eq("status", statusFilter);
+          );
+
+        if (activeTab === "INVOICED") {
+          query = query.eq("status", "ISSUED");
+        } else if (activeTab === "PAID") {
+          query = query.eq("status", "PAID");
+        } else if (activeTab === "HISTORY") {
+          query = query.in("status", ["ISSUED", "PAID"]);
+        }
 
         // Basic date filter on load delivery date
         if (dateFrom) query = query.gte("load.delivery_date", dateFrom);
@@ -230,6 +302,7 @@ export default function BillingPage() {
           shipper: inv.load?.shipper || "—",
           deliveredAt: inv.load?.delivery_date || null,
           podUrl: inv.load?.pod_url || null,
+          hasPod: !!inv.load?.pod_url,
           amount: inv.amount || inv.load?.rate || 0,
           invoiceNumber: inv.invoice_number || "—",
           invoiceStatus: inv.status,
@@ -288,6 +361,11 @@ export default function BillingPage() {
     nav(`/loads/${loadId}`);
   }
 
+  function goToInvoice(invoiceId) {
+    if (!invoiceId) return;
+    nav(`/invoices/${invoiceId}`);
+  }
+
   // Create an invoice for a READY load
   async function createInvoice(row) {
     if (!row || !row.loadId || !row.orgId) return;
@@ -297,30 +375,107 @@ export default function BillingPage() {
     setBanner(null);
 
     try {
-      const now = new Date().toISOString();
-      const invoiceNumber = `INV-${Date.now()}`;
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const invoiceNumber = `INV-${now.getTime()}`;
 
-      const { data, error } = await supabase
+      // 0) Lookup the load to get customer_id (RLS-safe)
+      const {
+        data: loadRecord,
+        error: loadError,
+      } = await supabase
+        .from("loads")
+        .select("id, org_id, customer_id")
+        .eq("id", row.loadId)
+        .single();
+
+      if (loadError) {
+        console.error("[Billing] createInvoice load lookup error:", loadError);
+        throw loadError;
+      }
+
+      // 1) Default snapshot values
+      let customerSnapshot = {
+        customer_name: null,
+        customer_payment_terms: null,
+        customer_credit_limit: null,
+      };
+
+      // 2) If the load is linked to a customer, snapshot their billing fields
+      if (loadRecord?.customer_id) {
+        const {
+          data: customer,
+          error: customerError,
+        } = await supabase
+          .from("customers")
+          .select("id, company_name, payment_terms, credit_limit")
+          .eq("id", loadRecord.customer_id)
+          .single();
+
+        if (customerError) {
+          console.warn(
+            "[Billing] createInvoice customer lookup error (continuing without snapshot):",
+            customerError
+          );
+        } else if (customer) {
+          customerSnapshot = {
+            customer_name: customer.company_name || null,
+            customer_payment_terms: customer.payment_terms || null,
+            customer_credit_limit: customer.credit_limit ?? null,
+          };
+        }
+      }
+
+      // 3) Create the invoice row with customer snapshot fields
+      const {
+        data: invoice,
+        error: invoiceError,
+      } = await supabase
         .from("load_invoices")
         .insert({
           org_id: row.orgId, // RLS-safe: must match current_org_id()
           load_id: row.loadId,
           invoice_number: invoiceNumber,
           status: "ISSUED",
-          amount: row.amount || 0,
+          amount: row.amount || 0, // initial total = linehaul
           currency: "USD",
-          issued_at: now,
+          issued_at: nowIso,
           notes: "",
+          customer_name: customerSnapshot.customer_name,
+          customer_payment_terms: customerSnapshot.customer_payment_terms,
+          customer_credit_limit: customerSnapshot.customer_credit_limit,
         })
         .select()
         .single();
 
-      if (error) throw error;
+      if (invoiceError) throw invoiceError;
+
+      // 4) Seed default Linehaul line item using the rate
+      const lineAmount = row.amount || 0;
+      const description = `Linehaul – Load ${row.reference || row.loadId}`;
+
+      const { error: itemError } = await supabase
+        .from("load_invoice_items")
+        .insert({
+          org_id: row.orgId,
+          invoice_id: invoice.id,
+          description,
+          qty: 1,
+          rate: lineAmount,
+          amount: lineAmount,
+          kind: "LINEHAUL",
+          sort_order: 1,
+        });
+
+      if (itemError) {
+        console.error("[Billing] seed Linehaul item error:", itemError);
+        throw itemError;
+      }
 
       setBanner(
-        `Invoice ${data.invoice_number || data.id.slice(0, 8)} created for load ${
-          row.reference
-        }.`
+        `Invoice ${
+          invoice.invoice_number || invoice.id.slice(0, 8)
+        } created for load ${row.reference}.`
       );
       await fetchPage(page);
     } catch (e) {
@@ -428,12 +583,16 @@ export default function BillingPage() {
           label="Paid"
           countLabel="Paid invoices"
           active={activeTab === "PAID"}
-          onClick={() => setActiveTab("PAID")}
+        />
+        <TabButton
+          label="History"
+          countLabel="All invoiced loads"
+          active={activeTab === "HISTORY"}
         />
       </div>
 
       {/* Filters */}
-      <div className="grid grid-cols-1 gap-3 rounded-xl border border-white/10 bg-white/5 p-3 sm:grid-cols-2 lg:grid-cols-6">
+      <div className="grid grid-cols-1 gap-3 rounded-xl border border-white/10 bg.white/5 p-3 sm:grid-cols-2 lg:grid-cols-6">
         <div className="relative sm:col-span-2">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 opacity-60" />
           <input
@@ -502,22 +661,17 @@ export default function BillingPage() {
                 <Th>Delivered</Th>
                 <Th>POD</Th>
                 <Th>Amount</Th>
-                <Th>
-                  {activeTab === "READY" ? "Billing State" : "Invoice #"}
-                </Th>
-                {activeTab !== "READY" && <Th>Status</Th>}
-                {activeTab !== "READY" && <Th>Issued</Th>}
-                {activeTab === "PAID" && <Th>Paid</Th>}
+                <Th>{isReadyTab ? "Billing State" : "Invoice #"}</Th>
+                {!isReadyTab && <Th>Status</Th>}
+                {!isReadyTab && <Th>Issued</Th>}
+                {showPaidColumn && <Th>Paid</Th>}
                 <Th>Actions</Th>
               </tr>
             </thead>
             <tbody>
               {loading && (
                 <tr>
-                  <td
-                    colSpan={activeTab === "READY" ? 7 : activeTab === "PAID" ? 9 : 8}
-                    className="p-6 text-center opacity-70"
-                  >
+                  <td colSpan={colSpan} className="p-6 text-center opacity-70">
                     <span className="inline-flex items-center gap-2">
                       <Loader2 className="h-4 w-4 animate-spin" /> Loading…
                     </span>
@@ -527,10 +681,7 @@ export default function BillingPage() {
 
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td
-                    colSpan={activeTab === "READY" ? 7 : activeTab === "PAID" ? 9 : 8}
-                    className="p-6 text-center opacity-70"
-                  >
+                  <td colSpan={colSpan} className="p-6 text-center opacity-70">
                     No records found.
                   </td>
                 </tr>
@@ -559,12 +710,17 @@ export default function BillingPage() {
                           href={r.podUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-xs hover:bg-white/5"
+                          className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-xs hover:bg.white/5"
                           title="Open POD"
                         >
                           <FileCheck2 className="h-4 w-4" /> View POD
                           <ExternalLink className="h-3 w-3 opacity-70" />
                         </a>
+                      ) : r.hasPod ? (
+                        <span className="inline-flex items-center rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-100">
+                          <FileCheck2 className="mr-1 h-3 w-3" />
+                          POD on file
+                        </span>
                       ) : (
                         <span className="text-xs opacity-60">No POD</span>
                       )}
@@ -585,7 +741,7 @@ export default function BillingPage() {
                     </Td>
 
                     {/* Invoice status / dates */}
-                    {activeTab !== "READY" && (
+                    {!isReadyTab && (
                       <Td>
                         <span
                           className={cx(
@@ -599,23 +755,21 @@ export default function BillingPage() {
                         </span>
                       </Td>
                     )}
-                    {activeTab !== "READY" && (
-                      <Td>{fmtDateTime(r.issuedAt)}</Td>
-                    )}
-                    {activeTab === "PAID" && <Td>{fmtDateTime(r.paidAt)}</Td>}
+                    {!isReadyTab && <Td>{fmtDateTime(r.issuedAt)}</Td>}
+                    {showPaidColumn && <Td>{fmtDateTime(r.paidAt)}</Td>}
 
                     {/* Actions */}
-                    <Td className="min-w-[220px]">
+                    <Td className="min-w-[260px]">
                       <div className="flex flex-wrap items-center gap-2">
                         {r.kind === "READY" && (
                           <button
                             onClick={() => createInvoice(r)}
                             className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-40"
-                            disabled={loading || !r.podUrl}
+                            disabled={loading || !r.hasPod}
                             title={
-                              r.podUrl
+                              r.hasPod
                                 ? "Create invoice for this load"
-                                : "Requires POD before invoicing"
+                                : "Requires POD (file or doc) before invoicing"
                             }
                           >
                             <DollarSign className="h-4 w-4" />
@@ -632,6 +786,17 @@ export default function BillingPage() {
                           >
                             <ShieldCheck className="h-4 w-4" />
                             Mark Paid
+                          </button>
+                        )}
+
+                        {r.invoiceId && (
+                          <button
+                            onClick={() => goToInvoice(r.invoiceId)}
+                            className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs hover:bg-white/5"
+                            title="View invoice"
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                            View Invoice
                           </button>
                         )}
 
@@ -692,9 +857,7 @@ function Th({ children }) {
 }
 
 function Td({ children, className }) {
-  return (
-    <td className={cx("px-4 py-3 align-top", className)}>{children}</td>
-  );
+  return <td className={cx("px-4 py-3 align-top", className)}>{children}</td>;
 }
 
 function TabButton({ label, active, onClick, countLabel }) {

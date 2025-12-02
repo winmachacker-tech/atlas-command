@@ -1,55 +1,43 @@
 // FILE: src/pages/Customers.jsx
-// Purpose: Lane training overview + working "Train AI" button + inline trainer per lane,
-// scoped by org via Postgres RLS on AI tables.
+// Purpose: Customer management - add, edit, view customers
+// With pagination for performance
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import {
   RefreshCw,
-  PlayCircle,
+  Plus,
   Search as SearchIcon,
+  Building2,
+  Phone,
+  Mail,
+  MapPin,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
+  X,
+  ChevronLeft,
   ChevronRight,
-  ChevronDown,
+  TruckIcon,
+  User,
 } from "lucide-react";
-import CustomerThumbsBar from "../components/CustomerThumbsBar.jsx";
-import CreateLoadFromCustomerButton from "../components/CreateLoadFromCustomerButton.jsx";
+
+/* ---------------------------- constants -------------------------- */
+const PAGE_SIZE = 25;
 
 /* ---------------------------- helpers ---------------------------- */
-function cx(...a) { return a.filter(Boolean).join(" "); }
-function pct(n) {
-  const v = Number(n);
-  if (!Number.isFinite(v)) return "0.0%";
-  return `${(v * 100).toFixed(1)}%`;
-}
-function firstKey(obj, keys, fallback = undefined) {
-  for (const k of keys) if (obj && obj[k] != null && obj[k] !== "") return obj[k];
-  return fallback;
-}
-function num(...vals) {
-  for (const v of vals) {
-    const n = Number(v);
-    if (Number.isFinite(n)) return n;
-  }
-  return 0;
+function cx(...a) {
+  return a.filter(Boolean).join(" ");
 }
 
-/** Parse lane string like "Birmingham, AL → Charlotte, NC" into parts. */
-function parseLane(laneKey) {
-  if (!laneKey || typeof laneKey !== "string") {
-    return { origin_city: null, origin_state: null, dest_city: null, dest_state: null };
+function formatPhone(phone) {
+  if (!phone) return null;
+  const cleaned = phone.replace(/\D/g, "");
+  if (cleaned.length === 10) {
+    return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6)}`;
   }
-  const arrow = laneKey.includes("→") ? "→" : laneKey.includes("->") ? "->" : null;
-  if (!arrow) return { origin_city: null, origin_state: null, dest_city: null, dest_state: null };
-
-  const [left, right] = laneKey.split(arrow).map((s) => s.trim());
-  const [oc, os] = (left || "").split(",").map((s) => s.trim());
-  const [dc, ds] = (right || "").split(",").map((s) => s.trim());
-  return {
-    origin_city: oc || null,
-    origin_state: os || null,
-    dest_city: dc || null,
-    dest_state: ds || null,
-  };
+  return phone;
 }
 
 /* ------------------------- tiny toast hook ----------------------- */
@@ -82,506 +70,835 @@ function useToast() {
   return { show, ToastView: View };
 }
 
-/* ----------------- inline lane trainer --------------------------- */
-function LaneInlineTrainer({ laneKey, customerId = null, shipper = "Unknown", limit = 3 }) {
-  const [loading, setLoading] = useState(true);
-  const [rows, setRows] = useState([]);
-  const [err, setErr] = useState(null);
-  const [driverMeta, setDriverMeta] = useState({});
-  const [creating, setCreating] = useState(false);
-  const [createMsg, setCreateMsg] = useState("");
+/* ----------------------- Add/Edit Customer Modal ----------------- */
+function CustomerModal({ customer, onClose, onSaved, show: toastShow }) {
+  const isEdit = !!customer?.id;
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    name: customer?.name || customer?.company_name || "",
+    company_name: customer?.company_name || "",
+    customer_type: customer?.customer_type || "shipper",
+    mc_number: customer?.mc_number || "",
+    dot_number: customer?.dot_number || "",
+    contact_name: customer?.contact_name || "",
+    contact_phone: customer?.contact_phone || "",
+    contact_email: customer?.contact_email || "",
+    address_line1: customer?.address_line1 || "",
+    address_line2: customer?.address_line2 || "",
+    city: customer?.city || "",
+    state: customer?.state || "",
+    zip_code: customer?.zip_code || "",
+    payment_terms: customer?.payment_terms || "Net 30",
+    credit_limit: customer?.credit_limit || "",
+    notes: customer?.notes || "",
+    status: customer?.status || "active",
+  });
 
-  const refetch = useCallback(async () => {
-    if (!laneKey) return;
-    setLoading(true);
-    setErr(null);
-    try {
-      const { data, error } = await supabase.rpc("rpc_ai_best_drivers_for_lane", {
-        lane_key: laneKey,
-        limit_count: limit,
-      });
-      if (error) throw error;
-      setRows(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error("LaneInlineTrainer fetch failed:", e);
-      setErr(e);
-    } finally {
-      setLoading(false);
-    }
-  }, [laneKey, limit]);
+  const handleChange = (field) => (e) => {
+    setForm((f) => ({ ...f, [field]: e.target.value }));
+  };
 
-  useEffect(() => {
-    refetch();
-  }, [refetch]);
-
-  // Resolve driver names if not included
-  useEffect(() => {
-    const ids = rows.map((r) => r.driver_id).filter(Boolean);
-    const missing = ids.filter((id) => !driverMeta[id]);
-    if (!missing.length) return;
-
-    (async () => {
-      const { data, error } = await supabase
-        .from("drivers")
-        .select("id, full_name, phone")
-        .in("id", missing);
-
-      if (!error && Array.isArray(data)) {
-        setDriverMeta((prev) => {
-          const next = { ...prev };
-          for (const r of data) {
-            next[r.id] = {
-              full_name: r.full_name || "",
-              phone: r.phone || "",
-            };
-          }
-          return next;
-        });
-      }
-    })();
-  }, [rows, driverMeta]);
-
-  const SHOW_CREATE_BUTTONS = true;
-
-  // Direct RPC create (includes required p_shipper, leaves status to DB default)
-  const handleCreateDirect = async () => {
-    if (!laneKey || !customerId) {
-      setCreateMsg("Missing lane or customer.");
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const customerName = form.name.trim() || form.company_name.trim();
+    if (!customerName) {
+      toastShow("Customer name is required", "err");
       return;
     }
-    const { origin_city, origin_state, dest_city, dest_state } = parseLane(laneKey);
-    if (!origin_city || !origin_state || !dest_city || !dest_state) {
-      setCreateMsg("Could not parse lane (need City, ST → City, ST).");
-      return;
-    }
-    setCreating(true);
-    setCreateMsg("");
+
+    setSaving(true);
     try {
       const payload = {
-        p_customer_id: customerId,
-        p_shipper: shipper || "Unknown",
-        p_origin_city: origin_city,
-        p_origin_state: origin_state,
-        p_dest_city: dest_city,
-        p_dest_state: dest_state,
-        p_pickup_at: new Date().toISOString(),
-        p_delivery_at: null,
-        p_rate: 1500,
-        p_driver_id: null,
+        name: customerName,
+        company_name: form.company_name.trim() || customerName,
+        customer_type: form.customer_type || "shipper",
+        mc_number: form.mc_number.trim() || null,
+        dot_number: form.dot_number.trim() || null,
+        contact_name: form.contact_name.trim() || null,
+        contact_phone: form.contact_phone.trim() || null,
+        contact_email: form.contact_email.trim() || null,
+        address_line1: form.address_line1.trim() || null,
+        address_line2: form.address_line2.trim() || null,
+        city: form.city.trim() || null,
+        state: form.state.trim() || null,
+        zip_code: form.zip_code.trim() || null,
+        payment_terms: form.payment_terms || "Net 30",
+        credit_limit: form.credit_limit ? Number(form.credit_limit) : null,
+        notes: form.notes.trim() || null,
+        status: form.status || "active",
       };
 
-      const { error } = await supabase.rpc("rpc_create_load_from_customer", payload);
-      if (error) throw error;
-      setCreateMsg("Load created.");
-      await refetch();
-    } catch (e) {
-      console.error(e);
-      setCreateMsg(e.message || "Create failed.");
+      if (isEdit) {
+        const { error } = await supabase
+          .from("customers")
+          .update(payload)
+          .eq("id", customer.id);
+        if (error) throw error;
+        toastShow("Customer updated", "ok");
+      } else {
+        const { error } = await supabase.from("customers").insert([payload]);
+        if (error) throw error;
+        toastShow("Customer added", "ok");
+      }
+
+      onSaved();
+      onClose();
+    } catch (err) {
+      console.error("Save customer error:", err);
+      toastShow(err.message || "Failed to save customer", "err");
     } finally {
-      setCreating(false);
-      setTimeout(() => setCreateMsg(""), 2500);
+      setSaving(false);
     }
   };
 
   return (
-    <div className="px-4 py-3 bg-zinc-950/40 border-t border-zinc-800/60">
-      {SHOW_CREATE_BUTTONS && (
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <div className="text-xs text-zinc-400">
-            Top drivers for{" "}
-            <span className="text-zinc-200 font-medium">{laneKey}</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <CreateLoadFromCustomerButton
-              customerId={customerId}
-              laneKey={laneKey}
-              driverId={null}
-              rate={1500}
-              onCreated={() => refetch()}
-              shipper={shipper}
-            />
-            <button
-              onClick={handleCreateDirect}
-              disabled={creating}
-              className={cx(
-                "inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs",
-                "border border-emerald-600/40 text-emerald-200 hover:bg-emerald-600/10",
-                creating && "opacity-60 cursor-not-allowed"
-              )}
-              title="Create Load (direct RPC)"
-            >
-              <PlayCircle
-                className={cx("w-3.5 h-3.5", creating && "animate-pulse")}
-              />
-              {creating ? "Creating…" : "Create Load (direct)"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {createMsg && <div className="mb-2 text-xs text-zinc-400">{createMsg}</div>}
-      {loading && <div className="text-xs text-zinc-400">Loading top drivers…</div>}
-      {err && (
-        <div className="text-xs text-rose-400">
-          {String(err.message || err)}
-        </div>
-      )}
-
-      {!loading && rows.length === 0 && (
-        <div className="text-xs text-zinc-400">
-          No AI signals yet for{" "}
-          <span className="text-zinc-200 font-medium">{laneKey}</span>. Click 👍/👎
-          to start training.
-        </div>
-      )}
-
-      <div className="grid gap-2">
-        {rows.map((r, idx) => (
-          <div
-            key={`${laneKey}-${r.driver_id}-${idx}`}
-            className="flex items-center justify-between rounded-xl border border-zinc-800/70 bg-zinc-900/40 px-3 py-2"
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="bg-zinc-900 border border-zinc-700/60 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-700/60">
+          <h2 className="text-lg font-semibold text-zinc-100">
+            {isEdit ? "Edit Customer" : "Add Customer"}
+          </h2>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200"
           >
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-6 text-zinc-500 text-xs tabular-nums">
-                {idx + 1}
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="p-6 space-y-6">
+          {/* Company Info */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wide">
+              Company Information
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="md:col-span-2">
+                <label className="block text-sm text-zinc-400 mb-1">
+                  Company Name *
+                </label>
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={handleChange("name")}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50"
+                  placeholder="ABC Freight Inc."
+                />
               </div>
-              <div className="min-w-0">
-                <div className="text-sm text-zinc-100 font-medium truncate">
-                  {driverMeta[r.driver_id]?.full_name ||
-                    r.driver_name ||
-                    r.driver_id}
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1">
+                  Customer Type
+                </label>
+                <select
+                  value={form.customer_type}
+                  onChange={handleChange("customer_type")}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 focus:outline-none focus:border-blue-500/50"
+                >
+                  <option value="shipper">Shipper</option>
+                  <option value="broker">Broker</option>
+                  <option value="carrier">Carrier</option>
+                  <option value="consignee">Consignee</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1">Status</label>
+                <select
+                  value={form.status}
+                  onChange={handleChange("status")}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 focus:outline-none focus:border-blue-500/50"
+                >
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                  <option value="on_hold">On Hold</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1">
+                  MC Number
+                </label>
+                <input
+                  type="text"
+                  value={form.mc_number}
+                  onChange={handleChange("mc_number")}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50"
+                  placeholder="MC-123456"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1">
+                  DOT Number
+                </label>
+                <input
+                  type="text"
+                  value={form.dot_number}
+                  onChange={handleChange("dot_number")}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50"
+                  placeholder="DOT-123456"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Primary Contact */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wide">
+              Primary Contact
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="md:col-span-2">
+                <label className="block text-sm text-zinc-400 mb-1">
+                  Contact Name
+                </label>
+                <input
+                  type="text"
+                  value={form.contact_name}
+                  onChange={handleChange("contact_name")}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50"
+                  placeholder="John Smith"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1">Phone</label>
+                <input
+                  type="tel"
+                  value={form.contact_phone}
+                  onChange={handleChange("contact_phone")}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50"
+                  placeholder="(555) 123-4567"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1">Email</label>
+                <input
+                  type="email"
+                  value={form.contact_email}
+                  onChange={handleChange("contact_email")}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50"
+                  placeholder="john@abcfreight.com"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Address */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wide">
+              Address
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="md:col-span-2">
+                <label className="block text-sm text-zinc-400 mb-1">
+                  Address Line 1
+                </label>
+                <input
+                  type="text"
+                  value={form.address_line1}
+                  onChange={handleChange("address_line1")}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50"
+                  placeholder="123 Main St"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm text-zinc-400 mb-1">
+                  Address Line 2
+                </label>
+                <input
+                  type="text"
+                  value={form.address_line2}
+                  onChange={handleChange("address_line2")}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50"
+                  placeholder="Suite 100"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1">City</label>
+                <input
+                  type="text"
+                  value={form.city}
+                  onChange={handleChange("city")}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50"
+                  placeholder="Sacramento"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-zinc-400 mb-1">
+                    State
+                  </label>
+                  <input
+                    type="text"
+                    value={form.state}
+                    onChange={handleChange("state")}
+                    maxLength={2}
+                    className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50 uppercase"
+                    placeholder="CA"
+                  />
                 </div>
-                <div className="text-xs text-zinc-400">
-                  Score {num(r.fit_score, r.score)} • 👍 {num(r.up_events)} • 👎{" "}
-                  {num(r.down_events)}
+                <div>
+                  <label className="block text-sm text-zinc-400 mb-1">ZIP</label>
+                  <input
+                    type="text"
+                    value={form.zip_code}
+                    onChange={handleChange("zip_code")}
+                    className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50"
+                    placeholder="95814"
+                  />
                 </div>
               </div>
             </div>
-
-            <CustomerThumbsBar
-              driverId={r.driver_id}
-              laneKey={laneKey}
-              customerId={customerId}
-              onChange={refetch}
-            />
           </div>
-        ))}
+
+          {/* Billing */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wide">
+              Billing
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1">
+                  Payment Terms
+                </label>
+                <select
+                  value={form.payment_terms}
+                  onChange={handleChange("payment_terms")}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 focus:outline-none focus:border-blue-500/50"
+                >
+                  <option value="Net 15">Net 15</option>
+                  <option value="Net 30">Net 30</option>
+                  <option value="Net 45">Net 45</option>
+                  <option value="Net 60">Net 60</option>
+                  <option value="Quick Pay">Quick Pay</option>
+                  <option value="COD">COD</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-1">
+                  Credit Limit
+                </label>
+                <input
+                  type="number"
+                  value={form.credit_limit}
+                  onChange={handleChange("credit_limit")}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50"
+                  placeholder="50000"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Notes */}
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm text-zinc-400 mb-1">Notes</label>
+              <textarea
+                value={form.notes}
+                onChange={handleChange("notes")}
+                rows={3}
+                className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700/60 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-blue-500/50 resize-none"
+                placeholder="Internal notes about this customer..."
+              />
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-zinc-700/60">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg border border-zinc-700/60 text-zinc-300 hover:bg-zinc-800/60"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className={cx(
+                "px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium",
+                saving && "opacity-60 cursor-not-allowed"
+              )}
+            >
+              {saving ? "Saving…" : isEdit ? "Save Changes" : "Add Customer"}
+            </button>
+          </div>
+        </form>
       </div>
+    </div>
+  );
+}
+
+/* ----------------------- Delete Confirmation --------------------- */
+function DeleteConfirm({ customer, onClose, onDeleted, show: toastShow }) {
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      const { error } = await supabase
+        .from("customers")
+        .delete()
+        .eq("id", customer.id);
+      if (error) throw error;
+      toastShow("Customer deleted", "ok");
+      onDeleted();
+      onClose();
+    } catch (err) {
+      console.error("Delete customer error:", err);
+      toastShow(err.message || "Failed to delete customer", "err");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="bg-zinc-900 border border-zinc-700/60 rounded-2xl w-full max-w-md p-6 shadow-2xl">
+        <h2 className="text-lg font-semibold text-zinc-100 mb-2">
+          Delete Customer?
+        </h2>
+        <p className="text-sm text-zinc-400 mb-6">
+          Are you sure you want to delete{" "}
+          <span className="text-zinc-200 font-medium">
+            {customer.name || customer.company_name}
+          </span>
+          ? This action cannot be undone.
+        </p>
+        <div className="flex items-center justify-end gap-3">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg border border-zinc-700/60 text-zinc-300 hover:bg-zinc-800/60"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className={cx(
+              "px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-medium",
+              deleting && "opacity-60 cursor-not-allowed"
+            )}
+          >
+            {deleting ? "Deleting…" : "Delete"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------- Row Actions Dropdown -------------------- */
+function RowActions({ customer, onEdit, onDelete }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (ref.current && !ref.current.contains(e.target)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className="p-2 rounded-lg hover:bg-zinc-800/60 text-zinc-400 hover:text-zinc-200"
+      >
+        <MoreHorizontal className="w-4 h-4" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-36 bg-zinc-900 border border-zinc-700/60 rounded-lg shadow-xl z-20 py-1">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onEdit(customer);
+            }}
+            className="w-full px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-800/60 flex items-center gap-2"
+          >
+            <Pencil className="w-4 h-4" />
+            Edit
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onDelete(customer);
+            }}
+            className="w-full px-3 py-2 text-left text-sm text-rose-400 hover:bg-zinc-800/60 flex items-center gap-2"
+          >
+            <Trash2 className="w-4 h-4" />
+            Delete
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
 /* ------------------------------ page ----------------------------- */
 export default function Customers() {
-  const [rows, setRows] = useState([]);
+  const navigate = useNavigate();
+  const [customers, setCustomers] = useState([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
-
-  // training state machine: idle | backfilling | retraining | done
-  const [trainStep, setTrainStep] = useState("idle");
-  const [training, setTraining] = useState(false);
-
   const [q, setQ] = useState("");
-  const [open, setOpen] = useState({});
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [page, setPage] = useState(0);
+
+  // Modals
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editCustomer, setEditCustomer] = useState(null);
+  const [deleteCustomer, setDeleteCustomer] = useState(null);
+
   const { show, ToastView } = useToast();
 
-  // Signal map (lane-level AI feedback totals)
-  const [signalMap, setSignalMap] = useState({});
-
-  const fetchSignals = useCallback(async () => {
-    try {
-      const { data, error } = await supabase.rpc("rpc_ai_lane_signal_totals");
-      if (error) throw error;
-      const map = {};
-      if (Array.isArray(data)) {
-        for (const r of data) {
-          // normalize key just like fn_norm_lane does
-          const norm = (r.lane_key || "")
-            .toLowerCase()
-            .replace(/^lane\s+/, "")
-            .replace(/->/g, "→")
-            .trim();
-          map[norm] = { up: r.up_total || 0, down: r.down_total || 0 };
-        }
-      }
-      setSignalMap(map);
-    } catch (e) {
-      console.error("fetchSignals failed:", e);
-    }
-  }, []);
-
-  const fetchRows = useCallback(async () => {
+  const fetchCustomers = useCallback(async () => {
     setLoading(true);
     try {
-      // *** key piece: this RPC is now org-scoped via org_id + RLS ***
-      const { data, error } = await supabase.rpc("rpc_ai_customer_training", {
-        limit_rows: 5000, // you can bump this if you want more
-      });
+      // Build query
+      let query = supabase
+        .from("customers")
+        .select("*", { count: "exact" })
+        .is("deleted_at", null)
+        .order("name", { ascending: true })
+        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+
+      // Apply status filter
+      if (statusFilter !== "all") {
+        query = query.eq("status", statusFilter);
+      }
+
+      // Apply search filter (server-side for better performance)
+      if (q.trim()) {
+        query = query.or(
+          `name.ilike.%${q.trim()}%,company_name.ilike.%${q.trim()}%,mc_number.ilike.%${q.trim()}%,city.ilike.%${q.trim()}%,contact_name.ilike.%${q.trim()}%`
+        );
+      }
+
+      const { data, error, count } = await query;
+
       if (error) throw error;
-      setRows(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error(e);
-      show(`Failed to load: ${e.message || String(e)}`, "err");
+      setCustomers(Array.isArray(data) ? data : []);
+      setTotalCount(count || 0);
+    } catch (err) {
+      console.error("Fetch customers error:", err);
+      show(err.message || "Failed to load customers", "err");
     } finally {
       setLoading(false);
     }
-  }, [show]);
+  }, [show, page, statusFilter, q]);
 
-  // Load data & signal totals on mount
+  // Reset to page 0 when filters change
   useEffect(() => {
-    fetchRows();
-  }, [fetchRows]);
+    setPage(0);
+  }, [q, statusFilter]);
+
   useEffect(() => {
-    fetchSignals();
-  }, [fetchSignals]);
+    fetchCustomers();
+  }, [fetchCustomers]);
 
-  async function handleTrainAI() {
-    if (training) return;
-    setTraining(true);
-    setTrainStep("backfilling");
-    try {
-      // Backfill examples for THIS org (RLS / org_id handles scoping)
-      const { data: backfillData, error: backfillError } =
-        await supabase.rpc("rpc_ai_backfill_examples_from_raw", {
-          p_lane_key: null,
-        });
-      if (backfillError) throw backfillError;
-      const inserted = Number(backfillData ?? 0);
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
 
-      setTrainStep("retraining");
+  const statusBadge = (status) => {
+    const styles = {
+      active: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30",
+      inactive: "bg-zinc-500/10 text-zinc-400 border-zinc-500/30",
+      on_hold: "bg-amber-500/10 text-amber-300 border-amber-500/30",
+    };
+    const labels = {
+      active: "Active",
+      inactive: "Inactive",
+      on_hold: "On Hold",
+    };
+    return (
+      <span
+        className={cx(
+          "px-2 py-0.5 rounded-full text-xs border",
+          styles[status] || styles.inactive
+        )}
+      >
+        {labels[status] || status || "—"}
+      </span>
+    );
+  };
 
-      // Call retrain with NO arguments – matches rpc_ai_retrain() in Postgres
-      const { error: retrainError } = await supabase.rpc("rpc_ai_retrain");
-      if (retrainError) throw retrainError;
-
-      // Refresh both grids and signal totals after train
-      await fetchRows();
-      await fetchSignals();
-
-      setTrainStep("done");
-
-      show(
-        inserted > 0
-          ? `AI trained: ${inserted} examples processed.`
-          : "AI train completed (no new examples found).",
-        "ok"
-      );
-    } catch (e) {
-      console.error(e);
-      const msg = e?.message || e?.details || String(e);
-      show(`Train failed: ${msg}`, "err");
-      setTrainStep("idle");
-    } finally {
-      setTraining(false);
-      setTimeout(() => setTrainStep("idle"), 2000);
-    }
-  }
-
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    if (!s) return rows;
-    return rows.filter((r) => {
-      const label = String(
-        firstKey(r, ["lane_key", "customer", "customer_name", "name", "title"], "")
-      ).toLowerCase();
-      return label.includes(s);
-    });
-  }, [rows, q]);
+  const typeBadge = (type) => {
+    const styles = {
+      shipper: "bg-blue-500/10 text-blue-300 border-blue-500/30",
+      broker: "bg-purple-500/10 text-purple-300 border-purple-500/30",
+      carrier: "bg-amber-500/10 text-amber-300 border-amber-500/30",
+      consignee: "bg-teal-500/10 text-teal-300 border-teal-500/30",
+    };
+    return (
+      <span
+        className={cx(
+          "px-2 py-0.5 rounded-full text-xs border capitalize",
+          styles[type] || "bg-zinc-500/10 text-zinc-400 border-zinc-500/30"
+        )}
+      >
+        {type || "—"}
+      </span>
+    );
+  };
 
   return (
     <div className="p-4 md:p-6">
       {ToastView}
 
       {/* Header */}
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-2">
-          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs">
-            🧠
+          <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-blue-500/15 border border-blue-500/30">
+            <Building2 className="w-4 h-4 text-blue-300" />
           </span>
           <h1 className="text-xl font-semibold text-zinc-100">Customers</h1>
-
-          {/* Training status pill */}
-          <div
-            className={cx(
-              "ml-3 text-xs px-2 py-1 rounded-md border transition",
-              trainStep === "idle" &&
-                "border-zinc-700/60 text-zinc-400",
-              trainStep === "backfilling" &&
-                "border-sky-600/40 text-sky-200 bg-sky-500/10",
-              trainStep === "retraining" &&
-                "border-violet-600/40 text-violet-200 bg-violet-500/10",
-              trainStep === "done" &&
-                "border-emerald-600/40 text-emerald-200 bg-emerald-500/10"
-            )}
-            title="Training progress"
-          >
-            {trainStep === "idle" && "Idle"}
-            {trainStep === "backfilling" && "Backfilling examples…"}
-            {trainStep === "retraining" && "Retraining model…"}
-            {trainStep === "done" && "Done"}
-          </div>
+          <span className="ml-2 px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 text-xs">
+            {totalCount}
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
           <button
-            onClick={fetchRows}
+            onClick={fetchCustomers}
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60"
             title="Refresh"
           >
-            <RefreshCw
-              className={cx("w-4 h-4", loading && "animate-spin")}
-            />
+            <RefreshCw className={cx("w-4 h-4", loading && "animate-spin")} />
             Refresh
           </button>
 
           <button
-            onClick={handleTrainAI}
-            disabled={training}
-            className={cx(
-              "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border",
-              "border-emerald-600/40 text-emerald-200 hover:bg-emerald-600/10",
-              training && "opacity-60 cursor-not-allowed"
-            )}
-            title="Train AI with historical + raw data"
+            onClick={() => setShowAddModal(true)}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium"
           >
-            <PlayCircle
-              className={cx("w-4 h-4", training && "animate-pulse")}
-            />
-            {training ? "Training…" : "Train AI"}
+            <Plus className="w-4 h-4" />
+            Add Customer
           </button>
         </div>
       </div>
 
-      {/* Search */}
-      <div className="mb-3 flex items-center gap-2">
-        <div className="flex items-center gap-2 px-3 h-10 rounded-lg border border-zinc-700/60 bg-zinc-900/40 text-zinc-200 w-full max-w-md">
+      {/* Filters */}
+      <div className="mb-4 flex flex-col sm:flex-row gap-3">
+        <div className="flex items-center gap-2 px-3 h-10 rounded-lg border border-zinc-700/60 bg-zinc-900/40 text-zinc-200 w-full sm:max-w-md">
           <SearchIcon className="w-4 h-4 text-zinc-400" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
             className="bg-transparent outline-none w-full placeholder:text-zinc-500"
-            placeholder="Search customers/lanes…"
+            placeholder="Search by name, MC#, city, contact..."
           />
         </div>
+
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="h-10 px-3 rounded-lg border border-zinc-700/60 bg-zinc-900/40 text-zinc-200 focus:outline-none"
+        >
+          <option value="all">All Status</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+          <option value="on_hold">On Hold</option>
+        </select>
       </div>
 
-      {/* Grid */}
+      {/* Table */}
       <div className="rounded-2xl border border-zinc-700/60 overflow-hidden">
-        <div className="grid grid-cols-[34px_minmax(320px,1fr)_100px_110px_110px_110px_160px_180px] px-4 py-2 bg-zinc-900/50 text-xs text-zinc-400 border-b border-zinc-700/60">
-          <div /> {/* chevron col */}
-          <div>Customer</div>
-          <div className="text-center">Region</div>
-          <div className="text-center">Recent 90d</div>
-          <div className="text-center">Total Rows</div>
-          <div className="text-center">Avg Margin</div>
-          <div className="text-center">Avg Rate</div>
-          <div className="text-center">Signals</div>
-        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="bg-zinc-900/50 text-xs text-zinc-400 border-b border-zinc-700/60">
+                <th className="px-4 py-3 text-left font-medium">Customer</th>
+                <th className="px-4 py-3 text-left font-medium">Contact</th>
+                <th className="px-4 py-3 text-left font-medium">Location</th>
+                <th className="px-4 py-3 text-center font-medium">Type</th>
+                <th className="px-4 py-3 text-center font-medium">Loads</th>
+                <th className="px-4 py-3 text-center font-medium">Terms</th>
+                <th className="px-4 py-3 text-center font-medium">Status</th>
+                <th className="px-4 py-3 text-right font-medium w-16">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/70">
+              {loading && (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-zinc-400">
+                    Loading customers…
+                  </td>
+                </tr>
+              )}
 
-        {loading && (
-          <div className="p-4 text-sm text-zinc-400">Loading…</div>
-        )}
+              {!loading && customers.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-zinc-400">
+                    No customers found.{" "}
+                    <button
+                      onClick={() => setShowAddModal(true)}
+                      className="text-blue-400 hover:underline"
+                    >
+                      Add your first customer
+                    </button>
+                  </td>
+                </tr>
+              )}
 
-        {!loading && filtered.length === 0 && (
-          <div className="p-4 text-sm text-zinc-400">No lanes found.</div>
-        )}
-
-        <div className="divide-y divide-zinc-800/70">
-          {filtered.map((r, i) => {
-            const label = firstKey(
-              r,
-              ["lane_key", "customer", "customer_name", "name", "title"],
-              ""
-            );
-            const isOpen = !!open[label];
-            const laneLabel = label || "—";
-            const laneKey = label || null;
-
-            const recent90 = num(r.recent_90d, r.recent90, r.recent);
-            const total = num(r.total_rows, r.total, r.count);
-
-            const normLane = laneLabel
-              .toLowerCase()
-              .replace(/^lane\s+/, "")
-              .replace(/->/g, "→")
-              .trim();
-            const sig = signalMap[normLane] || {};
-            const upSig =
-              sig.up ?? num(r.up_signals, r.ups, r.up_count, r.upvotes);
-            const downSig =
-              sig.down ?? num(r.down_signals, r.downs, r.down_count, r.downvotes);
-
-            const shipper = firstKey(
-              r,
-              ["customer_name", "customer", "name", "title", "shipper_name", "shipper"],
-              "Unknown"
-            );
-
-            return (
-              <div key={`${laneLabel}-${i}`} className="group">
-                <div
-                  className={cx(
-                    "grid grid-cols-[34px_minmax(320px,1fr)_100px_110px_110px_110px_160px_180px] px-4 py-2 text-sm items-center",
-                    "hover:bg-zinc-900/40"
-                  )}
+              {customers.map((c) => (
+                <tr
+                  key={c.id}
+                  className="hover:bg-zinc-900/40 cursor-pointer"
+                  onClick={() => navigate(`/customers/${c.id}`)}
                 >
-                  {/* expand/collapse */}
-                  <button
-                    onClick={() =>
-                      setOpen((o) => ({ ...o, [laneLabel]: !isOpen }))
-                    }
-                    className="h-7 w-7 inline-flex items-center justify-center rounded-md border border-zinc-800/60 hover:bg-zinc-900/60"
-                    title={isOpen ? "Hide trainer" : "Show trainer"}
-                  >
-                    {isOpen ? (
-                      <ChevronDown className="w-4 h-4 text-zinc-300" />
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-lg bg-zinc-800 flex items-center justify-center flex-shrink-0">
+                        <Building2 className="w-4 h-4 text-zinc-400" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-zinc-100 truncate">
+                          {c.name || c.company_name || "Unnamed"}
+                        </div>
+                        {c.mc_number && (
+                          <div className="text-xs text-zinc-500">
+                            {c.mc_number}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="space-y-0.5">
+                      {c.contact_name && (
+                        <div className="flex items-center gap-1.5 text-sm text-zinc-300">
+                          <User className="w-3.5 h-3.5 flex-shrink-0 text-zinc-500" />
+                          {c.contact_name}
+                        </div>
+                      )}
+                      {c.contact_phone && (
+                        <div className="flex items-center gap-1.5 text-sm text-zinc-400">
+                          <Phone className="w-3.5 h-3.5 flex-shrink-0" />
+                          {formatPhone(c.contact_phone)}
+                        </div>
+                      )}
+                      {c.contact_email && (
+                        <div className="flex items-center gap-1.5 text-sm text-zinc-400 truncate max-w-[180px]">
+                          <Mail className="w-3.5 h-3.5 flex-shrink-0" />
+                          {c.contact_email}
+                        </div>
+                      )}
+                      {!c.contact_name && !c.contact_phone && !c.contact_email && (
+                        <span className="text-sm text-zinc-600">—</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    {c.city || c.state ? (
+                      <div className="flex items-center gap-1.5 text-sm text-zinc-400">
+                        <MapPin className="w-3.5 h-3.5 flex-shrink-0" />
+                        {[c.city, c.state].filter(Boolean).join(", ")}
+                      </div>
                     ) : (
-                      <ChevronRight className="w-4 h-4 text-zinc-300" />
+                      <span className="text-sm text-zinc-600">—</span>
                     )}
-                  </button>
-
-                  {/* lane / customer */}
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="w-2 h-2 rounded-full bg-amber-400/80" />
-                    <div className="truncate text-zinc-100">{laneLabel}</div>
-                  </div>
-
-                  <div className="text-center text-zinc-500">—</div>
-                  <div className="text-center tabular-nums">{recent90}</div>
-                  <div className="text-center tabular-nums">{total}</div>
-                  <div className="text-center tabular-nums">
-                    {pct(r.avg_margin)}
-                  </div>
-                  <div className="text-center text-zinc-500">—</div>
-
-                  <div className="flex items-center justify-center gap-2">
-                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-200 text-xs">
-                      ▲ {upSig}
-                    </span>
-                    <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-rose-200 text-xs">
-                      ▼ {downSig}
-                    </span>
-                  </div>
-                </div>
-
-                {isOpen && laneKey && (
-                  <LaneInlineTrainer
-                    laneKey={laneKey}
-                    customerId={r.customer_id || null}
-                    shipper={shipper}
-                    limit={3}
-                  />
-                )}
-              </div>
-            );
-          })}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    {typeBadge(c.customer_type)}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <div className="flex items-center justify-center gap-1 text-sm text-zinc-300">
+                      <TruckIcon className="w-3.5 h-3.5 text-zinc-500" />
+                      {c.total_loads || 0}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-center text-sm text-zinc-400">
+                    {c.payment_terms || "—"}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    {statusBadge(c.status)}
+                  </td>
+                  <td
+                    className="px-4 py-3 text-right"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <RowActions
+                      customer={c}
+                      onEdit={(cust) => setEditCustomer(cust)}
+                      onDelete={(cust) => setDeleteCustomer(cust)}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-800/60 bg-zinc-900/30">
+            <div className="text-sm text-zinc-500">
+              Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalCount)} of {totalCount}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className={cx(
+                  "p-2 rounded-lg border border-zinc-700/60 text-zinc-300 hover:bg-zinc-800/60",
+                  page === 0 && "opacity-40 cursor-not-allowed"
+                )}
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="text-sm text-zinc-400 px-2">
+                Page {page + 1} of {totalPages}
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={page >= totalPages - 1}
+                className={cx(
+                  "p-2 rounded-lg border border-zinc-700/60 text-zinc-300 hover:bg-zinc-800/60",
+                  page >= totalPages - 1 && "opacity-40 cursor-not-allowed"
+                )}
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="mt-2 text-xs text-zinc-500">
-        Data via <code>rpc_ai_customer_training</code> • Last refresh:{" "}
-        {new Date().toLocaleString()}
-      </div>
+      {/* Modals */}
+      {showAddModal && (
+        <CustomerModal
+          customer={null}
+          onClose={() => setShowAddModal(false)}
+          onSaved={fetchCustomers}
+          show={show}
+        />
+      )}
+
+      {editCustomer && (
+        <CustomerModal
+          customer={editCustomer}
+          onClose={() => setEditCustomer(null)}
+          onSaved={fetchCustomers}
+          show={show}
+        />
+      )}
+
+      {deleteCustomer && (
+        <DeleteConfirm
+          customer={deleteCustomer}
+          onClose={() => setDeleteCustomer(null)}
+          onDeleted={fetchCustomers}
+          show={show}
+        />
+      )}
     </div>
   );
 }

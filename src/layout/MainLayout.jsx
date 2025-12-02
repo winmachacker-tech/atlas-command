@@ -698,6 +698,7 @@ export default function MainLayout() {
         "/drivers",
         "/trucks",
         "/customers",
+        "/documents",
         "/sales",
       ].some((p) => (p === "/" ? pathname === "/" : pathname.startsWith(p)))
     )
@@ -861,6 +862,9 @@ export default function MainLayout() {
                   <SideLink to="/customers" icon={Users}>
                     Customers
                   </SideLink>
+                  <SideLink to="/documents" icon={FileText}>
+                    Documents
+                  </SideLink>
                   <SideLink to="/sales" icon={TrendingUp}>
                     Sales
                   </SideLink>
@@ -943,18 +947,21 @@ export default function MainLayout() {
                   )}
                 </SideGroup>
 
-                {/* AI Tools */}
-                <SideGroup id="ai" title="AI Tools" icon={Bot} defaultOpen>
-                  <SideLink to="/ai" icon={Sparkles}>
-                    AI Recommendations
-                  </SideLink>
-                  <SideLink to="/ai/lanes" icon={BarChart3}>
-                    Lane Intelligence
-                  </SideLink>
-                  <SideLink to="/ai-lab-proof" icon={Sparkles}>
-                    AI Lab Proof
-                  </SideLink>
-                </SideGroup>
+               {/* AI Tools */}
+               <SideGroup id="ai" title="AI Tools" icon={Bot} defaultOpen>
+               <SideLink to="/ai" icon={Sparkles}>
+                 AI Recommendations
+               </SideLink>
+               <SideLink to="/ai/lanes" icon={BarChart3}>
+                 Lane Intelligence
+               </SideLink>
+               <SideLink to="/lanetraining" icon={GraduationCap}>
+                 Lane Training
+               </SideLink>
+               <SideLink to="/ai-lab-proof" icon={Sparkles}>
+                 AI Lab Proof
+               </SideLink>
+               </SideGroup>
 
                 <SideLink to="/ai-insights" icon={Sparkles}>
                   AI Insights
