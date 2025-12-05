@@ -130,7 +130,7 @@ function useToast() {
 }
 
 /* ----------------------- Upload Document Modal ------------------- */
-function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
+function UploadModal({ onClose, onUploaded, show: toastShow, preselect, orgId }) {
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [files, setFiles] = useState([]);
@@ -150,7 +150,9 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
   const [loadingLookups, setLoadingLookups] = useState(true);
 
   // Get current document type config
-  const currentDocType = DOCUMENT_TYPES.find(dt => dt.value === form.document_type) || DOCUMENT_TYPES[DOCUMENT_TYPES.length - 1];
+  const currentDocType =
+    DOCUMENT_TYPES.find((dt) => dt.value === form.document_type) ||
+    DOCUMENT_TYPES[DOCUMENT_TYPES.length - 1];
   const showLoad = currentDocType.linkTo.includes("load");
   const showCustomer = currentDocType.linkTo.includes("customer");
   const showDriver = currentDocType.linkTo.includes("driver");
@@ -161,25 +163,38 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
     async function fetchLookups() {
       setLoadingLookups(true);
       try {
+        // If we have orgId from parent, use it to further scope queries on top of RLS.
+        let loadsQuery = supabase
+          .from("loads")
+          .select("id, reference, origin, destination")
+          .is("deleted_at", null)
+          .order("created_at", { ascending: false })
+          .limit(100);
+
+        let customersQuery = supabase
+          .from("customers")
+          .select("id, name, company_name")
+          .is("deleted_at", null)
+          .eq("status", "active")
+          .order("name", { ascending: true })
+          .limit(100);
+
+        let driversQuery = supabase
+          .from("drivers")
+          .select("id, full_name, first_name, last_name")
+          .order("full_name", { ascending: true })
+          .limit(100);
+
+        if (orgId) {
+          loadsQuery = loadsQuery.eq("org_id", orgId);
+          customersQuery = customersQuery.eq("org_id", orgId);
+          driversQuery = driversQuery.eq("org_id", orgId);
+        }
+
         const [loadsRes, customersRes, driversRes] = await Promise.all([
-          supabase
-            .from("loads")
-            .select("id, reference, origin, destination")
-            .is("deleted_at", null)
-            .order("created_at", { ascending: false })
-            .limit(100),
-          supabase
-            .from("customers")
-            .select("id, name, company_name")
-            .is("deleted_at", null)
-            .eq("status", "active")
-            .order("name", { ascending: true })
-            .limit(100),
-          supabase
-            .from("drivers")
-            .select("id, full_name, first_name, last_name")
-            .order("full_name", { ascending: true })
-            .limit(100),
+          loadsQuery,
+          customersQuery,
+          driversQuery,
         ]);
 
         if (loadsRes.data) setLoads(loadsRes.data);
@@ -192,11 +207,11 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
       }
     }
     fetchLookups();
-  }, []);
+  }, [orgId]);
 
   // Clear irrelevant links when document type changes
   useEffect(() => {
-    setForm(f => ({
+    setForm((f) => ({
       ...f,
       load_id: showLoad ? f.load_id : "",
       customer_id: showCustomer ? f.customer_id : "",
@@ -249,22 +264,27 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
     setUploading(true);
     try {
       // Get current user
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Get org_id using the RPC function pattern
-      const { data: orgData, error: orgError } = await supabase.rpc("current_org_id");
-      if (orgError) throw orgError;
-      if (!orgData) throw new Error("No org found");
+      // Prefer orgId from parent; fall back to RPC if not provided.
+      let effectiveOrgId = orgId;
+      if (!effectiveOrgId) {
+        const { data: orgData, error: orgError } = await supabase.rpc("current_org_id");
+        if (orgError) throw orgError;
+        if (!orgData) throw new Error("No org found");
+        effectiveOrgId = orgData;
+      }
 
-      const orgId = orgData;
       let uploadedCount = 0;
 
       for (const file of files) {
         // Generate unique file path: org_id/document_type/timestamp_filename
         const timestamp = Date.now();
         const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_");
-        const filePath = `${orgId}/${form.document_type}/${timestamp}_${safeName}`;
+        const filePath = `${effectiveOrgId}/${form.document_type}/${timestamp}_${safeName}`;
 
         // Upload to Supabase Storage
         const { error: uploadError } = await supabase.storage
@@ -281,13 +301,11 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
         }
 
         // Get public URL (will be signed URL since bucket is private)
-        const { data: urlData } = supabase.storage
-          .from("documents")
-          .getPublicUrl(filePath);
+        const { data: urlData } = supabase.storage.from("documents").getPublicUrl(filePath);
 
         // Insert document record
         const docPayload = {
-          org_id: orgId,
+          org_id: effectiveOrgId,
           name: file.name,
           file_path: filePath,
           file_url: urlData?.publicUrl || null,
@@ -302,9 +320,7 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
           uploaded_by: user.id,
         };
 
-        const { error: insertError } = await supabase
-          .from("documents")
-          .insert([docPayload]);
+        const { error: insertError } = await supabase.from("documents").insert([docPayload]);
 
         if (insertError) {
           console.error("Insert error:", insertError);
@@ -316,7 +332,10 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
       }
 
       if (uploadedCount > 0) {
-        toastShow(`${uploadedCount} document${uploadedCount > 1 ? "s" : ""} uploaded`, "ok");
+        toastShow(
+          `${uploadedCount} document${uploadedCount > 1 ? "s" : ""} uploaded`,
+          "ok"
+        );
         onUploaded();
         onClose();
       }
@@ -373,7 +392,9 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
                 />
               </label>
             </p>
-            <p className="text-xs text-zinc-500">PDF, PNG, JPG, WEBP, TIFF up to 50MB</p>
+            <p className="text-xs text-zinc-500">
+              PDF, PNG, JPG, WEBP, TIFF up to 50MB
+            </p>
           </div>
 
           {/* Selected Files */}
@@ -388,8 +409,12 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       <FileText className="w-4 h-4 text-zinc-400 flex-shrink-0" />
-                      <span className="text-sm text-zinc-200 truncate">{file.name}</span>
-                      <span className="text-xs text-zinc-500">{formatBytes(file.size)}</span>
+                      <span className="text-sm text-zinc-200 truncate">
+                        {file.name}
+                      </span>
+                      <span className="text-xs text-zinc-500">
+                        {formatBytes(file.size)}
+                      </span>
                     </div>
                     <button
                       type="button"
@@ -406,7 +431,9 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
 
           {/* Document Type */}
           <div>
-            <label className="block text-sm text-zinc-400 mb-1">Document Type *</label>
+            <label className="block text-sm text-zinc-400 mb-1">
+              Document Type *
+            </label>
             <select
               value={form.document_type}
               onChange={handleChange("document_type")}
@@ -431,20 +458,29 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
                   </span>
                 )}
               </h3>
-              
-              <div className={cx(
-                "grid gap-4",
-                (showLoad && showCustomer && showDriver) ? "grid-cols-1 md:grid-cols-3" :
-                (showLoad && showCustomer) || (showLoad && showDriver) || (showCustomer && showDriver) ? "grid-cols-1 md:grid-cols-2" :
-                "grid-cols-1"
-              )}>
+
+              <div
+                className={cx(
+                  "grid gap-4",
+                  showLoad && showCustomer && showDriver
+                    ? "grid-cols-1 md:grid-cols-3"
+                    : (showLoad && showCustomer) ||
+                      (showLoad && showDriver) ||
+                      (showCustomer && showDriver)
+                    ? "grid-cols-1 md:grid-cols-2"
+                    : "grid-cols-1"
+                )}
+              >
                 {/* Load dropdown */}
                 {showLoad && (
                   <div>
                     <label className="block text-sm text-zinc-400 mb-1">
                       <span className="flex items-center gap-1.5">
                         <Truck className="w-3.5 h-3.5" />
-                        Load {requiredField === "load" && <span className="text-rose-400">*</span>}
+                        Load{" "}
+                        {requiredField === "load" && (
+                          <span className="text-rose-400">*</span>
+                        )}
                       </span>
                     </label>
                     <select
@@ -453,8 +489,8 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
                       disabled={loadingLookups}
                       className={cx(
                         "w-full px-3 py-2 rounded-lg bg-zinc-800/60 border text-zinc-100 focus:outline-none focus:border-blue-500/50",
-                        requiredField === "load" && !form.load_id 
-                          ? "border-amber-500/50" 
+                        requiredField === "load" && !form.load_id
+                          ? "border-amber-500/50"
                           : "border-zinc-700/60"
                       )}
                     >
@@ -474,7 +510,10 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
                     <label className="block text-sm text-zinc-400 mb-1">
                       <span className="flex items-center gap-1.5">
                         <Building2 className="w-3.5 h-3.5" />
-                        Customer {requiredField === "customer" && <span className="text-rose-400">*</span>}
+                        Customer{" "}
+                        {requiredField === "customer" && (
+                          <span className="text-rose-400">*</span>
+                        )}
                       </span>
                     </label>
                     <select
@@ -483,8 +522,8 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
                       disabled={loadingLookups}
                       className={cx(
                         "w-full px-3 py-2 rounded-lg bg-zinc-800/60 border text-zinc-100 focus:outline-none focus:border-blue-500/50",
-                        requiredField === "customer" && !form.customer_id 
-                          ? "border-amber-500/50" 
+                        requiredField === "customer" && !form.customer_id
+                          ? "border-amber-500/50"
                           : "border-zinc-700/60"
                       )}
                     >
@@ -504,7 +543,10 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
                     <label className="block text-sm text-zinc-400 mb-1">
                       <span className="flex items-center gap-1.5">
                         <UserRound className="w-3.5 h-3.5" />
-                        Driver {requiredField === "driver" && <span className="text-rose-400">*</span>}
+                        Driver{" "}
+                        {requiredField === "driver" && (
+                          <span className="text-rose-400">*</span>
+                        )}
                       </span>
                     </label>
                     <select
@@ -513,8 +555,8 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
                       disabled={loadingLookups}
                       className={cx(
                         "w-full px-3 py-2 rounded-lg bg-zinc-800/60 border text-zinc-100 focus:outline-none focus:border-blue-500/50",
-                        requiredField === "driver" && !form.driver_id 
-                          ? "border-amber-500/50" 
+                        requiredField === "driver" && !form.driver_id
+                          ? "border-amber-500/50"
                           : "border-zinc-700/60"
                       )}
                     >
@@ -535,16 +577,25 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
           {isCompanyDoc && (
             <div className="px-4 py-3 rounded-lg bg-zinc-800/40 border border-zinc-700/40">
               <p className="text-sm text-zinc-400">
-                <span className="text-zinc-300 font-medium">{currentDocType.label}</span> is a company-level document and doesn't need to be linked to a specific load, customer, or driver.
+                <span className="text-zinc-300 font-medium">
+                  {currentDocType.label}
+                </span>{" "}
+                is a company-level document and doesn't need to be linked to a
+                specific load, customer, or driver.
               </p>
             </div>
           )}
 
           {/* Expiration - show for certain doc types */}
-          {["cdl", "medical_card", "insurance", "authority"].includes(form.document_type) && (
+          {["cdl", "medical_card", "insurance", "authority"].includes(
+            form.document_type
+          ) && (
             <div>
               <label className="block text-sm text-zinc-400 mb-1">
-                Expiration Date {["cdl", "medical_card"].includes(form.document_type) && <span className="text-rose-400">*</span>}
+                Expiration Date{" "}
+                {["cdl", "medical_card"].includes(form.document_type) && (
+                  <span className="text-rose-400">*</span>
+                )}
               </label>
               <input
                 type="date"
@@ -584,7 +635,8 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
               disabled={uploading || files.length === 0}
               className={cx(
                 "px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium flex items-center gap-2",
-                (uploading || files.length === 0) && "opacity-60 cursor-not-allowed"
+                (uploading || files.length === 0) &&
+                  "opacity-60 cursor-not-allowed"
               )}
             >
               {uploading ? (
@@ -607,7 +659,7 @@ function UploadModal({ onClose, onUploaded, show: toastShow, preselect }) {
 }
 
 /* ----------------------- Edit Document Modal --------------------- */
-function EditModal({ document, onClose, onSaved, show: toastShow }) {
+function EditModal({ document, onClose, onSaved, show: toastShow, orgId }) {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     name: document?.name || "",
@@ -627,24 +679,36 @@ function EditModal({ document, onClose, onSaved, show: toastShow }) {
   useEffect(() => {
     async function fetchLookups() {
       try {
+        let loadsQuery = supabase
+          .from("loads")
+          .select("id, reference, origin, destination")
+          .is("deleted_at", null)
+          .order("created_at", { ascending: false })
+          .limit(100);
+
+        let customersQuery = supabase
+          .from("customers")
+          .select("id, name, company_name")
+          .is("deleted_at", null)
+          .order("name", { ascending: true })
+          .limit(100);
+
+        let driversQuery = supabase
+          .from("drivers")
+          .select("id, full_name, first_name, last_name")
+          .order("full_name", { ascending: true })
+          .limit(100);
+
+        if (orgId) {
+          loadsQuery = loadsQuery.eq("org_id", orgId);
+          customersQuery = customersQuery.eq("org_id", orgId);
+          driversQuery = driversQuery.eq("org_id", orgId);
+        }
+
         const [loadsRes, customersRes, driversRes] = await Promise.all([
-          supabase
-            .from("loads")
-            .select("id, reference, origin, destination")
-            .is("deleted_at", null)
-            .order("created_at", { ascending: false })
-            .limit(100),
-          supabase
-            .from("customers")
-            .select("id, name, company_name")
-            .is("deleted_at", null)
-            .order("name", { ascending: true })
-            .limit(100),
-          supabase
-            .from("drivers")
-            .select("id, full_name, first_name, last_name")
-            .order("full_name", { ascending: true })
-            .limit(100),
+          loadsQuery,
+          customersQuery,
+          driversQuery,
         ]);
 
         if (loadsRes.data) setLoads(loadsRes.data);
@@ -655,7 +719,7 @@ function EditModal({ document, onClose, onSaved, show: toastShow }) {
       }
     }
     fetchLookups();
-  }, []);
+  }, [orgId]);
 
   const handleChange = (field) => (e) => {
     setForm((f) => ({ ...f, [field]: e.target.value }));
@@ -680,10 +744,13 @@ function EditModal({ document, onClose, onSaved, show: toastShow }) {
         notes: form.notes.trim() || null,
       };
 
-      const { error } = await supabase
-        .from("documents")
-        .update(payload)
-        .eq("id", document.id);
+      let query = supabase.from("documents").update(payload).eq("id", document.id);
+      // Extra safety: also require the current org_id if we know it.
+      if (orgId) {
+        query = query.eq("org_id", orgId);
+      }
+
+      const { error } = await query;
 
       if (error) throw error;
       toastShow("Document updated", "ok");
@@ -830,19 +897,25 @@ function EditModal({ document, onClose, onSaved, show: toastShow }) {
 }
 
 /* ----------------------- Delete Confirmation --------------------- */
-function DeleteConfirm({ document, onClose, onDeleted, show: toastShow }) {
+function DeleteConfirm({ document, onClose, onDeleted, show: toastShow, orgId }) {
   const [deleting, setDeleting] = useState(false);
 
   const handleDelete = async () => {
     setDeleting(true);
     try {
-      // Soft delete - set deleted_at
-      const { error } = await supabase
+      // Soft delete - set deleted_at (extra safety: scoped by org_id if we know it)
+      let query = supabase
         .from("documents")
         .update({ deleted_at: new Date().toISOString() })
         .eq("id", document.id);
 
+      if (orgId) {
+        query = query.eq("org_id", orgId);
+      }
+
+      const { error } = await query;
       if (error) throw error;
+
       toastShow("Document deleted", "ok");
       onDeleted();
       onClose();
@@ -857,7 +930,9 @@ function DeleteConfirm({ document, onClose, onDeleted, show: toastShow }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="bg-zinc-900 border border-zinc-700/60 rounded-2xl w-full max-w-md p-6 shadow-2xl">
-        <h2 className="text-lg font-semibold text-zinc-100 mb-2">Delete Document?</h2>
+        <h2 className="text-lg font-semibold text-zinc-100 mb-2">
+          Delete Document?
+        </h2>
         <p className="text-sm text-zinc-400 mb-6">
           Are you sure you want to delete{" "}
           <span className="text-zinc-200 font-medium">{document.name}</span>?
@@ -910,7 +985,8 @@ function PreviewModal({ document, onClose }) {
   }, [document.file_path]);
 
   const fileType = document.file_type?.toLowerCase() || "";
-  const isImage = fileType.startsWith("image") ||
+  const isImage =
+    fileType.startsWith("image") ||
     ["png", "jpg", "jpeg", "webp", "tiff"].includes(fileType);
   const isPdf = fileType === "pdf" || fileType === "application/pdf";
 
@@ -970,7 +1046,9 @@ function PreviewModal({ document, onClose }) {
               {!isPdf && !isImage && (
                 <div className="flex flex-col items-center justify-center h-96 text-zinc-400">
                   <File className="w-16 h-16 mb-4" />
-                  <p className="mb-4">Preview not available for this file type</p>
+                  <p className="mb-4">
+                    Preview not available for this file type
+                  </p>
                   <a
                     href={signedUrl}
                     download={document.name}
@@ -995,7 +1073,11 @@ function PreviewModal({ document, onClose }) {
             <span>Type: {document.file_type}</span>
             <span>Uploaded: {formatDateTime(document.created_at)}</span>
             {document.expires_at && (
-              <span className={isExpired(document.expires_at) ? "text-rose-400" : ""}>
+              <span
+                className={
+                  isExpired(document.expires_at) ? "text-rose-400" : ""
+                }
+              >
                 Expires: {formatDate(document.expires_at)}
               </span>
             )}
@@ -1082,9 +1164,15 @@ export default function Documents() {
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
-  const [typeFilter, setTypeFilter] = useState(searchParams.get("type") || "all");
+  const [typeFilter, setTypeFilter] = useState(
+    searchParams.get("type") || "all"
+  );
   const [expirationFilter, setExpirationFilter] = useState("all");
   const [page, setPage] = useState(0);
+
+  // Org context (critical for multi-tenant safety)
+  const [orgId, setOrgId] = useState(null);
+  const [orgLoading, setOrgLoading] = useState(true);
 
   // Modals
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -1094,12 +1182,53 @@ export default function Documents() {
 
   const { show, ToastView } = useToast();
 
+  // Load current org_id once
+  useEffect(() => {
+    async function loadOrg() {
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) {
+          setOrgId(null);
+          return;
+        }
+
+        const { data: orgData, error: orgError } = await supabase.rpc(
+          "current_org_id"
+        );
+        if (orgError) throw orgError;
+        setOrgId(orgData || null);
+      } catch (err) {
+        console.error("Failed to load org context:", err);
+        show("Failed to load org context", "err");
+        setOrgId(null);
+      } finally {
+        setOrgLoading(false);
+      }
+    }
+    loadOrg();
+  }, [show]);
+
   const fetchDocuments = useCallback(async () => {
+    // Don't query until we know org status
+    if (orgLoading) return;
+
+    // If for some reason there's no org, fail closed: show nothing.
+    if (!orgId) {
+      setDocuments([]);
+      setTotalCount(0);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
       let query = supabase
         .from("documents_with_relations")
         .select("*", { count: "exact" })
+        // 🔒 Critical: scope to current org_id so we never see cross-org docs
+        .eq("org_id", orgId)
         .order("created_at", { ascending: false })
         .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
@@ -1113,7 +1242,9 @@ export default function Documents() {
         query = query.lt("expires_at", new Date().toISOString());
       } else if (expirationFilter === "expiring_soon") {
         const now = new Date();
-        const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+        const thirtyDaysFromNow = new Date(
+          now.getTime() + 30 * 24 * 60 * 60 * 1000
+        );
         query = query
           .gte("expires_at", now.toISOString())
           .lte("expires_at", thirtyDaysFromNow.toISOString());
@@ -1137,7 +1268,7 @@ export default function Documents() {
     } finally {
       setLoading(false);
     }
-  }, [show, page, typeFilter, expirationFilter, q]);
+  }, [show, page, typeFilter, expirationFilter, q, orgId, orgLoading]);
 
   // Reset to page 0 when filters change
   useEffect(() => {
@@ -1189,7 +1320,8 @@ export default function Documents() {
   };
 
   // Count expiring/expired for quick stats
-  const expiringCount = documents.filter((d) => isExpiringSoon(d.expires_at)).length;
+  const expiringCount = documents.filter((d) => isExpiringSoon(d.expires_at))
+    .length;
   const expiredCount = documents.filter((d) => isExpired(d.expires_at)).length;
 
   return (
@@ -1214,7 +1346,9 @@ export default function Documents() {
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60"
             title="Refresh"
           >
-            <RefreshCw className={cx("w-4 h-4", loading && "animate-spin")} />
+            <RefreshCw
+              className={cx("w-4 h-4", loading && "animate-spin")}
+            />
             Refresh
           </button>
 
@@ -1310,13 +1444,18 @@ export default function Documents() {
                 <th className="px-4 py-3 text-center font-medium">Size</th>
                 <th className="px-4 py-3 text-center font-medium">Expires</th>
                 <th className="px-4 py-3 text-left font-medium">Uploaded</th>
-                <th className="px-4 py-3 text-right font-medium w-16">Actions</th>
+                <th className="px-4 py-3 text-right font-medium w-16">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/70">
               {loading && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-zinc-400">
+                  <td
+                    colSpan={7}
+                    className="px-4 py-8 text-center text-zinc-400"
+                  >
                     Loading documents…
                   </td>
                 </tr>
@@ -1324,7 +1463,10 @@ export default function Documents() {
 
               {!loading && documents.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-zinc-400">
+                  <td
+                    colSpan={7}
+                    className="px-4 py-8 text-center text-zinc-400"
+                  >
                     No documents found.{" "}
                     <button
                       onClick={() => setShowUploadModal(true)}
@@ -1364,7 +1506,9 @@ export default function Documents() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3">{typeBadge(doc.document_type)}</td>
+                    <td className="px-4 py-3">
+                      {typeBadge(doc.document_type)}
+                    </td>
                     <td className="px-4 py-3">
                       <div className="space-y-1">
                         {doc.load_reference && (
@@ -1403,9 +1547,11 @@ export default function Documents() {
                             {doc.driver_name}
                           </div>
                         )}
-                        {!doc.load_reference && !doc.customer_name && !doc.driver_name && (
-                          <span className="text-xs text-zinc-600">—</span>
-                        )}
+                        {!doc.load_reference &&
+                          !doc.customer_name &&
+                          !doc.driver_name && (
+                            <span className="text-xs text-zinc-600">—</span>
+                          )}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-center text-sm text-zinc-400">
@@ -1416,12 +1562,19 @@ export default function Documents() {
                         <div
                           className={cx(
                             "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs",
-                            expired && "bg-rose-500/10 text-rose-300 border border-rose-500/30",
-                            expiringSoon && !expired && "bg-amber-500/10 text-amber-300 border border-amber-500/30",
-                            !expired && !expiringSoon && "text-zinc-400"
+                            expired &&
+                              "bg-rose-500/10 text-rose-300 border border-rose-500/30",
+                            expiringSoon &&
+                              !expired &&
+                              "bg-amber-500/10 text-amber-300 border border-amber-500/30",
+                            !expired &&
+                              !expiringSoon &&
+                              "text-zinc-400"
                           )}
                         >
-                          {(expired || expiringSoon) && <AlertTriangle className="w-3 h-3" />}
+                          {(expired || expiringSoon) && (
+                            <AlertTriangle className="w-3 h-3" />
+                          )}
                           {formatDate(doc.expires_at)}
                         </div>
                       ) : (
@@ -1429,12 +1582,19 @@ export default function Documents() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="text-sm text-zinc-400">{formatDate(doc.created_at)}</div>
+                      <div className="text-sm text-zinc-400">
+                        {formatDate(doc.created_at)}
+                      </div>
                       {doc.uploaded_by_name && (
-                        <div className="text-xs text-zinc-500">{doc.uploaded_by_name}</div>
+                        <div className="text-xs text-zinc-500">
+                          {doc.uploaded_by_name}
+                        </div>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                    <td
+                      className="px-4 py-3 text-right"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <RowActions
                         doc={doc}
                         onPreview={(d) => setPreviewDocument(d)}
@@ -1453,8 +1613,8 @@ export default function Documents() {
         {totalPages > 1 && (
           <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-800/60 bg-zinc-900/30">
             <div className="text-sm text-zinc-500">
-              Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalCount)} of{" "}
-              {totalCount}
+              Showing {page * PAGE_SIZE + 1}–
+              {Math.min((page + 1) * PAGE_SIZE, totalCount)} of {totalCount}
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -1475,7 +1635,8 @@ export default function Documents() {
                 disabled={page >= totalPages - 1}
                 className={cx(
                   "p-2 rounded-lg border border-zinc-700/60 text-zinc-300 hover:bg-zinc-800/60",
-                  page >= totalPages - 1 && "opacity-40 cursor-not-allowed"
+                  page >= totalPages - 1 &&
+                    "opacity-40 cursor-not-allowed"
                 )}
               >
                 <ChevronRight className="w-4 h-4" />
@@ -1491,6 +1652,7 @@ export default function Documents() {
           onClose={() => setShowUploadModal(false)}
           onUploaded={fetchDocuments}
           show={show}
+          orgId={orgId}
         />
       )}
 
@@ -1500,6 +1662,7 @@ export default function Documents() {
           onClose={() => setEditDocument(null)}
           onSaved={fetchDocuments}
           show={show}
+          orgId={orgId}
         />
       )}
 
@@ -1509,6 +1672,7 @@ export default function Documents() {
           onClose={() => setDeleteDocument(null)}
           onDeleted={fetchDocuments}
           show={show}
+          orgId={orgId}
         />
       )}
 

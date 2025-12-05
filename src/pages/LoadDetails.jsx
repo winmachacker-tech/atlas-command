@@ -903,22 +903,28 @@ export default function LoadDetails() {
     setShowEditModal(true);
   };
 
-  const handleSaveEdit = async () => {
+const handleSaveEdit = async () => {
     try {
       setSaving(true);
+
+      // Sanitize timestamp fields - convert empty strings to null for PostgreSQL
+      const sanitizeTimestamp = (value) => {
+        if (value === "" || value === undefined) return null;
+        return value;
+      };
 
       const { error: updateErr } = await supabase
         .from("loads")
         .update({
-          load_number: editForm.load_number,
+          load_number: editForm.load_number || null,
           status: editForm.status,
-          equipment_type: editForm.equipment_type,
+          equipment_type: editForm.equipment_type || null,
           rate: parseFloat(editForm.rate) || null,
           miles: parseInt(editForm.miles) || null,
-          reference: editForm.reference,
-          commodity: editForm.commodity,
-          pickup_at: editForm.pickup_at,
-          delivery_at: editForm.delivery_at,
+          reference: editForm.reference || null,
+          commodity: editForm.commodity || null,
+          pickup_at: sanitizeTimestamp(editForm.pickup_at),
+          delivery_at: sanitizeTimestamp(editForm.delivery_at),
         })
         .eq("id", load.id);
 

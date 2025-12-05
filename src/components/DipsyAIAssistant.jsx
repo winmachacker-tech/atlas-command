@@ -355,7 +355,7 @@ export default function DipsyAIAssistant({ className = "" }) {
 
         addMessage(
           "assistant",
-          `✅ Document uploaded! Now reading it with AI...`,
+          `✅ Document uploaded! Dipsy is reading!`,
           null,
           null,
           false

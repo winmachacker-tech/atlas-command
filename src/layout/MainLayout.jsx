@@ -10,7 +10,6 @@
 // It shows the current org name (from public.orgs with RLS).
 // Later we can wire it to a secure RPC to actually switch orgs.
 
-import Sidebar from "../components/Sidebar.jsx";
 import {
   useEffect,
   useMemo,
@@ -274,8 +273,41 @@ function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [currentOrgId, setCurrentOrgId] = useState(null);
   const wrapRef = useRef(null);
   const nav = useNavigate();
+
+  // 🔒 SECURITY: Fetch current user's org_id for client-side filtering
+  // This is critical because Supabase Realtime doesn't fully enforce RLS
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchOrgId() {
+      try {
+        // Query orgs table - RLS ensures we only get our own org(s)
+        const { data, error } = await supabase
+          .from("orgs")
+          .select("id")
+          .limit(1)
+          .single();
+
+        if (cancelled) return;
+
+        if (!error && data?.id) {
+          setCurrentOrgId(data.id);
+        } else {
+          console.warn("[NotificationBell] Could not fetch org_id:", error?.message);
+        }
+      } catch (err) {
+        console.error("[NotificationBell] Failed to fetch org_id:", err);
+      }
+    }
+
+    fetchOrgId();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Fetch from dispatch_notifications
   async function loadLatest() {
@@ -286,7 +318,7 @@ function NotificationBell() {
         .select("*")
         .order("created_at", { ascending: false })
         .limit(10);
-      
+
       if (error) throw error;
       setItems(rows || []);
     } catch (err) {
@@ -300,8 +332,24 @@ function NotificationBell() {
     loadLatest();
   }, []);
 
-  // Real-time subscription
+  // Play notification sound
+  function playNotificationSound() {
+    try {
+      const audio = new Audio("/notification.mp3");
+      audio.volume = 0.5;
+      audio.play().catch(() => {});
+    } catch (e) {
+      // Ignore
+    }
+  }
+
+  // Real-time subscription with client-side org filtering
   useEffect(() => {
+    // Don't subscribe until we have the org_id
+    if (!currentOrgId) {
+      return;
+    }
+
     const channel = supabase
       .channel("realtime:dispatch_notifications")
       .on(
@@ -312,8 +360,22 @@ function NotificationBell() {
           table: "dispatch_notifications",
         },
         (payload) => {
+          // 🔒 SECURITY: Client-side org filtering is REQUIRED
+          // Supabase Realtime doesn't fully enforce RLS on broadcast events.
+          // Without this check, users could see notifications from other orgs.
+          if (payload.new.org_id !== currentOrgId) {
+            console.warn(
+              "[NotificationBell] Blocked cross-org notification:",
+              payload.new.org_id,
+              "!==",
+              currentOrgId
+            );
+            return;
+          }
+
           setItems((prev) => [payload.new, ...prev].slice(0, 10));
-          // Play sound for critical
+
+          // Play sound for critical notifications
           if (payload.new.severity === "critical") {
             playNotificationSound();
           }
@@ -324,7 +386,7 @@ function NotificationBell() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [currentOrgId]);
 
   // Close on outside click
   useEffect(() => {
@@ -344,17 +406,6 @@ function NotificationBell() {
   }, []);
 
   const unread = items.filter((i) => !i.read_at).length;
-
-  // Play notification sound
-  function playNotificationSound() {
-    try {
-      const audio = new Audio("/notification.mp3");
-      audio.volume = 0.5;
-      audio.play().catch(() => {});
-    } catch (e) {
-      // Ignore
-    }
-  }
 
   // Mark all read
   async function markAllRead() {
@@ -621,10 +672,151 @@ function OrgSwitcher() {
   );
 }
 
+/* ---------------------- Mobile Sidebar Drawer ---------------------- */
+function MobileSidebar({ isOpen, onClose, onSignOut, isSuperAdmin, activeGroupByPath }) {
+  const nav = useNavigate();
+
+  if (!isOpen) return null;
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 bg-black/50 z-40"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      {/* Drawer */}
+      <aside className="fixed inset-y-0 left-0 w-72 bg-[var(--bg-panel)] border-r border-[var(--border)] z-50 overflow-y-auto">
+        <div className="h-full flex flex-col p-3">
+          {/* Brand / Header */}
+          <div className="flex items-center justify-between px-2 py-3">
+            <div className="flex items-center gap-2">
+              <FolderKanban className="h-5 w-5 text-emerald-400" />
+              <span className="font-semibold tracking-wide">Atlas Command</span>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-2 rounded-lg hover:bg-[var(--bg-hover)]"
+              aria-label="Close menu"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Navigation - same as desktop */}
+          <nav className="mt-2 space-y-1 overflow-y-auto flex-1">
+            {/* Operations */}
+            <SideGroup
+              id="operations"
+              title="Operations"
+              icon={ShieldCheck}
+              defaultOpen={activeGroupByPath === "operations"}
+            >
+              <SideLink to="/" end icon={Home} onClick={onClose}>Dashboard</SideLink>
+              <SideLink to="/loads" icon={ClipboardList} onClick={onClose}>Loads</SideLink>
+              <SideLink to="/load-drafts" icon={FileCheck} onClick={onClose}>Load Drafts</SideLink>
+              <SideLink to="/in-transit" icon={Send} onClick={onClose}>In Transit</SideLink>
+              <SideLink to="/delivered" icon={CheckCircle2} onClick={onClose}>Delivered</SideLink>
+              <SideLink to="/drivers" icon={UserRound} onClick={onClose}>Drivers</SideLink>
+              <SideLink to="/customers" icon={Users} onClick={onClose}>Customers</SideLink>
+              <SideLink to="/documents" icon={FileText} onClick={onClose}>Documents</SideLink>
+              <SideLink to="/sales" icon={TrendingUp} onClick={onClose}>Sales</SideLink>
+              <SideLink to="/learning" icon={GraduationCap} onClick={onClose}>Learning</SideLink>
+              <SideLink to="/trucks" icon={Truck} onClick={onClose}>Trucks</SideLink>
+              <SideLink to="/fleet-map" icon={MapPin} onClick={onClose}>Fleet Map</SideLink>
+            </SideGroup>
+
+            {/* Accounting */}
+            <SideGroup
+              id="accounting"
+              title="Accounting"
+              icon={DollarSign}
+              defaultOpen={activeGroupByPath === "accounting"}
+            >
+              <SideLink to="/billing" icon={CreditCard} onClick={onClose}>Billing</SideLink>
+              <SideLink to="/billing/subscription" icon={CreditCard} onClick={onClose}>Subscription</SideLink>
+              <SideLink to="/driver-settlements" icon={DollarSign} onClick={onClose}>Driver settlements</SideLink>
+            </SideGroup>
+
+            {/* Admin */}
+            <SideGroup
+              id="admin"
+              title="Admin"
+              icon={Shield}
+              defaultOpen={activeGroupByPath === "admin"}
+            >
+              <SideLink to="/profile" icon={UserRound} onClick={onClose}>Profile &amp; Account</SideLink>
+              <SideLink to="/settings/appearance" icon={Palette} onClick={onClose}>Appearance</SideLink>
+              <SideLink to="/notifications" icon={Bell} onClick={onClose}>Notifications</SideLink>
+              <SideLink to="/settings/notifications" icon={Bell} onClick={onClose}>Notification Settings</SideLink>
+              <SideLink to="/settings/integrations" icon={Plug} onClick={onClose}>Integrations</SideLink>
+              <SideLink to="/settings/security" icon={Shield} onClick={onClose}>Security</SideLink>
+              <SideLink to="/settings/whatsapp" icon={MessageSquare} onClick={onClose}>WhatsApp</SideLink>
+              <SideLink to="/trust-center" icon={ShieldCheck} onClick={onClose}>Trust &amp; Security</SideLink>
+              <SideLink to="/privacy" icon={ShieldCheck} onClick={onClose}>Privacy Policy</SideLink>
+              <SideLink to="/teammanagement" icon={UserRound} onClick={onClose}>Team Management</SideLink>
+              <SideLink to="/admin/driver-learning-test" icon={GraduationCap} onClick={onClose}>Driver Learning Test</SideLink>
+              {isSuperAdmin && (
+                <>
+                  <SideLink to="/super-admin" icon={Crown} onClick={onClose}>Platform Admin</SideLink>
+                  <SideLink to="/financials" icon={TrendingUp} onClick={onClose}>Financials</SideLink>
+                </>
+              )}
+            </SideGroup>
+
+            {/* AI Tools */}
+            <SideGroup
+              id="ai"
+              title="AI Tools"
+              icon={Bot}
+              defaultOpen={activeGroupByPath === "ai"}
+            >
+              <SideLink to="/ai" icon={Sparkles} onClick={onClose}>AI Recommendations</SideLink>
+              <SideLink to="/ai/lanes" icon={BarChart3} onClick={onClose}>Lane Intelligence</SideLink>
+              <SideLink to="/lanetraining" icon={GraduationCap} onClick={onClose}>Lane Training</SideLink>
+              <SideLink to="/ai-lab-proof" icon={Sparkles} onClick={onClose}>AI Lab Proof</SideLink>
+              <SideLink to="/ai-insights" icon={Sparkles} onClick={onClose}>AI Insights</SideLink>
+            </SideGroup>
+
+            {/* Debug */}
+            <SideGroup
+              id="debug"
+              title="Debug"
+              icon={Bug}
+              defaultOpen={activeGroupByPath === "debug"}
+            >
+              <SideLink to="/debug/board" icon={Bug} onClick={onClose}>Commander Board Debug</SideLink>
+              <SideLink to="/faq-test" icon={FileText} onClick={onClose}>FAQ Test Panel</SideLink>
+            </SideGroup>
+          </nav>
+
+          {/* Footer */}
+          <div className="mt-auto pt-3 space-y-2">
+            <button
+              onClick={() => {
+                onClose();
+                onSignOut();
+              }}
+              className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-base)] hover:bg-[var(--bg-hover)] transition"
+            >
+              <LogOut className="h-4 w-4" />
+              <span>Sign out</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+    </>
+  );
+}
+
 /* ------------------------------- Layout -------------------------------- */
 export default function MainLayout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
+
+  // Mobile sidebar state
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // 👑 Super admin flag (for showing /super-admin in sidebar)
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
@@ -729,9 +921,14 @@ export default function MainLayout() {
       pathname.startsWith("/ai-lab-proof")
     )
       return "ai";
-    if (pathname.startsWith("/debug/board")) return "debug";
+    if (
+      pathname.startsWith("/debug/board") ||
+      pathname.startsWith("/faq-test")
+    )
+      return "debug";
     return null;
   }, [pathname]);
+
 
   useEffect(() => {
     const key = "atlas.sidebar.open";
@@ -832,7 +1029,7 @@ export default function MainLayout() {
                 </div>
               </div>
 
-              {/* Groups */}
+             {/* Groups */}
               <nav className="mt-2 space-y-1 overflow-y-auto">
                 {/* Operations */}
                 <SideGroup
@@ -941,31 +1138,40 @@ export default function MainLayout() {
                     Driver Learning Test
                   </SideLink>
                   {checkedSuperAdmin && isSuperAdmin && (
-                    <SideLink to="/super-admin" icon={Crown}>
-                      Super Admin
-                    </SideLink>
+                    <>
+                      <SideLink to="/super-admin" icon={Crown}>
+                        Platform Admin
+                      </SideLink>
+                      <SideLink to="/financials" icon={TrendingUp}>
+                        Financials
+                      </SideLink>
+                    </>
                   )}
                 </SideGroup>
 
-               {/* AI Tools */}
-               <SideGroup id="ai" title="AI Tools" icon={Bot} defaultOpen>
-               <SideLink to="/ai" icon={Sparkles}>
-                 AI Recommendations
-               </SideLink>
-               <SideLink to="/ai/lanes" icon={BarChart3}>
-                 Lane Intelligence
-               </SideLink>
-               <SideLink to="/lanetraining" icon={GraduationCap}>
-                 Lane Training
-               </SideLink>
-               <SideLink to="/ai-lab-proof" icon={Sparkles}>
-                 AI Lab Proof
-               </SideLink>
-               </SideGroup>
-
-                <SideLink to="/ai-insights" icon={Sparkles}>
-                  AI Insights
-                </SideLink>
+                {/* AI Tools */}
+                <SideGroup
+                  id="ai"
+                  title="AI Tools"
+                  icon={Bot}
+                  defaultOpen={activeGroupByPath === "ai"}
+                >
+                  <SideLink to="/ai" icon={Sparkles}>
+                    AI Recommendations
+                  </SideLink>
+                  <SideLink to="/ai/lanes" icon={BarChart3}>
+                    Lane Intelligence
+                  </SideLink>
+                  <SideLink to="/lanetraining" icon={GraduationCap}>
+                    Lane Training
+                  </SideLink>
+                  <SideLink to="/ai-lab-proof" icon={Sparkles}>
+                    AI Lab Proof
+                  </SideLink>
+                  <SideLink to="/ai-insights" icon={Sparkles}>
+                    AI Insights
+                  </SideLink>
+                </SideGroup>
 
                 {/* Debug group */}
                 <SideGroup
@@ -977,7 +1183,11 @@ export default function MainLayout() {
                   <SideLink to="/debug/board" icon={Bug}>
                     Commander Board Debug
                   </SideLink>
+                  <SideLink to="/faq-test" icon={FileText}>
+                    FAQ Test Panel
+                  </SideLink>
                 </SideGroup>
+
               </nav>
 
               {/* Footer actions */}
@@ -999,9 +1209,7 @@ export default function MainLayout() {
             <div className="md:hidden sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg-panel)]/80 backdrop-blur">
               <div className="flex items-center justify-between px-3 py-2">
                 <button
-                  onClick={() => {
-                    // future mobile drawer
-                  }}
+                  onClick={() => setMobileMenuOpen(true)}
                   className="p-2 rounded-lg hover:bg-[var(--bg-hover)]"
                   aria-label="Open menu"
                 >
@@ -1013,6 +1221,15 @@ export default function MainLayout() {
                 </div>
               </div>
             </div>
+
+            {/* Mobile sidebar drawer */}
+            <MobileSidebar
+              isOpen={mobileMenuOpen}
+              onClose={() => setMobileMenuOpen(false)}
+              onSignOut={signOut}
+              isSuperAdmin={checkedSuperAdmin && isSuperAdmin}
+              activeGroupByPath={activeGroupByPath}
+            />
 
             {/* Desktop top bar */}
             <div className="hidden md:block sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg-panel)] backdrop-blur-sm">

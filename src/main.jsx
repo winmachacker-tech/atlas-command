@@ -10,6 +10,8 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import "./index.css";
 
+import FaqTestPanel from "@/lib/dipsy/FaqTestPanel";
+
 import { Analytics } from "@vercel/analytics/react";
 
 /* Supabase */
@@ -28,6 +30,15 @@ import { attachDipsyBoardTester } from "./debug/testDipsyBoardView";
 
 /* Theme */
 import { ThemeProvider } from "./context/ThemeProvider.jsx";
+
+import { askDipsyQuestion } from "@/lib/dipsy/askDipsyQuestion";
+
+// DEV ONLY: expose askDipsyQuestion in browser console
+if (typeof window !== "undefined") {
+  // @ts-ignore
+  window.askDipsyQuestion = askDipsyQuestion;
+}
+
 
 /* Lazy pages */
 const Dashboard = lazy(() => import("./pages/Dashboard.jsx"));
@@ -101,6 +112,7 @@ const DriverSettlements = lazy(() =>
 
 /* Platform Admin */
 const SuperAdmin = lazy(() => import("./pages/SuperAdmin.jsx"));
+const Financials = lazy(() => import("./pages/Financials.jsx"));
 
 /* Billing subscription page (Stripe checkout) */
 const BillingSubscription = lazy(() =>
@@ -154,13 +166,19 @@ async function logLoginEventWithMfa(event, session) {
       return;
     }
 
-    // De-dupe so we only log once per token
+    // 🔧 FIX: Add to Set IMMEDIATELY (before async work) to prevent race condition
+    // Both getSession() and onAuthStateChange fire nearly simultaneously on page load.
+    // If we wait until after the fetch, both calls pass the .has() check.
     if (loggedTokens.has(accessToken)) {
       console.log(
-        "[main] Already logged login event for this access_token, skipping"
+        "[main] Already logged/logging event for this access_token, skipping:",
+        event
       );
       return;
     }
+    
+    // Mark as "in progress" immediately to block concurrent calls
+    loggedTokens.add(accessToken);
 
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     if (!supabaseUrl) {
@@ -214,12 +232,12 @@ async function logLoginEventWithMfa(event, session) {
         res.status,
         text
       );
-    } else {
-      // Only mark as logged if the call was successful
-      loggedTokens.add(accessToken);
+      // Note: We keep the token in the Set even on failure to prevent retry storms.
+      // If you want retries, you'd need a more sophisticated approach.
     }
   } catch (err) {
     console.error("[main] Failed to log login event:", err);
+    // Note: Token stays in Set to prevent retry loops on persistent errors
   }
 }
 
@@ -358,13 +376,14 @@ function MfaGate({ children }) {
             Open your authenticator app and enter the 6-digit code for Atlas
             Command.
           </p>
+          {/* 🔧 FIX: Changed border.white/20 → border-white/20 */}
           <input
             type="text"
             inputMode="numeric"
             maxLength={6}
             value={code}
             onChange={(e) => setCode(e.target.value)}
-            className="w-full rounded-lg bg-black/60 border border.white/20 px-3 py-2 text-white tracking-[0.3em]"
+            className="w-full rounded-lg bg-black/60 border border-white/20 px-3 py-2 text-white tracking-[0.3em]"
             placeholder="123456"
           />
           {error && (
@@ -484,11 +503,13 @@ function AppRoutes() {
                   <Route path="ai/lanes" element={<AiLaneIntelligence />} />
 
                   {/* Admin */}
+                  <Route path="/faq-test" element={<FaqTestPanel />} />
                   <Route
                     path="admin/driver-learning-test"
                     element={<DriverLearningTest />}
                   />
                   <Route path="super-admin" element={<SuperAdmin />} />
+                  <Route path="financials" element={<Financials />} />
 
                   {/* User settings */}
                   <Route path="profile" element={<Profile />} />

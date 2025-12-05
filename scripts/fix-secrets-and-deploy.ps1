@@ -1,6 +1,10 @@
+# scripts/fix-secrets-and-deploy.ps1
 # Fix Supabase Edge Function secrets and redeploy.
+
+# --- EDIT THESE TWO LINES ---
 $PROJECT_URL  = 'https://tnpesnohwbwpmakvyzpn.supabase.co'
 $SERVICE_ROLE = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRucGVzbm9od2J3cG1ha3Z5enBuIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MTUxODA4NCwiZXhwIjoyMDc3MDk0MDg0fQ.uucqKGYzYV5_Xjo-amxVVnzwEPf4ZiSBw9WMBO7Jzt8'
+# ---------------------------
 
 if ($SERVICE_ROLE.StartsWith('$')) {
   Write-Warning "SERVICE_ROLE started with '$'. Removing it."

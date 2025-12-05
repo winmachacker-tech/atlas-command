@@ -1,0 +1,182 @@
+[
+  {
+    "slug": "load-statuses",
+    "title": "Atlas Command Load Statuses",
+    "domain": "operations",
+    "doc_type": "reference",
+    "summary": "Authoritative list of Atlas Command load statuses.",
+    "related_docs": ["load-lifecycle", "load-board"],
+    "version": "v1",
+    "body": "# Atlas Command Load Statuses\n\nAtlas Command uses the following authoritative load statuses:\n\n1. **AVAILABLE** – Load is created and visible for planning.\n2. **PENDING_PICKUP** – Driver assigned and heading to shipper.\n3. **IN_TRANSIT** – Load picked up and in motion.\n4. **DELIVERED** – Delivered physically but still under review.\n5. **READY_FOR_BILLING** – Documentation complete and verified.\n6. **PROBLEM** – Exception state for breakdowns, refusals, delays.\n7. **CANCELLED** – Load cancelled before completion.\n\nInvalid statuses to correct:\n- DISPATCHED\n- PICKED_UP\n- ENROUTE / ON THE WAY\n- AT_SHIPPER / AT_RECEIVER\n- INVOICED / PAID\n\nPROBLEM and CANCELLED are exception paths, not workflow steps."
+  },
+  {
+    "slug": "load-lifecycle",
+    "title": "Load Lifecycle",
+    "domain": "operations",
+    "doc_type": "workflow",
+    "summary": "Explains the end-to-end lifecycle of a load in Atlas.",
+    "related_docs": ["load-statuses", "ready-for-billing"],
+    "version": "v1",
+    "body": "# Load Lifecycle\n\nThe standard lifecycle in Atlas Command follows:\n\n**AVAILABLE → PENDING_PICKUP → IN_TRANSIT → DELIVERED → READY_FOR_BILLING**\n\n### AVAILABLE\nLoad created, visible to dispatch.\n\n### PENDING_PICKUP\nDriver assigned, in route to pickup.\n\n### IN_TRANSIT\nPickup complete.\n\n### DELIVERED\nFreight delivered.\n\n### READY_FOR_BILLING\nPOD verified, documentation complete.\n\n### PROBLEM (Exception)\nBreakdowns, delays, refusals.\n\n### CANCELLED (Exception)\nLoad cancelled before completion."
+  },
+  {
+    "slug": "load-board",
+    "title": "Load Board",
+    "domain": "operations",
+    "doc_type": "reference",
+    "summary": "Explains how the Load Board displays and organizes loads.",
+    "related_docs": ["load-statuses"],
+    "version": "v1",
+    "body": "# Load Board\n\nThe Load Board shows operational loads across all statuses.\n\nDisplays loads in the following categories:\n- AVAILABLE\n- PENDING_PICKUP\n- IN_TRANSIT\n- DELIVERED\n- READY_FOR_BILLING\n- PROBLEM\n- CANCELLED"
+  },
+  {
+    "slug": "driver-assignment-workflow",
+    "title": "Driver Assignment Workflow",
+    "domain": "operations",
+    "doc_type": "workflow",
+    "summary": "Step-by-step process for assigning a driver.",
+    "related_docs": ["load-lifecycle"],
+    "version": "v1",
+    "body": "# Driver Assignment Workflow\n\n1. Load created (AVAILABLE)\n2. Dispatcher assigns driver\n3. Load becomes PENDING_PICKUP\n4. Driver picks up → IN_TRANSIT\n5. Delivery → DELIVERED"
+  },
+  {
+    "slug": "exceptions-workflow",
+    "title": "Exceptions Workflow",
+    "domain": "operations",
+    "doc_type": "workflow",
+    "summary": "How Atlas handles breakdowns, refusals, and delays.",
+    "related_docs": ["load-statuses"],
+    "version": "v1",
+    "body": "# Exceptions Workflow\n\nExceptions route loads into **PROBLEM** state.\n\nCommon causes:\n- Mechanical breakdown\n- Shipper delay\n- Receiver refusal\n\nLoads may rejoin normal lifecycle once resolved."
+  },
+  {
+    "slug": "appointment",
+    "title": "Appointment",
+    "domain": "operations",
+    "doc_type": "definition",
+    "summary": "Defines appointment scheduling requirements for shippers/receivers.",
+    "related_docs": ["bol"],
+    "version": "v1",
+    "body": "# Appointment\n\nAppointments control pickup and delivery timing.\n\nKey elements:\n- Date & time\n- Facility instructions\n- Driver requirements"
+  },
+  {
+    "slug": "bol",
+    "title": "Bill of Lading (BOL)",
+    "domain": "operations",
+    "doc_type": "definition",
+    "summary": "Defines a Bill of Lading and its required elements.",
+    "related_docs": ["pod"],
+    "version": "v1",
+    "body": "# Bill of Lading (BOL)\n\nA BOL is the primary shipping document establishing:\n- Freight description\n- Pickup details\n- Legal terms\n- Signatures at origin"
+  },
+  {
+    "slug": "pod",
+    "title": "Proof of Delivery (POD)",
+    "domain": "operations",
+    "doc_type": "definition",
+    "summary": "Defines POD and how it drives billing readiness.",
+    "related_docs": ["ready-for-billing"],
+    "version": "v1",
+    "body": "# POD\n\nA Proof of Delivery captures:\n- Receiver signature\n- Delivery timestamp\n- Freight condition notes\n\nRequired before READY_FOR_BILLING."
+  },
+  {
+    "slug": "document-handling",
+    "title": "Document Handling Requirements",
+    "domain": "operations",
+    "doc_type": "workflow",
+    "summary": "Defines required documents and handling rules for each load.",
+    "related_docs": ["pod", "bol", "ready-for-billing", "invoice"],
+    "version": "v1",
+    "body": "# Document Handling Requirements\n\nEach Load may require one or more documents:\n\n- Bill of Lading (BOL)\n- Proof of Delivery (POD)\n- Rate confirmation\n- Accessorial proof (receipts, notes)\n\nBefore a Load can move to **READY_FOR_BILLING**:\n- All required documents must be attached\n- Documents must be legible\n- Names, dates, and signatures must be visible\n\nMissing or poor-quality documents delay billing and may block invoice creation."
+  },
+  {
+    "slug": "accessorials",
+    "title": "Accessorials",
+    "domain": "billing",
+    "doc_type": "reference",
+    "summary": "Defines accessorials and how they are documented for billing.",
+    "related_docs": ["accessorial-charges", "ready-for-billing", "invoice"],
+    "version": "v1",
+    "body": "# Accessorials\n\nAccessorials are additional charges for services beyond standard linehaul.\n\nCommon examples:\n- Detention\n- Layover\n- TONU (Truck Ordered Not Used)\n- Lumper fees\n- Driver assist\n- Redelivery\n\nAccessorials must be:\n- Noted on the Load\n- Supported by receipts or time stamps when possible\n- Reviewed during **READY_FOR_BILLING** before invoicing."
+  },
+  {
+    "slug": "accessorial-charges",
+    "title": "Accessorial Charges",
+    "domain": "billing",
+    "doc_type": "reference",
+    "summary": "Breaks down common accessorial types and their billing rules.",
+    "related_docs": ["accessorials", "invoice"],
+    "version": "v1",
+    "body": "# Accessorial Charges\n\nAccessorial charges are billed as separate line items on the Invoice.\n\nTypical charge types:\n- Detention: charge per hour after free time\n- Layover: charge per day\n- TONU: flat fee for unused truck\n- Lumper: pass-through or marked-up fee\n- Driver Assist: per-event or hourly\n\nBilling best practices:\n- Confirm customer rules before applying\n- Attach proof (receipts, notes)\n- Ensure accessorials are clearly labeled on the Invoice"
+  },
+  {
+    "slug": "ready-for-billing",
+    "title": "Ready for Billing",
+    "domain": "billing",
+    "doc_type": "workflow",
+    "summary": "Defines when a Load becomes READY_FOR_BILLING and what it means operationally.",
+    "related_docs": ["load-lifecycle", "pod", "invoice", "document-handling"],
+    "version": "v1",
+    "body": "# Ready for Billing\n\nA Load becomes **READY_FOR_BILLING** once operational work is complete and documents are verified.\n\nRequirements:\n- Load status is **DELIVERED**\n- POD is uploaded and legible\n- Required documents (BOL, accessorial proof, etc.) are present\n- No open operational issues remain\n\nREADY_FOR_BILLING means:\n- The Load is locked from normal operational editing\n- Billing can generate an Invoice\n- The Load appears in the billing queue\n\nREADY_FOR_BILLING is a **load status**, not a financial state like Invoiced or Paid."
+  },
+  {
+    "slug": "invoice",
+    "title": "Invoice",
+    "domain": "billing",
+    "doc_type": "definition",
+    "summary": "Explains what an Invoice is and when it is created from a Load.",
+    "related_docs": ["ready-for-billing", "payment", "accessorials"],
+    "version": "v1",
+    "body": "# Invoice\n\nAn Invoice is the financial document created from a **READY_FOR_BILLING** Load.\n\nAn Invoice includes:\n- Customer and remit-to details\n- Linehaul and accessorial charges\n- References (load number, PO, BOL, etc.)\n- Attached documents such as POD\n\nKey points:\n- Invoice creation happens **after** READY_FOR_BILLING\n- Invoice is not a Load status\n- Payment is tracked against Invoices, not directly against Loads"
+  },
+  {
+    "slug": "payment",
+    "title": "Payment",
+    "domain": "billing",
+    "doc_type": "concept",
+    "summary": "Defines payment and how it relates to Invoices and Loads.",
+    "related_docs": ["invoice", "ready-for-billing"],
+    "version": "v1",
+    "body": "# Payment\n\nPayment is money received from the customer in response to an Invoice.\n\nPayment lifecycle is **financial**, not operational:\n- Invoice generated\n- Invoice sent to customer\n- Customer processes payment\n- Payment received and applied\n\nLoad statuses stop at **READY_FOR_BILLING**. Payment does not change the Load status; it updates financial records."
+  },
+  {
+    "slug": "document",
+    "title": "Document",
+    "domain": "definitions",
+    "doc_type": "definition",
+    "summary": "General definition of documents in Atlas Command.",
+    "related_docs": ["document-handling", "pod", "bol"],
+    "version": "v1",
+    "body": "# Document (General)\n\nA document in Atlas Command is any file or record attached to a Load or account.\n\nExamples:\n- BOL\n- POD\n- Rate confirmation\n- Accessorial receipts\n\nDocuments support:\n- Operational accuracy\n- Billing readiness\n- Audits and disputes"
+  },
+  {
+    "slug": "workflow",
+    "title": "Workflow",
+    "domain": "definitions",
+    "doc_type": "definition",
+    "summary": "Defines what a workflow is in the context of Atlas Command.",
+    "related_docs": ["load-lifecycle", "driver-assignment-workflow", "exceptions-workflow"],
+    "version": "v1",
+    "body": "# Workflow\n\nA workflow is a repeatable sequence of steps that moves a Load or process from start to finish.\n\nAtlas workflows include:\n- Load lifecycle\n- Driver assignment\n- Exceptions handling\n- Billing readiness\n\nWorkflows are designed to be:\n- Predictable\n- Auditable\n- Safe for AI assistance"
+  },
+  {
+    "slug": "role",
+    "title": "Role",
+    "domain": "definitions",
+    "doc_type": "definition",
+    "summary": "Defines user roles and responsibility boundaries.",
+    "related_docs": ["workflow", "atlas-governance"],
+    "version": "v1",
+    "body": "# Role\n\nA role represents a set of permissions and responsibilities within Atlas Command.\n\nExamples:\n- Dispatcher\n- Driver Manager\n- Billing Specialist\n- Admin\n\nRoles determine:\n- Which pages a user can access\n- Which actions they can take\n- What data they can see"
+  },
+  {
+    "slug": "atlas-governance",
+    "title": "Atlas AI Governance (Dipsy Constitution)",
+    "domain": "ai",
+    "doc_type": "governance",
+    "summary": "Defines the governance rules and constraints for AI behavior in Atlas Command.",
+    "related_docs": ["load-statuses", "workflow", "ready-for-billing"],
+    "version": "v1",
+    "body": "# Atlas AI Governance (Dipsy Constitution)\n\nThis document defines the governance rules for all Atlas AI components.\n\nCore principles:\n- Enforce canonical load statuses and workflows\n- Respect Row-Level Security and org boundaries\n- Never hallucinate undocumented features or statuses\n- Prefer \"This is not documented in Atlas yet\" over guessing\n\nAI agents must:\n- Use docs and tools as ground truth\n- Avoid cross-org data leakage\n- Follow safe workflows (no skipping READY_FOR_BILLING rules)\n- Support auditability by logging key actions where appropriate"
+  }
+]
