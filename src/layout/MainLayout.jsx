@@ -55,6 +55,7 @@ import {
   FileText,
   CheckCircle,
   ExternalLink,
+  Brain,
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { trackLogout } from "../lib/activityTracker";
@@ -758,6 +759,7 @@ function MobileSidebar({ isOpen, onClose, onSignOut, isSuperAdmin, activeGroupBy
               <SideLink to="/teammanagement" icon={UserRound} onClick={onClose}>Team Management</SideLink>
               <SideLink to="/admin/driver-learning-test" icon={GraduationCap} onClick={onClose}>Driver Learning Test</SideLink>
               <SideLink to="/admin/dipsy-training-review" icon={Bot} onClick={onClose}>Dipsy Training Review</SideLink>
+              <SideLink to="/admin/dipsy-quality" icon={Brain} onClick={onClose}>Dipsy Quality</SideLink>
               {isSuperAdmin && (
                 <>
                   <SideLink to="/super-admin" icon={Crown} onClick={onClose}>Platform Admin</SideLink>
@@ -908,6 +910,7 @@ export default function MainLayout() {
         "/teammanagement",
         "/admin/driver-learning-test",
         "/admin/dipsy-training-review",
+        "/admin/dipsy-quality",
         "/ai-proof",
         "/ai-lab-proof",
         "/customers",
@@ -1141,6 +1144,9 @@ export default function MainLayout() {
                   </SideLink>
                   <SideLink to="/admin/dipsy-training-review" icon={Bot}>
                     Dipsy Training Review
+                  </SideLink>
+                  <SideLink to="/admin/dipsy-quality" icon={Brain}>
+                    Dipsy Quality
                   </SideLink>
                   {checkedSuperAdmin && isSuperAdmin && (
                     <>

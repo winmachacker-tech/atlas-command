@@ -567,7 +567,7 @@ function EditComplianceModal({ open, onClose, truck, onSaved }) {
 }
 
 /** MODAL: Add New Truck */
-function AddTruckModal({ open, onClose, onSaved }) {
+function AddTruckModal({ open, onClose, onSaved, orgId }) {
   const [form, setForm] = useState({
     truck_number: "",
     vin: "",
@@ -615,6 +615,13 @@ function AddTruckModal({ open, onClose, onSaved }) {
       setBusy(true);
       setErr(null);
 
+      // Make sure we have an active org for this user
+      if (!orgId) {
+        throw new Error(
+          "No active organization found for this user. Please make sure your account is linked to an org."
+        );
+      }
+
       // Validation — this will also feed unit_number
       if (!form.truck_number?.trim()) {
         throw new Error("Truck / Unit number is required.");
@@ -623,6 +630,8 @@ function AddTruckModal({ open, onClose, onSaved }) {
       const trimmedNumber = form.truck_number.trim();
 
       const payload = {
+        // Tenant isolation: make sure this truck belongs to the current org
+        org_id: orgId,
         // IMPORTANT: satisfy NOT NULL constraint on unit_number
         unit_number: trimmedNumber,
         // Keep separate truck_number column populated too
@@ -1231,6 +1240,11 @@ export default function Trucks() {
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
 
+  /** Org context for inserts */
+  const [orgId, setOrgId] = useState(null);
+  const [orgIdError, setOrgIdError] = useState(null);
+  const [orgIdLoading, setOrgIdLoading] = useState(true);
+
   /** Filters */
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -1258,6 +1272,40 @@ export default function Trucks() {
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [alerts, setAlerts] = useState([]);
   const [alertsLoading, setAlertsLoading] = useState(false);
+
+  /** Load current org id (tenant) once */
+  useEffect(() => {
+    let cancelled = false;
+    async function loadOrgId() {
+      try {
+        setOrgIdLoading(true);
+        setOrgIdError(null);
+        const { data, error } = await supabase.rpc("current_org_id");
+        if (error) throw error;
+        if (!cancelled) {
+          setOrgId(data ?? null);
+          if (!data) {
+            setOrgIdError(
+              "No active organization found for this user. You may need to be added to an org."
+            );
+          }
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setOrgId(null);
+          setOrgIdError(e.message || "Failed to resolve current organization.");
+        }
+      } finally {
+        if (!cancelled) {
+          setOrgIdLoading(false);
+        }
+      }
+    }
+    loadOrgId();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -1661,15 +1709,29 @@ export default function Trucks() {
           <button
             className={cx(
               "inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-sm",
-              "bg-[var(--bg-active)] hover:opacity-90 transition"
+              "bg-[var(--bg-active)] hover:opacity-90 transition",
+              orgIdLoading ? "opacity-60 cursor-not-allowed" : ""
             )}
-            onClick={() => setAddOpen(true)}
+            onClick={() => {
+              if (!orgIdLoading) setAddOpen(true);
+            }}
+            disabled={orgIdLoading || !!orgIdError}
           >
             <Plus className="w-4 h-4" />
             Add Truck
           </button>
         </div>
       </div>
+
+      {orgIdError && (
+        <div className="mb-3 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-100 px-3 py-2 text-sm flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 mt-0.5" />
+          <div>
+            <div className="font-medium">Org not resolved</div>
+            <div className="opacity-80">{orgIdError}</div>
+          </div>
+        </div>
+      )}
 
       <div className="text-xs text-[var(--text-soft)] mb-3">
         Track registrations, inspections, IFTA, insurance
@@ -2039,6 +2101,7 @@ export default function Trucks() {
         open={addOpen}
         onClose={() => setAddOpen(false)}
         onSaved={refetch}
+        orgId={orgId}
       />
       <MaintenanceModal
         open={maintOpen}

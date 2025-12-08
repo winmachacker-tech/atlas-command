@@ -151,7 +151,7 @@ serve(async (req) => {
     }
 
     // 4) Fall back to atlas_docs brain (existing behavior)
-    const DOC_THRESHOLD = 0.78;
+    const DOC_THRESHOLD = 0.40;
     const DOC_MATCH_COUNT = 8;
 
 const { data: docMatches, error: docsError } = await supabaseClient.rpc(

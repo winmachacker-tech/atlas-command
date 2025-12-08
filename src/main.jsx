@@ -113,7 +113,7 @@ const DriverSettlements = lazy(() =>
 /* Platform Admin */
 const SuperAdmin = lazy(() => import("./pages/SuperAdmin.jsx"));
 const Financials = lazy(() => import("./pages/Financials.jsx"));
-
+const DipsyQualityDashboard = lazy(() => import('./pages/DipsyQualityDashboard'));
 /* Billing subscription page (Stripe checkout) */
 const BillingSubscription = lazy(() =>
   import("./pages/BillingSubscription.jsx")
@@ -514,7 +514,11 @@ function AppRoutes() {
                   path="admin/dipsy-training-review"
                   element={<DipsyTrainingReview />}
                   />
-
+                 <Route path="admin">
+                 <Route path="driver-learning-test" element={<DriverLearningTest />} />
+                 <Route path="dipsy-training-review" element={<DipsyTrainingReview />} />
+                 <Route path="dipsy-quality" element={<DipsyQualityDashboard />} />  {/* ← Add */}
+                 </Route>
 
                   {/* User settings */}
                   <Route path="profile" element={<Profile />} />
