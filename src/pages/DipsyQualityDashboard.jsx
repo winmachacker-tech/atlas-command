@@ -1,9 +1,16 @@
-// src/pages/DipsyQualityDashboard.jsx
-// Dipsy AI Quality Monitoring Dashboard
-// Location: Add to Admin dropdown in MainLayout.jsx
+// FILE: src/pages/DipsyQualityDashboard.jsx
+// Purpose: Dipsy AI Quality Monitoring Dashboard
+// - Shows evaluation runs (auto + manual)
+// - Displays scores, pass rates, hallucination issues
+// - Lets you run a manual evaluation via the dipsy-auto-eval edge function
+//
+// Security:
+// - Uses the logged-in user's Supabase JWT via supabase-js.
+// - All reads/writes go through RLS-protected tables.
+// - No service_role keys and no security policies are modified here.
 
-import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabase';
+import React, { useState, useEffect, useCallback } from "react";
+import { supabase } from "../lib/supabase";
 import {
   Brain,
   Play,
@@ -13,14 +20,12 @@ import {
   AlertTriangle,
   Clock,
   TrendingUp,
-  TrendingDown,
   ChevronDown,
   ChevronRight,
   FileQuestion,
   Target,
   Zap,
   BarChart3,
-  Calendar,
   Loader2,
   AlertCircle,
   Eye,
@@ -30,14 +35,13 @@ import {
   ArrowUp,
   ArrowDown,
   Minus,
-} from 'lucide-react';
+} from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SCHEDULED RUN STATUS WIDGET
 // ─────────────────────────────────────────────────────────────────────────────
 function ScheduledRunStatus({ runs }) {
-  // Find the most recent scheduled run
-  const scheduledRuns = runs.filter(r => r.run_type === 'scheduled');
+  const scheduledRuns = runs.filter((r) => r.run_type === "scheduled");
   const lastScheduled = scheduledRuns[0];
   const previousScheduled = scheduledRuns[1];
 
@@ -46,48 +50,65 @@ function ScheduledRunStatus({ runs }) {
   }
 
   const formatTime = (dateStr) => {
-    if (!dateStr) return 'N/A';
+    if (!dateStr) return "N/A";
     const date = new Date(dateStr);
     const now = new Date();
     const diffMs = now - date;
     const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
     const diffDays = Math.floor(diffHours / 24);
 
-    if (diffHours < 1) return 'Just now';
+    if (diffHours < 1) return "Just now";
     if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays === 1) return 'Yesterday';
+    if (diffDays === 1) return "Yesterday";
     return `${diffDays} days ago`;
   };
 
   // Calculate delta from previous run
   let passRateDelta = null;
   let deltaDirection = null;
-  
-  if (previousScheduled && lastScheduled.total_questions > 0 && previousScheduled.total_questions > 0) {
-    const currentPassRate = (lastScheduled.passed || 0) / lastScheduled.total_questions;
-    const previousPassRate = (previousScheduled.passed || 0) / previousScheduled.total_questions;
+
+  if (
+    previousScheduled &&
+    lastScheduled.total_questions > 0 &&
+    previousScheduled.total_questions > 0
+  ) {
+    const currentPassRate =
+      (lastScheduled.passed || 0) / lastScheduled.total_questions;
+    const previousPassRate =
+      (previousScheduled.passed || 0) / previousScheduled.total_questions;
     passRateDelta = Math.round((currentPassRate - previousPassRate) * 100);
-    deltaDirection = passRateDelta > 0 ? 'up' : passRateDelta < 0 ? 'down' : 'same';
+    deltaDirection =
+      passRateDelta > 0 ? "up" : passRateDelta < 0 ? "down" : "same";
   }
 
-  const isSuccess = lastScheduled.run_status === 'completed' && (lastScheduled.failed || 0) === 0;
+  const isSuccess =
+    lastScheduled.run_status === "completed" &&
+    (lastScheduled.failed || 0) === 0;
   const hasFailures = (lastScheduled.failed || 0) > 0;
   const needsReview = (lastScheduled.needs_review || 0) > 0;
 
   return (
-    <div className={`flex items-center gap-3 px-4 py-2 rounded-lg border ${
-      isSuccess 
-        ? 'bg-emerald-500/10 border-emerald-500/30' 
-        : hasFailures 
-          ? 'bg-red-500/10 border-red-500/30'
+    <div
+      className={`flex items-center gap-3 px-4 py-2 rounded-lg border ${
+        isSuccess
+          ? "bg-emerald-500/10 border-emerald-500/30"
+          : hasFailures
+          ? "bg-red-500/10 border-red-500/30"
           : needsReview
-            ? 'bg-amber-500/10 border-amber-500/30'
-            : 'bg-zinc-700/30 border-zinc-600/30'
-    }`}>
+          ? "bg-amber-500/10 border-amber-500/30"
+          : "bg-zinc-700/30 border-zinc-600/30"
+      }`}
+    >
       {/* Status Icon */}
-      <div className={`p-1.5 rounded-full ${
-        isSuccess ? 'bg-emerald-500/20' : hasFailures ? 'bg-red-500/20' : 'bg-amber-500/20'
-      }`}>
+      <div
+        className={`p-1.5 rounded-full ${
+          isSuccess
+            ? "bg-emerald-500/20"
+            : hasFailures
+            ? "bg-red-500/20"
+            : "bg-amber-500/20"
+        }`}
+      >
         {isSuccess ? (
           <Bot className="w-4 h-4 text-emerald-400" />
         ) : hasFailures ? (
@@ -108,27 +129,37 @@ function ScheduledRunStatus({ runs }) {
           </span>
         </div>
         <div className="flex items-center gap-3 text-xs mt-0.5">
-          <span className="text-emerald-400">✓ {lastScheduled.passed || 0}</span>
+          <span className="text-emerald-400">
+            ✓ {lastScheduled.passed || 0}
+          </span>
           {(lastScheduled.soft_passed || 0) > 0 && (
-            <span className="text-blue-400">◐ {lastScheduled.soft_passed}</span>
+            <span className="text-blue-400">
+              ◐ {lastScheduled.soft_passed}
+            </span>
           )}
           {(lastScheduled.needs_review || 0) > 0 && (
-            <span className="text-amber-400">⚠ {lastScheduled.needs_review}</span>
+            <span className="text-amber-400">
+              ⚠ {lastScheduled.needs_review}
+            </span>
           )}
           {(lastScheduled.failed || 0) > 0 && (
-            <span className="text-red-400">✗ {lastScheduled.failed}</span>
+            <span className="text-red-400">
+              ✗ {lastScheduled.failed}
+            </span>
           )}
         </div>
       </div>
 
       {/* Delta Badge */}
-      {passRateDelta !== null && deltaDirection !== 'same' && (
-        <div className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${
-          deltaDirection === 'up' 
-            ? 'bg-emerald-500/20 text-emerald-400' 
-            : 'bg-red-500/20 text-red-400'
-        }`}>
-          {deltaDirection === 'up' ? (
+      {passRateDelta !== null && deltaDirection !== "same" && (
+        <div
+          className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${
+            deltaDirection === "up"
+              ? "bg-emerald-500/20 text-emerald-400"
+              : "bg-red-500/20 text-red-400"
+          }`}
+        >
+          {deltaDirection === "up" ? (
             <ArrowUp className="w-3 h-3" />
           ) : (
             <ArrowDown className="w-3 h-3" />
@@ -136,7 +167,7 @@ function ScheduledRunStatus({ runs }) {
           {Math.abs(passRateDelta)}%
         </div>
       )}
-      {passRateDelta !== null && deltaDirection === 'same' && (
+      {passRateDelta !== null && deltaDirection === "same" && (
         <div className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-zinc-600/30 text-zinc-400">
           <Minus className="w-3 h-3" />
           No change
@@ -149,13 +180,13 @@ function ScheduledRunStatus({ runs }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // STAT CARD COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-function StatCard({ icon: Icon, label, value, subValue, color = 'emerald' }) {
+function StatCard({ icon: Icon, label, value, subValue, color = "emerald" }) {
   const colorClasses = {
-    emerald: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
-    amber: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
-    red: 'text-red-400 bg-red-500/10 border-red-500/20',
-    blue: 'text-blue-400 bg-blue-500/10 border-blue-500/20',
-    zinc: 'text-zinc-400 bg-zinc-500/10 border-zinc-500/20',
+    emerald: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+    amber: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+    red: "text-red-400 bg-red-500/10 border-red-500/20",
+    blue: "text-blue-400 bg-blue-500/10 border-blue-500/20",
+    zinc: "text-zinc-400 bg-zinc-500/10 border-zinc-500/20",
   };
 
   return (
@@ -179,31 +210,35 @@ function StatCard({ icon: Icon, label, value, subValue, color = 'emerald' }) {
 // ─────────────────────────────────────────────────────────────────────────────
 function VerdictBadge({ verdict }) {
   const styles = {
-    pass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-    soft_pass: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-    needs_review: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-    soft_fail: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
-    fail: 'bg-red-500/20 text-red-400 border-red-500/30',
-    no_docs: 'bg-zinc-500/20 text-zinc-400 border-zinc-500/30',
-    running: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-    completed: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-    failed: 'bg-red-500/20 text-red-400 border-red-500/30',
+    pass: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
+    soft_pass: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+    needs_review: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+    soft_fail: "bg-orange-500/20 text-orange-400 border-orange-500/30",
+    fail: "bg-red-500/20 text-red-400 border-red-500/30",
+    no_docs: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30",
+    running: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+    completed: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
+    failed: "bg-red-500/20 text-red-400 border-red-500/30",
   };
 
   const labels = {
-    pass: 'Pass',
-    soft_pass: 'Soft Pass',
-    needs_review: 'Needs Review',
-    soft_fail: 'Soft Fail',
-    fail: 'Fail',
-    no_docs: 'No Docs',
-    running: 'Running',
-    completed: 'Completed',
-    failed: 'Failed',
+    pass: "Pass",
+    soft_pass: "Soft Pass",
+    needs_review: "Needs Review",
+    soft_fail: "Soft Fail",
+    fail: "Fail",
+    no_docs: "No Docs",
+    running: "Running",
+    completed: "Completed",
+    failed: "Failed",
   };
 
   return (
-    <span className={`px-2 py-0.5 text-xs font-medium rounded-full border ${styles[verdict] || styles.needs_review}`}>
+    <span
+      className={`px-2 py-0.5 text-xs font-medium rounded-full border ${
+        styles[verdict] || styles.needs_review
+      }`}
+    >
       {labels[verdict] || verdict}
     </span>
   );
@@ -212,13 +247,13 @@ function VerdictBadge({ verdict }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // SCORE BAR COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-function ScoreBar({ label, value, color = 'emerald' }) {
+function ScoreBar({ label, value, color = "emerald" }) {
   const percentage = Math.round((value || 0) * 100);
   const colorClasses = {
-    emerald: 'bg-emerald-500',
-    amber: 'bg-amber-500',
-    red: 'bg-red-500',
-    blue: 'bg-blue-500',
+    emerald: "bg-emerald-500",
+    amber: "bg-amber-500",
+    red: "bg-red-500",
+    blue: "bg-blue-500",
   };
 
   return (
@@ -240,7 +275,12 @@ function ScoreBar({ label, value, color = 'emerald' }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // EVALUATION RESULT ROW COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-function EvaluationResultRow({ result, isExpanded, onToggle, onMarkFalsePositive }) {
+function EvaluationResultRow({
+  result,
+  isExpanded,
+  onToggle,
+  onMarkFalsePositive,
+}) {
   return (
     <div className="border-b border-zinc-700/50 last:border-0">
       <div
@@ -248,13 +288,17 @@ function EvaluationResultRow({ result, isExpanded, onToggle, onMarkFalsePositive
         className="flex items-center gap-4 p-4 cursor-pointer hover:bg-zinc-700/30 transition-colors"
       >
         <button className="text-zinc-400">
-          {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+          {isExpanded ? (
+            <ChevronDown className="w-4 h-4" />
+          ) : (
+            <ChevronRight className="w-4 h-4" />
+          )}
         </button>
-        
+
         <div className="flex-1 min-w-0">
           <p className="text-sm text-white truncate">{result.question}</p>
           <p className="text-xs text-zinc-500 mt-0.5">
-            {result.question_type || 'general'} • {result.domain || 'Core'}
+            {result.question_type || "general"} • {result.domain || "Core"}
           </p>
         </div>
 
@@ -274,21 +318,41 @@ function EvaluationResultRow({ result, isExpanded, onToggle, onMarkFalsePositive
           <div className="pt-4 space-y-4">
             {/* Scores Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <ScoreBar label="Accuracy" value={result.accuracy} color="emerald" />
-              <ScoreBar label="Grounding" value={result.grounding} color="blue" />
-              <ScoreBar label="Completeness" value={result.completeness} color="amber" />
-              <ScoreBar 
-                label="Overall" 
-                value={result.overall_score} 
-                color={result.overall_score >= 0.9 ? 'emerald' : result.overall_score >= 0.7 ? 'amber' : 'red'} 
+              <ScoreBar
+                label="Accuracy"
+                value={result.accuracy}
+                color="emerald"
+              />
+              <ScoreBar
+                label="Grounding"
+                value={result.grounding}
+                color="blue"
+              />
+              <ScoreBar
+                label="Completeness"
+                value={result.completeness}
+                color="amber"
+              />
+              <ScoreBar
+                label="Overall"
+                value={result.overall_score}
+                color={
+                  result.overall_score >= 0.9
+                    ? "emerald"
+                    : result.overall_score >= 0.7
+                    ? "amber"
+                    : "red"
+                }
               />
             </div>
 
             {/* Dipsy's Answer */}
             {result.dipsy_answer && (
               <div>
-                <p className="text-xs font-medium text-zinc-400 mb-2">Dipsy's Answer:</p>
-                <div className="bg-zinc-900/50 rounded-lg p-3 text-sm text-zinc-300 max-h-48 overflow-y-auto">
+                <p className="text-xs font-medium text-zinc-400 mb-2">
+                  Dipsy's Answer:
+                </p>
+                <div className="bg-zinc-900/50 rounded-lg p-3 text-sm text-zinc-300 max-h-48 overflow-y-auto whitespace-pre-wrap">
                   {result.dipsy_answer}
                 </div>
               </div>
@@ -297,10 +361,15 @@ function EvaluationResultRow({ result, isExpanded, onToggle, onMarkFalsePositive
             {/* Issues */}
             {result.issues && result.issues.length > 0 && (
               <div>
-                <p className="text-xs font-medium text-amber-400 mb-2">Issues Found:</p>
+                <p className="text-xs font-medium text-amber-400 mb-2">
+                  Issues Found:
+                </p>
                 <div className="flex flex-wrap gap-2">
                   {result.issues.map((issue, idx) => (
-                    <span key={idx} className="px-2 py-1 text-xs bg-amber-500/10 text-amber-400 rounded border border-amber-500/20">
+                    <span
+                      key={idx}
+                      className="px-2 py-1 text-xs bg-amber-500/10 text-amber-400 rounded border border-amber-500/20"
+                    >
                       {issue}
                     </span>
                   ))}
@@ -311,10 +380,15 @@ function EvaluationResultRow({ result, isExpanded, onToggle, onMarkFalsePositive
             {/* Hallucinations */}
             {result.hallucinations && result.hallucinations.length > 0 && (
               <div>
-                <p className="text-xs font-medium text-red-400 mb-2">Hallucinations Detected:</p>
+                <p className="text-xs font-medium text-red-400 mb-2">
+                  Hallucinations Detected:
+                </p>
                 <div className="flex flex-wrap gap-2">
                   {result.hallucinations.map((h, idx) => (
-                    <span key={idx} className="px-2 py-1 text-xs bg-red-500/10 text-red-400 rounded border border-red-500/20">
+                    <span
+                      key={idx}
+                      className="px-2 py-1 text-xs bg-red-500/10 text-red-400 rounded border border-red-500/20"
+                    >
                       {h}
                     </span>
                   ))}
@@ -343,25 +417,26 @@ function EvaluationResultRow({ result, isExpanded, onToggle, onMarkFalsePositive
 // ─────────────────────────────────────────────────────────────────────────────
 // RUN HISTORY ROW COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-function RunHistoryRow({ run, isSelected, onSelect, onViewDetails }) {
+function RunHistoryRow({ run, isSelected, onSelect }) {
   const formatDate = (dateStr) => {
-    if (!dateStr) return 'N/A';
-    return new Date(dateStr).toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
+    if (!dateStr) return "N/A";
+    return new Date(dateStr).toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
     });
   };
 
-  // Use started_at if available, fallback to created_at
   const runDate = run.started_at || run.created_at;
 
   return (
     <div
       onClick={() => onSelect(run.id)}
       className={`p-4 border-b border-zinc-700/50 last:border-0 cursor-pointer transition-colors ${
-        isSelected ? 'bg-emerald-500/10 border-l-2 border-l-emerald-500' : 'hover:bg-zinc-700/30'
+        isSelected
+          ? "bg-emerald-500/10 border-l-2 border-l-emerald-500"
+          : "hover:bg-zinc-700/30"
       }`}
     >
       <div className="flex items-center justify-between mb-2">
@@ -393,8 +468,12 @@ function RunHistoryRow({ run, isSelected, onSelect, onViewDetails }) {
 
       {run.avg_accuracy !== null && (
         <div className="mt-2 flex items-center gap-4 text-xs text-zinc-400">
-          <span>Avg Accuracy: {Math.round((run.avg_accuracy || 0) * 100)}%</span>
-          <span>Avg Grounding: {Math.round((run.avg_grounding || 0) * 100)}%</span>
+          <span>
+            Avg Accuracy: {Math.round((run.avg_accuracy || 0) * 100)}%
+          </span>
+          <span>
+            Avg Grounding: {Math.round((run.avg_grounding || 0) * 100)}%
+          </span>
         </div>
       )}
     </div>
@@ -409,14 +488,14 @@ export default function DipsyQualityDashboard() {
   const [runningEval, setRunningEval] = useState(false);
   const [error, setError] = useState(null);
   const [session, setSession] = useState(null);
-  
+
   // Data states
   const [runs, setRuns] = useState([]);
   const [selectedRunId, setSelectedRunId] = useState(null);
   const [results, setResults] = useState([]);
   const [questions, setQuestions] = useState([]);
   const [expandedResultId, setExpandedResultId] = useState(null);
-  
+
   // Stats
   const [stats, setStats] = useState({
     totalRuns: 0,
@@ -432,7 +511,9 @@ export default function DipsyQualityDashboard() {
       setSession(session);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
 
@@ -445,29 +526,46 @@ export default function DipsyQualityDashboard() {
   const fetchRuns = useCallback(async () => {
     try {
       const { data, error: fetchError } = await supabase
-        .from('dipsy_eval_runs')
-        .select('*')
-        .order('created_at', { ascending: false })
+        .from("dipsy_eval_runs")
+        .select("*")
+        .order("created_at", { ascending: false })
         .limit(20);
 
       if (fetchError) {
         // Table might not exist yet - that's okay
-        if (fetchError.code === '42P01' || fetchError.code === '42703') {
-          console.log('[DipsyQuality] Eval tables not yet created');
+        if (fetchError.code === "42P01" || fetchError.code === "42703") {
+          console.log("[DipsyQuality] Eval tables not yet created");
           setRuns([]);
           return;
         }
         throw fetchError;
       }
+
       setRuns(data || []);
 
       // Calculate stats from runs
       if (data && data.length > 0) {
-        const completedRuns = data.filter(r => r.run_status === 'completed');
-        const totalPassed = completedRuns.reduce((sum, r) => sum + (r.passed || 0), 0);
-        const totalQuestions = completedRuns.reduce((sum, r) => sum + (r.total_questions || 0), 0);
-        const avgAcc = completedRuns.reduce((sum, r) => sum + (r.avg_accuracy || 0), 0) / (completedRuns.length || 1);
-        const avgGnd = completedRuns.reduce((sum, r) => sum + (r.avg_grounding || 0), 0) / (completedRuns.length || 1);
+        const completedRuns = data.filter(
+          (r) => r.run_status === "completed"
+        );
+        const totalPassed = completedRuns.reduce(
+          (sum, r) => sum + (r.passed || 0),
+          0
+        );
+        const totalQuestions = completedRuns.reduce(
+          (sum, r) => sum + (r.total_questions || 0),
+          0
+        );
+        const avgAcc =
+          completedRuns.reduce(
+            (sum, r) => sum + (r.avg_accuracy || 0),
+            0
+          ) / (completedRuns.length || 1);
+        const avgGnd =
+          completedRuns.reduce(
+            (sum, r) => sum + (r.avg_grounding || 0),
+            0
+          ) / (completedRuns.length || 1);
 
         setStats({
           totalRuns: data.length,
@@ -483,10 +581,9 @@ export default function DipsyQualityDashboard() {
         setSelectedRunId(data[0].id);
       }
     } catch (err) {
-      console.error('Error fetching runs:', err);
-      // Don't show error for missing tables
-      if (err.code !== '42P01' && err.code !== '42703') {
-        setError('Failed to load evaluation runs');
+      console.error("Error fetching runs:", err);
+      if (err.code !== "42P01" && err.code !== "42703") {
+        setError("Failed to load evaluation runs");
       }
     }
   }, [selectedRunId]);
@@ -494,22 +591,25 @@ export default function DipsyQualityDashboard() {
   // ─────────────────────────────────────────────────────────────────────────
   // FETCH RESULTS FOR SELECTED RUN
   // ─────────────────────────────────────────────────────────────────────────
-  const fetchResults = useCallback(async (runId) => {
-    if (!runId) return;
-    
-    try {
-      const { data, error: fetchError } = await supabase
-        .from('dipsy_eval_results')
-        .select('*')
-        .eq('run_id', runId)
-        .order('evaluated_at', { ascending: true });
+  const fetchResults = useCallback(
+    async (runId) => {
+      if (!runId) return;
 
-      if (fetchError) throw fetchError;
-      setResults(data || []);
-    } catch (err) {
-      console.error('Error fetching results:', err);
-    }
-  }, []);
+      try {
+        const { data, error: fetchError } = await supabase
+          .from("dipsy_eval_results")
+          .select("*")
+          .eq("run_id", runId)
+          .order("evaluated_at", { ascending: true });
+
+        if (fetchError) throw fetchError;
+        setResults(data || []);
+      } catch (err) {
+        console.error("Error fetching results:", err);
+      }
+    },
+    []
+  );
 
   // ─────────────────────────────────────────────────────────────────────────
   // FETCH TEST QUESTIONS
@@ -517,15 +617,14 @@ export default function DipsyQualityDashboard() {
   const fetchQuestions = useCallback(async () => {
     try {
       const { data, error: fetchError } = await supabase
-        .from('dipsy_eval_questions')
-        .select('*')
-        .eq('is_active', true)
-        .order('created_at', { ascending: true });
+        .from("dipsy_eval_questions")
+        .select("*")
+        .eq("is_active", true)
+        .order("created_at", { ascending: true });
 
       if (fetchError) {
-        // Table might not exist yet - that's okay
-        if (fetchError.code === '42P01' || fetchError.code === '42703') {
-          console.log('[DipsyQuality] Questions table not yet created');
+        if (fetchError.code === "42P01" || fetchError.code === "42703") {
+          console.log("[DipsyQuality] Questions table not yet created");
           setQuestions([]);
           return;
         }
@@ -533,7 +632,7 @@ export default function DipsyQualityDashboard() {
       }
       setQuestions(data || []);
     } catch (err) {
-      console.error('Error fetching questions:', err);
+      console.error("Error fetching questions:", err);
     }
   }, []);
 
@@ -542,7 +641,7 @@ export default function DipsyQualityDashboard() {
   // ─────────────────────────────────────────────────────────────────────────
   const runEvaluation = async () => {
     if (!session?.access_token) {
-      setError('No authentication token available');
+      setError("No authentication token available");
       return;
     }
 
@@ -553,31 +652,31 @@ export default function DipsyQualityDashboard() {
       const response = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/dipsy-auto-eval`,
         {
-          method: 'POST',
+          method: "POST",
           headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+            "Content-Type": "application/json",
           },
-          body: JSON.stringify({ run_type: 'manual' }),
+          body: JSON.stringify({ run_type: "manual" }),
         }
       );
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Evaluation failed');
+        throw new Error(data.error || "Evaluation failed");
       }
 
       // Refresh runs list
       await fetchRuns();
-      
+
       // Select the new run
       if (data.run_id) {
         setSelectedRunId(data.run_id);
       }
     } catch (err) {
-      console.error('Evaluation error:', err);
-      setError(err.message || 'Failed to run evaluation');
+      console.error("Evaluation error:", err);
+      setError(err.message || "Failed to run evaluation");
     } finally {
       setRunningEval(false);
     }
@@ -588,40 +687,41 @@ export default function DipsyQualityDashboard() {
   // ─────────────────────────────────────────────────────────────────────────
   const handleMarkFalsePositive = async (result) => {
     if (!result.hallucinations || result.hallucinations.length === 0) return;
-    
-    // Extract the terms from hallucination strings (e.g., "Hallucinated: DISPATCHED" -> "DISPATCHED")
-    const falsePositiveTerms = result.hallucinations.map(h => {
+
+    const falsePositiveTerms = result.hallucinations.map((h) => {
       const match = h.match(/Hallucinated:\s*(.+)/i);
       return match ? match[1].trim() : h;
     });
 
     try {
       const { error: feedbackError } = await supabase
-        .from('dipsy_eval_feedback')
+        .from("dipsy_eval_feedback")
         .insert({
           result_id: result.id,
           question_id: result.question_id,
-          feedback_type: 'false_positive',
+          feedback_type: "false_positive",
           false_positive_terms: falsePositiveTerms,
-          notes: `Marked as false positive - terms appeared in negation context`,
+          notes:
+            "Marked as false positive - terms appeared in negation context",
         });
 
       if (feedbackError) {
-        // Table might not exist yet
-        if (feedbackError.code === '42P01') {
-          setError('Feedback table not created yet. Run the SQL migration first.');
+        if (feedbackError.code === "42P01") {
+          setError(
+            "Feedback table not created yet. Run the SQL migration first."
+          );
           return;
         }
         throw feedbackError;
       }
 
-      // Show success message
       setError(null);
-      alert(`✓ Marked ${falsePositiveTerms.length} term(s) as false positive. Future evaluations will ignore these in negation context.`);
-      
+      alert(
+        `✓ Marked ${falsePositiveTerms.length} term(s) as false positive. Future evaluations will ignore these in negation context.`
+      );
     } catch (err) {
-      console.error('Error saving feedback:', err);
-      setError('Failed to save feedback: ' + err.message);
+      console.error("Error saving feedback:", err);
+      setError("Failed to save feedback: " + err.message);
     }
   };
 
@@ -654,7 +754,9 @@ export default function DipsyQualityDashboard() {
     );
   }
 
-  const selectedRun = runs.find(r => r.id === selectedRunId);
+  const selectedRun = runs.find((r) => r.id === selectedRunId);
+  const selectedRunTimestamp =
+    selectedRun && (selectedRun.started_at || selectedRun.created_at);
 
   return (
     <div className="p-6 space-y-6">
@@ -665,20 +767,27 @@ export default function DipsyQualityDashboard() {
             <Brain className="w-6 h-6 text-emerald-400" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-white">Dipsy Quality Dashboard</h1>
-            <p className="text-sm text-zinc-400">Monitor and evaluate AI response quality</p>
+            <h1 className="text-2xl font-bold text-white">
+              Dipsy Quality Dashboard
+            </h1>
+            <p className="text-sm text-zinc-400">
+              Monitor and evaluate AI response quality
+            </p>
           </div>
         </div>
 
         <div className="flex items-center gap-3">
           <button
-            onClick={() => { fetchRuns(); fetchQuestions(); }}
+            onClick={() => {
+              fetchRuns();
+              fetchQuestions();
+            }}
             className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-700/50 rounded-lg transition-colors"
             title="Refresh"
           >
             <RefreshCw className="w-5 h-5" />
           </button>
-          
+
           <button
             onClick={runEvaluation}
             disabled={runningEval}
@@ -718,12 +827,7 @@ export default function DipsyQualityDashboard() {
 
       {/* Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <StatCard
-          icon={BarChart3}
-          label="Total Runs"
-          value={stats.totalRuns}
-          color="blue"
-        />
+        <StatCard icon={BarChart3} label="Total Runs" value={stats.totalRuns} color="blue" />
         <StatCard
           icon={FileQuestion}
           label="Active Questions"
@@ -746,7 +850,13 @@ export default function DipsyQualityDashboard() {
           icon={TrendingUp}
           label="Pass Rate"
           value={`${Math.round(stats.passRate * 100)}%`}
-          color={stats.passRate >= 0.9 ? 'emerald' : stats.passRate >= 0.7 ? 'amber' : 'red'}
+          color={
+            stats.passRate >= 0.9
+              ? "emerald"
+              : stats.passRate >= 0.7
+              ? "amber"
+              : "red"
+          }
         />
       </div>
 
@@ -760,16 +870,18 @@ export default function DipsyQualityDashboard() {
               Run History
             </h2>
           </div>
-          
+
           <div className="max-h-[500px] overflow-y-auto">
             {runs.length === 0 ? (
               <div className="p-8 text-center">
                 <BarChart3 className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
                 <p className="text-zinc-400">No evaluation runs yet</p>
-                <p className="text-sm text-zinc-500 mt-1">Click "Run Evaluation" to start</p>
+                <p className="text-sm text-zinc-500 mt-1">
+                  Click &quot;Run Evaluation&quot; to start
+                </p>
               </div>
             ) : (
-              runs.map(run => (
+              runs.map((run) => (
                 <RunHistoryRow
                   key={run.id}
                   run={run}
@@ -787,13 +899,13 @@ export default function DipsyQualityDashboard() {
             <h2 className="font-semibold text-white flex items-center gap-2">
               <Eye className="w-4 h-4 text-zinc-400" />
               Evaluation Results
-              {selectedRun && (
+              {selectedRun && selectedRunTimestamp && (
                 <span className="text-xs text-zinc-500 font-normal ml-2">
-                  {new Date(selectedRun.started_at).toLocaleString()}
+                  {new Date(selectedRunTimestamp).toLocaleString()}
                 </span>
               )}
             </h2>
-            
+
             {selectedRun && (
               <div className="flex items-center gap-2">
                 <span className="text-xs text-zinc-500">
@@ -815,18 +927,22 @@ export default function DipsyQualityDashboard() {
                 <FileQuestion className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
                 <p className="text-zinc-400">No results for this run</p>
                 <p className="text-sm text-zinc-500 mt-1">
-                  {selectedRun.run_status === 'running' ? 'Evaluation in progress...' : 'Run may have failed'}
+                  {selectedRun.run_status === "running"
+                    ? "Evaluation in progress..."
+                    : "Run may have failed"}
                 </p>
               </div>
             ) : (
-              results.map(result => (
+              results.map((result) => (
                 <EvaluationResultRow
                   key={result.id}
                   result={result}
                   isExpanded={expandedResultId === result.id}
-                  onToggle={() => setExpandedResultId(
-                    expandedResultId === result.id ? null : result.id
-                  )}
+                  onToggle={() =>
+                    setExpandedResultId(
+                      expandedResultId === result.id ? null : result.id
+                    )
+                  }
                   onMarkFalsePositive={handleMarkFalsePositive}
                 />
               ))
@@ -850,21 +966,25 @@ export default function DipsyQualityDashboard() {
 
         <div className="p-4">
           {questions.length === 0 ? (
-            <p className="text-center text-zinc-500 py-4">No test questions configured</p>
+            <p className="text-center text-zinc-500 py-4">
+              No test questions configured
+            </p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {questions.slice(0, 9).map(q => (
+              {questions.slice(0, 9).map((q) => (
                 <div
                   key={q.id}
                   className="p-3 bg-zinc-900/50 rounded-lg border border-zinc-700/30 hover:border-zinc-600/50 transition-colors"
                 >
-                  <p className="text-sm text-white line-clamp-2">{q.question}</p>
+                  <p className="text-sm text-white line-clamp-2">
+                    {q.question}
+                  </p>
                   <div className="flex items-center gap-2 mt-2">
                     <span className="px-2 py-0.5 text-xs bg-zinc-700/50 text-zinc-400 rounded">
-                      {q.question_type || 'general'}
+                      {q.question_type || "general"}
                     </span>
                     <span className="px-2 py-0.5 text-xs bg-zinc-700/50 text-zinc-400 rounded">
-                      {q.domain || 'Core'}
+                      {q.domain || "Core"}
                     </span>
                   </div>
                 </div>
