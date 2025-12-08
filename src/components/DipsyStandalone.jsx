@@ -5,8 +5,8 @@ const DipsyStandalone = ({ state = 'idle', size = 'medium' }) => {
   // Size configurations
   const sizes = {
     small: {
-      container: 'w-8 h-8',
-      eye: 'w-2 h-2',
+      container: 'w-10 h-10',
+      eye: 'w-2.5 h-2.5',
       pupil: 'w-1 h-1',
       highlight: 'w-0.5 h-0.5',
       smile: 'w-3 h-1',
@@ -15,11 +15,13 @@ const DipsyStandalone = ({ state = 'idle', size = 'medium' }) => {
       lightbulb: 'w-4 h-5',
       arm: 'w-0.5 h-2',
       eyebrow: 'w-2 h-0.5',
-      mouth: 'w-3'
+      mouth: 'w-3',
+      glow: '8px',
+      innerGlow: '4px'
     },
     medium: {
-      container: 'w-12 h-12',
-      eye: 'w-3 h-3',
+      container: 'w-14 h-14',
+      eye: 'w-3.5 h-3.5',
       pupil: 'w-1.5 h-1.5',
       highlight: 'w-1 h-1',
       smile: 'w-4 h-1.5',
@@ -28,11 +30,13 @@ const DipsyStandalone = ({ state = 'idle', size = 'medium' }) => {
       lightbulb: 'w-5 h-6',
       arm: 'w-1 h-3',
       eyebrow: 'w-3 h-0.5',
-      mouth: 'w-5'
+      mouth: 'w-5',
+      glow: '15px',
+      innerGlow: '8px'
     },
     large: {
-      container: 'w-20 h-20',
-      eye: 'w-5 h-5',
+      container: 'w-24 h-24',
+      eye: 'w-6 h-6',
       pupil: 'w-2.5 h-2.5',
       highlight: 'w-1.5 h-1.5',
       smile: 'w-6 h-2',
@@ -41,7 +45,9 @@ const DipsyStandalone = ({ state = 'idle', size = 'medium' }) => {
       lightbulb: 'w-7 h-8',
       arm: 'w-1.5 h-4',
       eyebrow: 'w-5 h-1',
-      mouth: 'w-8'
+      mouth: 'w-8',
+      glow: '25px',
+      innerGlow: '12px'
     }
   };
 
@@ -51,153 +57,167 @@ const DipsyStandalone = ({ state = 'idle', size = 'medium' }) => {
     switch(state) {
       case 'sleeping':
         return {
-          bgGlow: 'shadow-[0_0_15px_rgba(6,182,212,0.2)]',
+          bgGradient: 'from-cyan-500/20 via-cyan-400/10 to-transparent',
+          glowColor: 'rgba(6, 182, 212, 0.3)',
+          borderColor: 'border-cyan-400/40',
           eyePosition: '',
           pupilPosition: 'top-1 left-1',
-          eyeScale: 'scale-y-20',
+          eyeScale: 'scale-y-[0.15]',
           pulseSpeed: 'animate-pulse-sleeping',
-          borderColor: 'border-cyan-400/50',
           icon: null,
           extraElement: (
             <>
               <div className="absolute -top-6 -right-2 animate-float-z1">
-                <span className="text-cyan-400 text-xs opacity-60">z</span>
+                <span className="text-cyan-300 text-xs opacity-80 font-bold">z</span>
               </div>
               <div className="absolute -top-10 -right-1 animate-float-z2">
-                <span className="text-cyan-400 text-sm opacity-40">Z</span>
+                <span className="text-cyan-300 text-sm opacity-60 font-bold">Z</span>
               </div>
             </>
           ),
-          eyebrowLeft: '-top-0.5 -left-0.5 opacity-50',
-          eyebrowRight: '-top-0.5 -right-0.5 opacity-50',
+          eyebrowLeft: '-top-0.5 -left-0.5 opacity-30',
+          eyebrowRight: '-top-0.5 -right-0.5 opacity-30',
           mouthShape: 'sleeping',
           headTilt: 'rotate-3',
-          blinkSpeed: 'animate-blink-sleeping'
+          blinkSpeed: '',
+          faceGlow: 'drop-shadow-[0_0_3px_rgba(6,182,212,0.5)]'
         };
       case 'thinking':
         return {
-          bgGlow: 'shadow-[0_0_30px_rgba(6,182,212,0.6)]',
+          bgGradient: 'from-cyan-400/40 via-cyan-500/20 to-cyan-600/10',
+          glowColor: 'rgba(6, 182, 212, 0.6)',
+          borderColor: 'border-cyan-400',
           eyePosition: '',
           pupilPosition: 'animate-pupil-dart',
           eyeScale: 'scale-100',
           pulseSpeed: 'animate-pulse-fast',
-          borderColor: 'border-cyan-400',
-          icon: <Brain className={`${s.icon} text-cyan-300 animate-spin`} />,
+          icon: <Brain className={`${s.icon} text-cyan-300 animate-spin drop-shadow-[0_0_4px_rgba(6,182,212,0.8)]`} />,
           extraElement: null,
           eyebrowLeft: '-top-1 -left-0.5 -rotate-12 animate-brow-focus-left',
           eyebrowRight: '-top-1 -right-0.5 rotate-12 animate-brow-focus-right',
           mouthShape: 'concentrated',
           headTilt: 'rotate-2',
-          blinkSpeed: 'animate-blink-fast'
+          blinkSpeed: 'animate-blink-fast',
+          faceGlow: 'drop-shadow-[0_0_6px_rgba(6,182,212,0.8)]'
         };
       case 'confident-victory':
         return {
-          bgGlow: 'shadow-[0_0_40px_rgba(34,197,94,0.8)]',
+          bgGradient: 'from-emerald-400/40 via-green-500/20 to-cyan-500/10',
+          glowColor: 'rgba(34, 197, 94, 0.7)',
+          borderColor: 'border-emerald-400',
           eyePosition: '',
           pupilPosition: '',
           eyeScale: 'scale-y-50 animate-eyes-squint',
           pulseSpeed: 'animate-victory-jump',
-          borderColor: 'border-green-400',
           icon: null,
           extraElement: (
             <>
-              <div className={`absolute -left-2 top-1 ${s.arm} bg-green-400 rounded-full animate-arm-left origin-bottom`}></div>
-              <div className={`absolute -right-2 top-1 ${s.arm} bg-green-400 rounded-full animate-arm-right origin-bottom`}></div>
-              <div className="absolute -top-2 left-1/2 -translate-x-1/2">
-                <Sparkles className={`${s.icon} text-yellow-300 animate-sparkle-burst`} />
+              <div className={`absolute -left-3 top-1/2 -translate-y-1/2 ${s.arm} bg-gradient-to-t from-emerald-400 to-emerald-300 rounded-full animate-arm-left origin-bottom shadow-[0_0_8px_rgba(34,197,94,0.6)]`}></div>
+              <div className={`absolute -right-3 top-1/2 -translate-y-1/2 ${s.arm} bg-gradient-to-t from-emerald-400 to-emerald-300 rounded-full animate-arm-right origin-bottom shadow-[0_0_8px_rgba(34,197,94,0.6)]`}></div>
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                <Sparkles className={`${s.icon} text-yellow-300 animate-sparkle-burst drop-shadow-[0_0_6px_rgba(253,224,71,0.8)]`} />
               </div>
-              <div className={`absolute top-0 -left-3 w-2 h-2 bg-yellow-300 rounded-full animate-star-burst-1`}></div>
-              <div className={`absolute top-0 -right-3 w-2 h-2 bg-green-300 rounded-full animate-star-burst-2`}></div>
+              <div className={`absolute -top-1 -left-4 w-2 h-2 bg-yellow-300 rounded-full animate-star-burst-1 shadow-[0_0_6px_rgba(253,224,71,0.8)]`}></div>
+              <div className={`absolute -top-1 -right-4 w-2 h-2 bg-emerald-300 rounded-full animate-star-burst-2 shadow-[0_0_6px_rgba(110,231,183,0.8)]`}></div>
             </>
           ),
           eyebrowLeft: '-top-2 -left-1 rotate-12 animate-brow-excited-left',
           eyebrowRight: '-top-2 -right-1 -rotate-12 animate-brow-excited-right',
           mouthShape: 'open-happy',
           headTilt: 'animate-head-shake-happy',
-          blinkSpeed: 'animate-blink-excited'
+          blinkSpeed: 'animate-blink-excited',
+          faceGlow: 'drop-shadow-[0_0_8px_rgba(34,197,94,0.8)]'
         };
       case 'confident-lightbulb':
         return {
-          bgGlow: 'shadow-[0_0_40px_rgba(34,197,94,0.8)]',
+          bgGradient: 'from-emerald-400/40 via-yellow-400/20 to-cyan-500/10',
+          glowColor: 'rgba(34, 197, 94, 0.7)',
+          borderColor: 'border-emerald-400',
           eyePosition: '',
           pupilPosition: 'top-0 left-1/2 -translate-x-1/2',
           eyeScale: 'scale-125 animate-eyes-wide-pop',
           pulseSpeed: 'animate-bounce-subtle',
-          borderColor: 'border-green-400',
           icon: null,
           extraElement: (
             <>
-              <div className="absolute -top-8 left-1/2 -translate-x-1/2 animate-lightbulb-appear">
+              <div className="absolute -top-10 left-1/2 -translate-x-1/2 animate-lightbulb-appear">
                 <div className="relative">
-                  <div className="absolute inset-0 bg-yellow-300 rounded-full blur-md animate-pulse-glow"></div>
-                  <div className={`relative ${s.lightbulb} bg-gradient-to-b from-yellow-200 to-yellow-400 rounded-t-full`}>
-                    <div className="absolute top-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-white rounded-full opacity-80"></div>
+                  <div className="absolute inset-0 bg-yellow-300 rounded-full blur-lg animate-pulse-glow"></div>
+                  <div className={`relative ${s.lightbulb} bg-gradient-to-b from-yellow-200 to-yellow-400 rounded-t-full shadow-[0_0_20px_rgba(253,224,71,0.8)]`}>
+                    <div className="absolute top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-white rounded-full opacity-90"></div>
                   </div>
-                  <div className="w-3 h-2 bg-slate-700 mx-auto rounded-sm"></div>
+                  <div className="w-3 h-2 bg-slate-600 mx-auto rounded-sm border border-slate-500"></div>
                   <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
-                    <div className="absolute w-8 h-0.5 bg-yellow-300 opacity-60 animate-ray-1"></div>
-                    <div className="absolute w-8 h-0.5 bg-yellow-300 opacity-60 animate-ray-2 rotate-45"></div>
-                    <div className="absolute w-8 h-0.5 bg-yellow-300 opacity-60 animate-ray-3 rotate-90"></div>
-                    <div className="absolute w-8 h-0.5 bg-yellow-300 opacity-60 animate-ray-4 -rotate-45"></div>
+                    <div className="absolute w-10 h-0.5 bg-yellow-300 opacity-60 animate-ray-1 shadow-[0_0_4px_rgba(253,224,71,0.6)]"></div>
+                    <div className="absolute w-10 h-0.5 bg-yellow-300 opacity-60 animate-ray-2 rotate-45 shadow-[0_0_4px_rgba(253,224,71,0.6)]"></div>
+                    <div className="absolute w-10 h-0.5 bg-yellow-300 opacity-60 animate-ray-3 rotate-90 shadow-[0_0_4px_rgba(253,224,71,0.6)]"></div>
+                    <div className="absolute w-10 h-0.5 bg-yellow-300 opacity-60 animate-ray-4 -rotate-45 shadow-[0_0_4px_rgba(253,224,71,0.6)]"></div>
                   </div>
                 </div>
               </div>
-              <div className="absolute inset-0 bg-yellow-200 rounded-lg animate-flash-once"></div>
+              <div className="absolute inset-0 bg-yellow-200/30 rounded-xl animate-flash-once"></div>
             </>
           ),
           eyebrowLeft: '-top-3 -left-1 rotate-45 animate-brow-raise-left',
           eyebrowRight: '-top-3 -right-1 -rotate-45 animate-brow-raise-right',
           mouthShape: 'surprised',
           headTilt: 'animate-head-tilt-curious',
-          blinkSpeed: 'animate-blink-surprised'
+          blinkSpeed: 'animate-blink-surprised',
+          faceGlow: 'drop-shadow-[0_0_10px_rgba(253,224,71,0.6)]'
         };
       case 'celebrating':
         return {
-          bgGlow: 'shadow-[0_0_40px_rgba(34,197,94,0.8)]',
+          bgGradient: 'from-emerald-400/40 via-green-500/20 to-cyan-500/10',
+          glowColor: 'rgba(34, 197, 94, 0.7)',
+          borderColor: 'border-emerald-400',
           eyePosition: '',
           pupilPosition: 'animate-pupil-dance',
           eyeScale: 'scale-110',
           pulseSpeed: 'animate-bounce',
-          borderColor: 'border-green-400',
-          icon: <ThumbsUp className={`${s.icon} text-green-300 animate-bounce`} />,
+          icon: <ThumbsUp className={`${s.icon} text-emerald-300 animate-bounce drop-shadow-[0_0_4px_rgba(110,231,183,0.8)]`} />,
           extraElement: null,
           eyebrowLeft: '-top-2 -left-1 rotate-12',
           eyebrowRight: '-top-2 -right-1 -rotate-12',
           mouthShape: 'big-smile',
           headTilt: 'animate-head-bob',
-          blinkSpeed: 'animate-blink-happy'
+          blinkSpeed: 'animate-blink-happy',
+          faceGlow: 'drop-shadow-[0_0_8px_rgba(34,197,94,0.8)]'
         };
       case 'learning':
         return {
-          bgGlow: 'shadow-[0_0_25px_rgba(251,191,36,0.5)]',
+          bgGradient: 'from-amber-400/30 via-yellow-500/20 to-orange-400/10',
+          glowColor: 'rgba(251, 191, 36, 0.5)',
+          borderColor: 'border-amber-400',
           eyePosition: '',
           pupilPosition: 'top-1.5 left-0.5',
           eyeScale: 'scale-95',
           pulseSpeed: 'animate-pulse',
-          borderColor: 'border-amber-400',
-          icon: <BookOpen className={`${s.icon} text-amber-300`} />,
+          icon: <BookOpen className={`${s.icon} text-amber-300 drop-shadow-[0_0_4px_rgba(251,191,36,0.8)]`} />,
           extraElement: null,
           eyebrowLeft: '-top-1 -left-0.5 -rotate-6 animate-brow-thoughtful',
           eyebrowRight: '-top-1 -right-0.5 rotate-6 animate-brow-thoughtful',
           mouthShape: 'thoughtful',
           headTilt: '-rotate-3',
-          blinkSpeed: 'animate-blink-slow'
+          blinkSpeed: 'animate-blink-slow',
+          faceGlow: 'drop-shadow-[0_0_6px_rgba(251,191,36,0.6)]'
         };
-      default:
+      default: // idle
         return {
-          bgGlow: 'shadow-[0_0_20px_rgba(6,182,212,0.3)]',
+          bgGradient: 'from-cyan-400/30 via-cyan-500/15 to-cyan-600/5',
+          glowColor: 'rgba(6, 182, 212, 0.4)',
+          borderColor: 'border-cyan-400/70',
           eyePosition: '',
           pupilPosition: 'top-1 left-1',
           eyeScale: 'scale-100',
           pulseSpeed: 'animate-pulse-slow',
-          borderColor: 'border-cyan-400',
           icon: null,
           extraElement: null,
           eyebrowLeft: '-top-1 -left-0.5',
           eyebrowRight: '-top-1 -right-0.5',
           mouthShape: 'gentle-smile',
           headTilt: '',
-          blinkSpeed: 'animate-blink-normal'
+          blinkSpeed: 'animate-blink-normal',
+          faceGlow: 'drop-shadow-[0_0_4px_rgba(6,182,212,0.6)]'
         };
     }
   };
@@ -210,111 +230,149 @@ const DipsyStandalone = ({ state = 'idle', size = 'medium' }) => {
     switch(styles.mouthShape) {
       case 'sleeping':
         return (
-          <div className={`${baseClasses} w-2 h-0.5 bg-white rounded-full opacity-40`}></div>
+          <div className={`${baseClasses} w-3 h-0.5 bg-cyan-200/50 rounded-full`}></div>
         );
       case 'open-happy':
         return (
-          <div className={`${baseClasses} ${s.mouth} h-3 bg-slate-900 rounded-full border-2 border-white`}>
+          <div className={`${baseClasses} ${s.mouth} h-3 bg-slate-900/80 rounded-full border-2 border-cyan-200 shadow-[inset_0_0_4px_rgba(6,182,212,0.4)]`}>
             <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-2 h-1.5 bg-pink-400 rounded-t-full"></div>
           </div>
         );
       case 'surprised':
         return (
-          <div className={`${baseClasses} w-2 h-3 bg-slate-900 rounded-full border-2 border-white`}></div>
+          <div className={`${baseClasses} w-3 h-4 bg-slate-900/80 rounded-full border-2 border-cyan-200 shadow-[inset_0_0_4px_rgba(6,182,212,0.4)]`}></div>
         );
       case 'big-smile':
         return (
-          <div className={`${baseClasses} ${s.mouth} h-2 border-b-2 border-white rounded-full`}></div>
+          <div className={`${baseClasses} ${s.mouth} h-2 border-b-2 border-cyan-200 rounded-full`}></div>
         );
       case 'concentrated':
         return (
-          <div className={`${baseClasses} w-2 h-2 bg-slate-900 rounded-full border border-white`}></div>
+          <div className={`${baseClasses} w-2 h-2 bg-slate-900/60 rounded-full border border-cyan-200`}></div>
         );
       case 'thoughtful':
         return (
-          <div className={`${baseClasses} w-3 h-1 border-b border-white rounded-sm opacity-70`}></div>
+          <div className={`${baseClasses} w-3 h-1 border-b border-cyan-200/70 rounded-sm`}></div>
         );
-      default:
+      default: // gentle-smile
         return (
-          <div className={`${baseClasses} ${s.smile} border-b-2 border-white rounded-full opacity-80`}></div>
+          <div className={`${baseClasses} ${s.smile} border-b-2 border-cyan-200 rounded-full`}></div>
         );
     }
   };
 
   return (
     <>
-      <div className={`
-        relative
-        ${s.container}
-        bg-gradient-to-br from-slate-800 to-slate-900
-        rounded-lg
-        border-2 ${styles.borderColor}
-        ${styles.pulseSpeed}
-        ${styles.bgGlow}
-        ${styles.headTilt}
-        transition-all duration-300
-        flex items-center justify-center
-      `}>
-        <div className="absolute inset-0 overflow-hidden rounded-lg">
-          <div className={`${s.particle} bg-cyan-400 rounded-full absolute top-2 left-2 animate-float-1`}></div>
-          <div className={`${s.particle} bg-cyan-300 rounded-full absolute top-6 right-2 animate-float-2`}></div>
-          <div className={`${s.particle} bg-cyan-500 rounded-full absolute bottom-2 left-4 animate-float-3`}></div>
+      <div 
+        className={`
+          relative
+          ${s.container}
+          rounded-xl
+          border-2 ${styles.borderColor}
+          ${styles.pulseSpeed}
+          ${styles.headTilt}
+          transition-all duration-300
+          flex items-center justify-center
+          overflow-visible
+        `}
+        style={{
+          background: `linear-gradient(135deg, rgba(6, 182, 212, 0.15) 0%, rgba(6, 182, 212, 0.05) 50%, transparent 100%)`,
+          boxShadow: `
+            0 0 ${s.glow} ${styles.glowColor},
+            inset 0 0 ${s.innerGlow} rgba(6, 182, 212, 0.2),
+            0 0 2px rgba(6, 182, 212, 0.3)
+          `,
+          backdropFilter: 'blur(4px)'
+        }}
+      >
+        {/* Holographic shimmer overlay */}
+        <div 
+          className="absolute inset-0 rounded-xl overflow-hidden pointer-events-none"
+          style={{
+            background: 'linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.03) 50%, transparent 100%)'
+          }}
+        >
+          <div className="absolute inset-0 animate-shimmer opacity-30"
+            style={{
+              background: 'linear-gradient(90deg, transparent 0%, rgba(6,182,212,0.2) 50%, transparent 100%)',
+              backgroundSize: '200% 100%'
+            }}
+          />
         </div>
 
-        <div className="relative z-10">
+        {/* Floating particles inside */}
+        <div className="absolute inset-0 overflow-hidden rounded-xl pointer-events-none">
+          <div className={`${s.particle} bg-cyan-300 rounded-full absolute top-2 left-2 animate-float-1 shadow-[0_0_4px_rgba(6,182,212,0.8)]`}></div>
+          <div className={`${s.particle} bg-cyan-200 rounded-full absolute top-6 right-2 animate-float-2 shadow-[0_0_4px_rgba(6,182,212,0.8)]`}></div>
+          <div className={`${s.particle} bg-cyan-400 rounded-full absolute bottom-2 left-4 animate-float-3 shadow-[0_0_4px_rgba(6,182,212,0.8)]`}></div>
+        </div>
+
+        {/* Face container with glow */}
+        <div className={`relative z-10 ${styles.faceGlow}`}>
+          {/* Eyebrows */}
           <div className="relative">
-            <div className={`absolute ${styles.eyebrowLeft} ${s.eyebrow} bg-white rounded-full transition-all duration-200`}></div>
-            <div className={`absolute ${styles.eyebrowRight} ${s.eyebrow} bg-white rounded-full transition-all duration-200`}></div>
+            <div className={`absolute ${styles.eyebrowLeft} ${s.eyebrow} bg-cyan-200 rounded-full transition-all duration-200 shadow-[0_0_3px_rgba(6,182,212,0.6)]`}></div>
+            <div className={`absolute ${styles.eyebrowRight} ${s.eyebrow} bg-cyan-200 rounded-full transition-all duration-200 shadow-[0_0_3px_rgba(6,182,212,0.6)]`}></div>
           </div>
 
+          {/* Eyes */}
           <div className={`relative flex gap-2 ${styles.eyePosition} ${styles.blinkSpeed}`}>
+            {/* Left eye */}
             <div className={`relative ${s.eye} ${styles.eyeScale} transition-all duration-200`}>
-              <div className="absolute inset-0 bg-white rounded-full"></div>
-              <div className={`absolute ${styles.pupilPosition} ${s.pupil} bg-slate-900 rounded-full transition-all duration-200`}>
-                <div className={`absolute top-0.5 left-0.5 ${s.highlight} bg-cyan-300 rounded-full opacity-60`}></div>
+              <div className="absolute inset-0 bg-cyan-100 rounded-full shadow-[0_0_6px_rgba(6,182,212,0.8),inset_0_0_2px_rgba(255,255,255,0.5)]"></div>
+              <div className={`absolute ${styles.pupilPosition} ${s.pupil} bg-slate-800 rounded-full transition-all duration-200`}>
+                <div className={`absolute top-0.5 left-0.5 ${s.highlight} bg-white rounded-full`}></div>
               </div>
             </div>
             
+            {/* Right eye */}
             <div className={`relative ${s.eye} ${styles.eyeScale} transition-all duration-200`}>
-              <div className="absolute inset-0 bg-white rounded-full"></div>
-              <div className={`absolute ${styles.pupilPosition} ${s.pupil} bg-slate-900 rounded-full transition-all duration-200`}>
-                <div className={`absolute top-0.5 left-0.5 ${s.highlight} bg-cyan-300 rounded-full opacity-60`}></div>
+              <div className="absolute inset-0 bg-cyan-100 rounded-full shadow-[0_0_6px_rgba(6,182,212,0.8),inset_0_0_2px_rgba(255,255,255,0.5)]"></div>
+              <div className={`absolute ${styles.pupilPosition} ${s.pupil} bg-slate-800 rounded-full transition-all duration-200`}>
+                <div className={`absolute top-0.5 left-0.5 ${s.highlight} bg-white rounded-full`}></div>
               </div>
             </div>
           </div>
 
+          {/* Mouth */}
           {renderMouth()}
         </div>
 
+        {/* State icon */}
         {styles.icon && (
           <div className="absolute -top-1 -right-1">
             {styles.icon}
           </div>
         )}
 
+        {/* Extra elements (arms, lightbulb, etc.) */}
         {styles.extraElement}
+
+        {/* Corner accent lights */}
+        <div className="absolute top-0 left-0 w-2 h-2 bg-cyan-400/30 rounded-br-full"></div>
+        <div className="absolute top-0 right-0 w-2 h-2 bg-cyan-400/30 rounded-bl-full"></div>
       </div>
 
       <style>{`
-        @keyframes pulse-sleeping {
-          0%, 100% { transform: scale(1); }
-          50% { transform: scale(0.98); }
+        @keyframes shimmer {
+          0% { background-position: -200% 0; }
+          100% { background-position: 200% 0; }
         }
         
-        @keyframes blink-sleeping {
-          0%, 90%, 100% { transform: scaleY(0.2); }
-          95% { transform: scaleY(0.5); }
+        @keyframes pulse-sleeping {
+          0%, 100% { transform: scale(1); opacity: 0.7; }
+          50% { transform: scale(0.98); opacity: 0.6; }
         }
         
         @keyframes float-z1 {
           0% { transform: translate(0, 0); opacity: 0; }
-          50% { opacity: 0.6; }
+          50% { opacity: 0.8; }
           100% { transform: translate(3px, -20px); opacity: 0; }
         }
         
         @keyframes float-z2 {
           0% { transform: translate(0, 0); opacity: 0; }
-          50% { opacity: 0.4; }
+          50% { opacity: 0.6; }
           100% { transform: translate(-2px, -25px); opacity: 0; }
         }
         
@@ -421,13 +479,13 @@ const DipsyStandalone = ({ state = 'idle', size = 'medium' }) => {
         }
         
         @keyframes pulse-slow {
-          0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.02); }
+          0%, 100% { transform: scale(1); box-shadow: 0 0 15px rgba(6, 182, 212, 0.4); }
+          50% { transform: scale(1.02); box-shadow: 0 0 25px rgba(6, 182, 212, 0.6); }
         }
         
         @keyframes pulse-fast {
-          0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.05); }
+          0%, 100% { transform: scale(1); box-shadow: 0 0 20px rgba(6, 182, 212, 0.5); }
+          50% { transform: scale(1.05); box-shadow: 0 0 35px rgba(6, 182, 212, 0.8); }
         }
         
         @keyframes bounce-subtle {
@@ -485,7 +543,7 @@ const DipsyStandalone = ({ state = 'idle', size = 'medium' }) => {
         }
         
         @keyframes flash-once {
-          0% { opacity: 0.8; }
+          0% { opacity: 0.6; }
           50% { opacity: 0; }
           100% { opacity: 0; }
         }
@@ -511,22 +569,22 @@ const DipsyStandalone = ({ state = 'idle', size = 'medium' }) => {
         }
         
         @keyframes float-1 {
-          0%, 100% { transform: translate(0, 0); opacity: 0.3; }
-          50% { transform: translate(2px, -4px); opacity: 0.8; }
+          0%, 100% { transform: translate(0, 0); opacity: 0.4; }
+          50% { transform: translate(2px, -4px); opacity: 0.9; }
         }
         
         @keyframes float-2 {
-          0%, 100% { transform: translate(0, 0); opacity: 0.4; }
-          50% { transform: translate(-3px, 3px); opacity: 0.7; }
+          0%, 100% { transform: translate(0, 0); opacity: 0.5; }
+          50% { transform: translate(-3px, 3px); opacity: 0.8; }
         }
         
         @keyframes float-3 {
-          0%, 100% { transform: translate(0, 0); opacity: 0.5; }
-          50% { transform: translate(3px, -2px); opacity: 0.9; }
+          0%, 100% { transform: translate(0, 0); opacity: 0.6; }
+          50% { transform: translate(3px, -2px); opacity: 1; }
         }
         
+        .animate-shimmer { animation: shimmer 3s ease-in-out infinite; }
         .animate-pulse-sleeping { animation: pulse-sleeping 4s ease-in-out infinite; }
-        .animate-blink-sleeping { animation: blink-sleeping 8s ease-in-out infinite; }
         .animate-float-z1 { animation: float-z1 3s ease-in-out infinite; }
         .animate-float-z2 { animation: float-z2 3.5s ease-in-out infinite 1s; }
         .animate-pupil-dart { animation: pupil-dart 1.5s ease-in-out infinite; }
@@ -573,45 +631,51 @@ const DipsyStandalone = ({ state = 'idle', size = 'medium' }) => {
   );
 };
 
+// Demo component for testing all states
 const DipsyDemo = () => {
   const [currentState, setCurrentState] = useState('idle');
   const [currentSize, setCurrentSize] = useState('medium');
+  const [autoPlay, setAutoPlay] = useState(false);
   
   useEffect(() => {
-    const states = ['idle', 'thinking', 'confident-victory', 'confident-lightbulb', 'celebrating', 'learning'];
+    if (!autoPlay) return;
+    
+    const states = ['idle', 'sleeping', 'thinking', 'confident-victory', 'confident-lightbulb', 'celebrating', 'learning'];
     let index = 0;
     const interval = setInterval(() => {
       index = (index + 1) % states.length;
       setCurrentState(states[index]);
     }, 3000);
     return () => clearInterval(interval);
-  }, []);
+  }, [autoPlay]);
 
   return (
-    <div className="flex flex-col items-center gap-6 p-8 bg-slate-900 rounded-lg min-h-screen">
+    <div className="flex flex-col items-center gap-6 p-8 bg-zinc-900 rounded-lg min-h-screen">
       <div className="text-center">
-        <h1 className="text-3xl font-bold text-white mb-2">Dipsy - Standalone Character</h1>
-        <p className="text-slate-400">Pure character component, no button wrapper</p>
+        <h1 className="text-3xl font-bold text-white mb-2">Dipsy - Holographic Redesign</h1>
+        <p className="text-zinc-400">Luminous AI assistant that glows on dark backgrounds</p>
       </div>
 
       <div className="text-cyan-400 font-medium text-sm">
         State: <span className="text-white">{currentState}</span> | Size: <span className="text-white">{currentSize}</span>
       </div>
 
-      <div className="flex items-center justify-center p-12 bg-slate-800 rounded-xl">
+      {/* Preview area with dark background to show the glow effect */}
+      <div className="flex items-center justify-center p-16 bg-zinc-950 rounded-xl border border-zinc-800 min-w-[300px]">
         <DipsyStandalone state={currentState} size={currentSize} />
       </div>
 
+      {/* Size controls */}
       <div className="flex gap-2">
         {['small', 'medium', 'large'].map(size => (
           <button
             key={size}
             onClick={() => setCurrentSize(size)}
             className={`
-              px-4 py-2 rounded font-medium transition-all
+              px-4 py-2 rounded font-medium transition-all capitalize
               ${currentSize === size 
-                ? 'bg-purple-600 text-white' 
-                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                ? 'bg-cyan-600 text-white' 
+                : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'
               }
             `}
           >
@@ -620,22 +684,59 @@ const DipsyDemo = () => {
         ))}
       </div>
 
+      {/* State controls */}
       <div className="flex flex-wrap gap-2 justify-center max-w-lg">
-        {['idle', 'thinking', 'confident-victory', 'confident-lightbulb', 'celebrating', 'learning'].map(state => (
+        {['idle', 'sleeping', 'thinking', 'confident-victory', 'confident-lightbulb', 'celebrating', 'learning'].map(state => (
           <button
             key={state}
-            onClick={() => setCurrentState(state)}
+            onClick={() => {
+              setCurrentState(state);
+              setAutoPlay(false);
+            }}
             className={`
-              px-3 py-1 rounded text-xs font-medium transition-all
+              px-3 py-1.5 rounded text-xs font-medium transition-all capitalize
               ${currentState === state 
                 ? 'bg-cyan-600 text-white' 
-                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'
               }
             `}
           >
             {state.replace('-', ' ')}
           </button>
         ))}
+      </div>
+
+      {/* Auto-play toggle */}
+      <button
+        onClick={() => setAutoPlay(!autoPlay)}
+        className={`
+          px-4 py-2 rounded font-medium transition-all
+          ${autoPlay 
+            ? 'bg-emerald-600 text-white' 
+            : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'
+          }
+        `}
+      >
+        {autoPlay ? '⏸ Stop Auto-Play' : '▶ Auto-Play States'}
+      </button>
+
+      {/* Side-by-side size comparison */}
+      <div className="mt-8 p-6 bg-zinc-950 rounded-xl border border-zinc-800">
+        <p className="text-zinc-400 text-sm mb-4 text-center">Size Comparison</p>
+        <div className="flex items-end gap-8 justify-center">
+          <div className="text-center">
+            <DipsyStandalone state={currentState} size="small" />
+            <p className="text-zinc-500 text-xs mt-2">Small</p>
+          </div>
+          <div className="text-center">
+            <DipsyStandalone state={currentState} size="medium" />
+            <p className="text-zinc-500 text-xs mt-2">Medium</p>
+          </div>
+          <div className="text-center">
+            <DipsyStandalone state={currentState} size="large" />
+            <p className="text-zinc-500 text-xs mt-2">Large</p>
+          </div>
+        </div>
       </div>
     </div>
   );

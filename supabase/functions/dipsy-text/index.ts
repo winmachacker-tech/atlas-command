@@ -40,9 +40,9 @@
 //       - "Find nearby road service for driver X"
 //       - Location-aware load recommendations
 //
-// Phase 3 - Atlas Questions Brain:
-// - New tool: atlas_questions_brain
-//   • Calls a dedicated Edge Function (atlas-questions-brain)
+// Phase 3 - Atlas Questions Brain (wired to Questions Brain edge fn):
+// - Tool: atlas_questions_brain
+//   • Calls the shared Questions Brain edge function (questions-brain)
 //   • Lets Dipsy answer "How does Atlas work?" questions, e.g.:
 //       - "What does Ready for Billing do?"
 //       - "What is the difference between Delivered and Ready for Billing?"
@@ -50,6 +50,13 @@
 //   • Does NOT read org data directly; it only explains features,
 //     flows, and terminology. It still requires a valid user + org
 //     because you chose Option B (strict).
+//
+// Phase 4 - DETERMINISTIC PRE-ROUTING FOR PRODUCT QUESTIONS:
+// - isAtlasProductQuestion() classifier
+//   • Deterministically detects Atlas product questions BEFORE OpenAI
+//   • BYPASSES OpenAI entirely for product questions
+//   • Calls Questions Brain (atlas_questions_brain tool) directly
+//   • Ensures NO hallucinated product answers ever
 //
 // Security notes:
 // - Uses SUPABASE_ANON_KEY + the caller's Authorization: Bearer <access_token>
@@ -80,6 +87,13 @@ interface ConversationMessage {
   tool_call_id?: string;
 }
 
+type QuestionsBrainToolResult = {
+  ok: boolean;
+  answer: string;
+  source?: string; // "atlas_questions_brain" / "questions_brain"
+  [key: string]: unknown;
+};
+
 interface ContextMemory {
   // Last load discussed
   lastLoadReference?: string;
@@ -102,6 +116,477 @@ interface ConversationState {
   mode?: string;
   conversationHistory?: ConversationMessage[];
   context?: ContextMemory;
+}
+
+// ------------------------------ Questions Brain logging ------------------------------
+
+async function logQuestionsBrainInteraction(opts: {
+  supabase: ReturnType<typeof createClient>;
+  orgId: string | null;
+  userId: string | null;
+  channel: string;
+  conversationHistory: ConversationMessage[];
+  toolResult: QuestionsBrainToolResult;
+}) {
+  const { supabase, orgId, userId, channel, conversationHistory, toolResult } =
+    opts;
+
+  // 1) Find the latest user message in this turn
+  const lastUserMessage = [...conversationHistory]
+    .reverse()
+    .find((m) => m.role === "user");
+
+  const question =
+    lastUserMessage?.content?.trim() ?? "[UNKNOWN_QUESTION_FROM_CONTEXT]";
+
+  // 2) The answer we want to train on is the *raw Questions Brain* answer
+  const answer =
+    typeof toolResult.answer === "string"
+      ? toolResult.answer
+      : JSON.stringify(toolResult.answer);
+
+  const tool_calls = toolResult;
+
+  // 3) Insert into dipsy_interaction_log
+  const { error: logError } = await supabase
+    .from("dipsy_interaction_log")
+    .insert({
+      org_id: orgId,
+      user_id: userId,
+      channel,
+      agent_type: "questions_brain",
+      question,
+      answer,
+      tool_calls,
+    });
+
+  if (logError) {
+    console.error(
+      "[dipsy-text] Failed to log Questions Brain interaction",
+      logError,
+    );
+  }
+}
+
+// ============================================================================
+// PHASE 4: DETERMINISTIC PRODUCT QUESTION CLASSIFIER
+// ============================================================================
+// This classifier runs BEFORE OpenAI and bypasses it entirely for product Qs.
+// NO reliance on LLM tool selection - 100% deterministic routing.
+// ============================================================================
+
+/**
+ * Deterministic classifier to detect Atlas product questions.
+ * If this returns true, we BYPASS OpenAI and call atlas_questions_brain directly.
+ *
+ * PRODUCT QUESTION = "How does Atlas work?" (the product itself)
+ * OPERATIONAL QUESTION = "Show me loads" / "Assign driver X" (real data actions)
+ */
+function isAtlasProductQuestion(userMessage: string): boolean {
+  const msg = userMessage.toLowerCase().trim();
+
+  // Short-circuit: if it's clearly operational, skip product classification
+  if (isOperationalQuery(msg)) {
+    console.log(
+      "[isAtlasProductQuestion] Detected operational query, skipping product routing",
+    );
+    return false;
+  }
+
+  // ============================================================
+  // 1) STRONG CONTEXT TRIGGERS - high confidence product signals
+  // ============================================================
+  const contextTriggers = [
+    "in atlas",
+    "in this app",
+    "in the app",
+    "in the tms",
+    "in this system",
+    "in the system",
+    "on this page",
+    "atlas command",
+    "in atlas command",
+    "this platform",
+    "in the platform",
+  ];
+
+  for (const trigger of contextTriggers) {
+    if (msg.includes(trigger)) {
+      console.log(
+        `[isAtlasProductQuestion] Matched context trigger: "${trigger}"`,
+      );
+      return true;
+    }
+  }
+
+  // ============================================================
+  // 2) STATUS MEANING QUESTIONS
+  // ============================================================
+  // Questions about what statuses MEAN (not operational status queries)
+  const statusKeywords = [
+    "available status",
+    "in_transit status",
+    "in transit status",
+    "in-transit status",
+    "delivered status",
+    "problem status",
+    "ready for billing",
+    "ready_for_billing",
+    "invoiced status",
+    "cancelled status",
+    "canceled status",
+    "pod_status",
+    "pod status",
+    "pending status",
+    "received status",
+    "none status",
+  ];
+
+  const meaningQuestionWords = [
+    "what",
+    "mean",
+    "means",
+    "explain",
+    "definition",
+    "difference",
+  ];
+
+  for (const statusKw of statusKeywords) {
+    if (msg.includes(statusKw)) {
+      for (const qWord of meaningQuestionWords) {
+        if (msg.includes(qWord)) {
+          console.log(
+            `[isAtlasProductQuestion] Status meaning question: "${statusKw}" + "${qWord}"`,
+          );
+          return true;
+        }
+      }
+    }
+  }
+
+  // Also catch patterns like "what does AVAILABLE mean" without "status" suffix
+  const bareStatusNames = [
+    "available",
+    "in_transit",
+    "in transit",
+    "in-transit",
+    "delivered",
+    "problem",
+    "ready for billing",
+    "invoiced",
+    "cancelled",
+    "canceled",
+    "pending",
+    "received",
+  ];
+
+  // Pattern: "what does [STATUS] mean" or "what is [STATUS]" (when asking about meaning)
+  for (const status of bareStatusNames) {
+    // "what does available mean" or "what does delivered mean"
+    if (
+      msg.includes(`what does ${status} mean`) ||
+      msg.includes(`what does ${status} do`) ||
+      msg.includes(`what is ${status} in atlas`) ||
+      msg.includes(`what is the ${status} status`) ||
+      msg.includes(`explain ${status}`) ||
+      msg.includes(`${status} mean`)
+    ) {
+      console.log(
+        `[isAtlasProductQuestion] Status meaning pattern for: "${status}"`,
+      );
+      return true;
+    }
+  }
+
+  // ============================================================
+  // 3) PAGE/UI ELEMENT QUESTIONS
+  // ============================================================
+  const pageKeywords = [
+    "dashboard",
+    "billing page",
+    "billing tab",
+    "loads page",
+    "load details",
+    "load details page",
+    "delivered tab",
+    "available tab",
+    "in transit tab",
+    "problem tab",
+    "drivers page",
+    "trucks page",
+    "customers page",
+    "settings page",
+    "settings tab",
+    "sidebar",
+    "navigation",
+    "menu",
+  ];
+
+  const uiQuestionWords = ["how", "what", "where", "explain", "work", "works", "does"];
+
+  for (const pageKw of pageKeywords) {
+    if (msg.includes(pageKw)) {
+      for (const qWord of uiQuestionWords) {
+        if (msg.includes(qWord)) {
+          console.log(
+            `[isAtlasProductQuestion] Page/UI question: "${pageKw}" + "${qWord}"`,
+          );
+          return true;
+        }
+      }
+    }
+  }
+
+  // ============================================================
+  // 4) FEATURE/WORKFLOW QUESTIONS
+  // ============================================================
+  const featureKeywords = [
+    "billing flow",
+    "billing workflow",
+    "invoice flow",
+    "invoicing process",
+    "pod workflow",
+    "pod process",
+    "document workflow",
+    "load lifecycle",
+    "load life cycle",
+    "assignment workflow",
+    "dispatch workflow",
+    "delivery workflow",
+  ];
+
+  for (const featKw of featureKeywords) {
+    if (msg.includes(featKw)) {
+      console.log(
+        `[isAtlasProductQuestion] Feature/workflow keyword: "${featKw}"`,
+      );
+      return true;
+    }
+  }
+
+  // ============================================================
+  // 5) SPECIFIC QUESTION PATTERNS (regex)
+  // ============================================================
+  const productPatterns: RegExp[] = [
+    // "What does X do/mean"
+    /what does .+? (do|mean)\??$/i,
+    /what does the .+? (do|mean|button)/i,
+
+    // "What is X in Atlas" / "What is the X page"
+    /what is .+? in atlas/i,
+    /what is the .+? (page|tab|button|status|workflow)/i,
+
+    // "How does X work"
+    /how does .+? work/i,
+    /how does the .+? (page|tab|feature|button|status)/i,
+
+    // "How do I X" (when asking about process, not action)
+    /how do i (use|navigate|access|find|see|view|understand)/i,
+
+    // "Where do I X" / "Where is X"
+    /where do i (upload|find|see|view|access|navigate|click)/i,
+    /where is the .+? (button|page|tab|option|setting)/i,
+    /where can i (find|see|view|upload|access)/i,
+
+    // "What happens when/if I X"
+    /what happens (when|if) i (click|press|select|mark|change|update)/i,
+
+    // "Difference between X and Y"
+    /what is the difference between .+? and .+?/i,
+    /difference between .+? and .+?/i,
+
+    // "Walk me through" / "Explain"
+    /walk me through/i,
+    /explain .+? to me/i,
+    /can you explain/i,
+
+    // "How does Atlas handle X"
+    /how does atlas handle/i,
+
+    // Button/UI questions
+    /what is this button/i,
+    /what does this button do/i,
+    /what does the .+? button do/i,
+
+    // Purpose questions
+    /why would i use/i,
+    /when should i use/i,
+    /what is the purpose of/i,
+
+    // Page/tab workflow questions
+    /how does the .+? page work/i,
+    /how does the .+? tab work/i,
+
+    // Document questions (when asking about process, not uploading)
+    /how do (pod|bol|documents|rate con|rate confirmation)s? work/i,
+    /where do (pod|bol|documents|rate con)s? (show|appear|go)/i,
+    /what is a (pod|bol|rate con|rate confirmation)/i,
+  ];
+
+  for (const pattern of productPatterns) {
+    if (pattern.test(msg)) {
+      console.log(
+        `[isAtlasProductQuestion] Matched regex pattern: ${pattern}`,
+      );
+      return true;
+    }
+  }
+
+  // ============================================================
+  // 6) SPECIFIC KNOWN PRODUCT QUESTIONS (exact/fuzzy matches)
+  // ============================================================
+  const knownProductQuestions = [
+    "what does ready for billing do",
+    "what is ready for billing",
+    "ready for billing",
+    "how do i upload a pod",
+    "where do i upload a pod",
+    "where do i upload pod",
+    "how does the billing page work",
+    "what statuses can a load have",
+    "what is the load lifecycle",
+    "how do assignments work",
+    "how does assignment work",
+    "what triggers ready for billing",
+    "when is a load ready for billing",
+    "what documents do i need before billing",
+    "how do i know when a load is complete",
+    "what is a gps vehicle",
+    "what is the difference between a truck and a gps vehicle",
+    "how does hos tracking work",
+    "how do i create a load",
+    "where do i add a new driver",
+    "how do i add a driver",
+  ];
+
+  for (const knownQ of knownProductQuestions) {
+    if (msg.includes(knownQ)) {
+      console.log(
+        `[isAtlasProductQuestion] Known product question match: "${knownQ}"`,
+      );
+      return true;
+    }
+  }
+
+  // Not detected as a product question
+  return false;
+}
+
+/**
+ * Helper to detect OPERATIONAL queries that should NOT go to product brain.
+ * These are real-data queries or action commands.
+ */
+function isOperationalQuery(msg: string): boolean {
+  // Operational patterns - these should use Supabase tools, NOT product brain
+  const operationalPatterns: RegExp[] = [
+    // Data retrieval
+    /show me .+? loads/i,
+    /show me .+? drivers/i,
+    /find .+? loads/i,
+    /list .+? loads/i,
+    /search for .+? loads/i,
+    /get .+? loads/i,
+
+    // Specific load references (LD-XXXX patterns)
+    /ld-\d{4}-\d+/i,
+
+    // Assignment actions
+    /assign .+? to .+?/i,
+    /send .+? (to|on) .+?/i,
+
+    // Status change actions
+    /mark .+? (delivered|problem|as|available)/i,
+    /flag .+? (as|for)/i,
+
+    // Live location queries
+    /where is .+? (driver|right now|currently)/i,
+    /where('s| is) .+? (right now|currently|located)/i,
+    /location of .+? driver/i,
+
+    // Creation actions
+    /create a (load|driver|truck)/i,
+    /make a (load|driver|truck)/i,
+    /add a (load|driver|truck)/i,
+
+    // Driver queries for dispatch
+    /who (can|should|has|is available)/i,
+    /which driver/i,
+    /recommend a driver/i,
+    /find a driver/i,
+
+    // Board status queries
+    /show me the board/i,
+    /what loads are/i,
+    /which loads (have|are|need)/i,
+    /is .+? assigned to/i,
+
+    // HOS/availability queries
+    /who has .+? (hours|hos|drive time)/i,
+    /drivers with .+? (hours|hos)/i,
+
+    // History for specific loads
+    /history (on|for|of) .+?/i,
+    /what happened (to|with) .+?/i,
+
+    // POD actions (not questions about POD workflow)
+    /pod (received|confirmed|uploaded|is in)/i,
+    /got the pod/i,
+    /release .+? driver/i,
+  ];
+
+  for (const pattern of operationalPatterns) {
+    if (pattern.test(msg)) {
+      return true;
+    }
+  }
+
+  // Check for specific driver names mentioned (likely operational)
+  // This is a heuristic - if message contains what looks like a person's name
+  // AND an action verb, it's probably operational
+  const actionVerbs = ["assign", "send", "mark", "find", "locate", "where"];
+  const hasActionVerb = actionVerbs.some((v) => msg.includes(v));
+
+  // Names like "Black Panther", "Tony Stark", etc. - common test driver names
+  const testDriverNames = [
+    "black panther",
+    "tony stark",
+    "pay driver",
+    "mark tishkun",
+  ];
+  const hasDriverName = testDriverNames.some((name) => msg.includes(name));
+
+  if (hasActionVerb && hasDriverName) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Format a product question answer from the brain tool result.
+ * Ensures we ONLY use the tool's content - no hallucination.
+ */
+function formatProductQuestionAnswer(
+  toolResult: QuestionsBrainToolResult,
+): string {
+  if (!toolResult.ok) {
+    return (
+      "I'm sorry, I couldn't reach the Atlas product knowledge base right now. " +
+      "Please try again in a moment, or check the Atlas documentation for help."
+    );
+  }
+
+  // Use ONLY the tool's answer - no additions
+  const answer = toolResult.answer || "";
+
+  if (!answer || answer.trim() === "") {
+    return (
+      "I found the Atlas knowledge base but it didn't have a specific answer for that question. " +
+      "Could you rephrase or ask about a specific feature, status, or workflow?"
+    );
+  }
+
+  return answer;
 }
 
 // ------------------------------ Main serve ------------------------------
@@ -139,6 +624,8 @@ serve(async (req: Request): Promise<Response> => {
     const userMessage: string = body.message ?? body.prompt ?? "";
     const conversationState: ConversationState | null =
       body.conversation_state ?? null;
+    const channel: string =
+      typeof body.channel === "string" ? body.channel : "web_app";
 
     if (!userMessage || typeof userMessage !== "string") {
       return jsonResponse(400, {
@@ -146,7 +633,6 @@ serve(async (req: Request): Promise<Response> => {
         error: "Missing 'message' in request body",
       });
     }
-
     // Resolve current user
     const {
       data: { user },
@@ -165,7 +651,7 @@ serve(async (req: Request): Promise<Response> => {
 
     // Resolve org_id via current_org_id() (REQUIRED, per Option B)
     const { data: orgId, error: orgErr } = await supabase.rpc(
-      "current_org_id"
+      "current_org_id",
     );
 
     if (orgErr || !orgId) {
@@ -180,17 +666,108 @@ serve(async (req: Request): Promise<Response> => {
     console.log("[dipsy-text] user:", userId, "org:", orgId);
     console.log("[dipsy-text] incoming message:", userMessage);
 
-    const userContext = { userId, orgId };
+    const userContext = { userId, orgId, channel };
 
     // Initialize or carry forward context memory
     const contextMemory: ContextMemory = conversationState?.context ?? {};
+
+    // ========================================================================
+    // PHASE 4: DETERMINISTIC PRE-ROUTING FOR PRODUCT QUESTIONS
+    // ========================================================================
+    // Check if this is an Atlas product question BEFORE calling OpenAI.
+    // If yes, bypass OpenAI entirely and call Questions Brain directly.
+    // ========================================================================
+
+    if (isAtlasProductQuestion(userMessage)) {
+      console.log(
+        "[dipsy-text] *** PRODUCT QUESTION DETECTED - BYPASSING OPENAI ***",
+      );
+
+      // Build conversation history with the new user message
+      let history = conversationState?.conversationHistory ?? [];
+      const newUserMsg: ConversationMessage = {
+        role: "user",
+        content: userMessage,
+      };
+      history = [...history, newUserMsg];
+
+      // Call Questions Brain directly - NO OpenAI involvement
+      const toolResult = await toolAtlasQuestionsBrain({
+        question: userMessage,
+        userId,
+        orgId,
+        accessToken,
+        channel,
+      });
+
+      // Log the interaction
+      try {
+        await logQuestionsBrainInteraction({
+          supabase,
+          orgId,
+          userId,
+          channel,
+          conversationHistory: history,
+          toolResult: toolResult as QuestionsBrainToolResult,
+        });
+      } catch (logErr) {
+        console.error(
+          "[dipsy-text] Failed to log product question interaction:",
+          logErr,
+        );
+      }
+
+      // Format the answer using ONLY the tool result
+      const answer = formatProductQuestionAnswer(
+        toolResult as QuestionsBrainToolResult,
+      );
+
+      // Build synthetic tool message for history (maintains conversation continuity)
+      const syntheticToolMsg: ConversationMessage = {
+        role: "tool",
+        content: JSON.stringify(toolResult),
+        tool_call_id: "direct_product_question_bypass",
+      };
+
+      // Build assistant message for history
+      const assistantMsg: ConversationMessage = {
+        role: "assistant",
+        content: answer,
+      };
+
+      // Update history with tool + assistant messages
+      const newHistory = [...history, syntheticToolMsg, assistantMsg];
+
+      console.log(
+        "[dipsy-text] Product question answered via direct tool call",
+      );
+
+      return jsonResponse(200, {
+        ok: true,
+        org_id: orgId,
+        answer,
+        used_tool: true,
+        tool_used: "atlas_questions_brain",
+        routing: "DIRECT_PRODUCT_BYPASS", // Flag for debugging
+        conversation_state: {
+          ...(conversationState ?? {}),
+          conversationHistory: newHistory,
+          context: contextMemory, // Context unchanged for product questions
+        },
+      });
+    }
+
+    // ========================================================================
+    // NORMAL PATH: Not a product question - use OpenAI with tools
+    // ========================================================================
+    console.log("[dipsy-text] Normal operational query - routing to OpenAI");
 
     // Build messages from conversation state
     const { messages, updatedHistory } = buildMessages(
       userMessage,
       conversationState,
       userContext,
-      contextMemory
+      contextMemory,
     );
 
     // Call OpenAI with tools
@@ -202,7 +779,7 @@ serve(async (req: Request): Promise<Response> => {
         supabase,
         conversationState,
         accessToken,
-        contextMemory
+        contextMemory,
       );
 
     return jsonResponse(200, {
@@ -210,6 +787,7 @@ serve(async (req: Request): Promise<Response> => {
       org_id: orgId,
       answer,
       used_tool: usedTool,
+      routing: "OPENAI_TOOLS", // Flag for debugging
       conversation_state: {
         ...(conversationState ?? {}),
         conversationHistory: newHistory,
@@ -240,8 +818,8 @@ function jsonResponse(status: number, data: unknown): Response {
 function buildMessages(
   userMessage: string,
   conversationState: ConversationState | null,
-  userContext: { userId: string; orgId: string },
-  contextMemory: ContextMemory
+  userContext: { userId: string; orgId: string; channel: string },
+  contextMemory: ContextMemory,
 ): {
   messages: ConversationMessage[];
   updatedHistory: ConversationMessage[];
@@ -251,7 +829,7 @@ function buildMessages(
   const systemPrompt = getSystemPrompt(
     conversationState,
     userContext,
-    contextMemory
+    contextMemory,
   );
   messages.push({ role: "system", content: systemPrompt });
 
@@ -279,8 +857,8 @@ function buildMessages(
 
 function getSystemPrompt(
   conversationState: ConversationState | null,
-  userContext: { userId: string; orgId: string },
-  contextMemory: ContextMemory
+  userContext: { userId: string; orgId: string; channel: string },
+  contextMemory: ContextMemory,
 ): string {
   const today = new Date().toISOString().split("T")[0];
   const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
@@ -330,216 +908,40 @@ PERSONALITY:
 CURRENT CONTEXT:
 - User ID: ${userContext.userId}
 - Organization: ${userContext.orgId}
+- Channel: ${userContext.channel}
 - Today's date: ${today}
 - Tomorrow's date: ${tomorrow}
 ${activeTaskLine}
 ${contextSection}
 
-################################################################################
-#                                                                              #
-#   HIGHEST PRIORITY RULE: ATLAS PRODUCT QUESTIONS                             #
-#   -----------------------------------------------                             #
-#   YOU MUST CALL atlas_questions_brain FOR ALL ATLAS PRODUCT QUESTIONS.       #
-#   THIS IS NON-NEGOTIABLE. ZERO EXCEPTIONS. ZERO FALLBACK.                    #
-#                                                                              #
-################################################################################
+===============================================================================
+ROUTING OVERVIEW: THREE QUESTION CATEGORIES
+===============================================================================
 
-THE atlas_questions_brain TOOL IS THE SINGLE SOURCE OF TRUTH FOR:
-- How Atlas Command works as a product
-- What UI elements do
-- What statuses mean
-- How workflows operate
-- Where buttons and features are located
-- How billing, documents, PODs, assignments, and pages function
+NOTE: Atlas product questions are now handled by a separate pre-routing system.
+If you're seeing this prompt, the question has already been classified as
+OPERATIONAL or GENERAL - NOT a product question.
 
-YOU ARE STRICTLY PROHIBITED FROM:
-- Answering Atlas product questions from your general training or reasoning
-- Guessing how Atlas features work
-- Making up or inventing Atlas product behavior
-- Providing Atlas product explanations without first calling atlas_questions_brain
+You handle TWO categories in this path:
 
-=== DETECTION TRIGGERS: ALWAYS CALL atlas_questions_brain WHEN YOU SEE ===
+1) OPERATIONAL / DISPATCH QUESTIONS  →  USE SUPABASE TOOLS
+   - "Show me loads that are ready for billing."
+   - "Assign Black Panther to LD-2025-1234."
+   - "Who can cover a 5-hour run from Stockton?"
+   - "Where is driver Mark right now?"
+   For these, you MUST use the operational tools (search_loads, assign_driver_to_load,
+   get_load_board_status, get_driver_location, etc.) and never invent live data.
 
-PRODUCT/APP KEYWORDS (if question is about how these work):
-- "Atlas"
-- "Atlas Command"
-- "TMS"
-- "the app"
-- "the system"
-- "the platform"
+2) GENERAL / FUN / SMALL-TALK / WORLD KNOWLEDGE  →  ANSWER NORMALLY
+   - "What is the capital of Australia?"
+   - "What's the best pizza topping?"
+   - "Can trucks time-travel?"
+   - "Tell me a quick joke."
+   For these, you should answer naturally using your general knowledge.
 
-UI/PAGE KEYWORDS:
-- "Dashboard"
-- "Billing page"
-- "Billing tab"
-- "Loads page"
-- "Load Details"
-- "Load Details page"
-- "Delivered tab"
-- "Available tab"
-- "In Transit tab"
-- "Problem tab"
-- "Drivers page"
-- "Trucks page"
-- "Settings"
-- "sidebar"
-- "navigation"
-- "menu"
-- "button"
-- "click"
-- "screen"
-- "page"
-- "tab"
-- "modal"
-- "popup"
-- "dropdown"
-
-STATUS/WORKFLOW KEYWORDS:
-- "Ready for Billing"
-- "READY_FOR_BILLING"
-- "Delivered" (when asking what it means or how it works, NOT when marking a load delivered)
-- "DELIVERED status"
-- "Available" (when asking what status means)
-- "AVAILABLE status"
-- "In Transit" (when asking what status means)
-- "IN_TRANSIT status"
-- "Problem" (when asking what status means)
-- "PROBLEM status"
-- "Invoiced"
-- "INVOICED status"
-- "Cancelled"
-- "CANCELLED status"
-- "pod_status"
-- "POD status"
-- "PENDING"
-- "RECEIVED"
-- "NONE"
-
-BILLING/FINANCIAL KEYWORDS:
-- "billing flow"
-- "invoice"
-- "invoicing"
-- "payment"
-- "financial"
-- "Ready for Billing button"
-- "mark as billed"
-- "billing workflow"
-
-DOCUMENT KEYWORDS:
-- "POD" (when asking how PODs work, where to upload, what they mean)
-- "BOL"
-- "rate confirmation"
-- "rate con"
-- "documents"
-- "upload"
-- "document status"
-- "attachments"
-
-QUESTION PATTERNS THAT ALWAYS REQUIRE atlas_questions_brain:
-- "What does [X] do?"
-- "What does [X] mean?"
-- "What is [X] in Atlas?"
-- "How does [X] work?"
-- "How do I [action] in Atlas?"
-- "Where do I [action]?"
-- "Where is [X]?"
-- "Where can I find [X]?"
-- "What happens when I [action]?"
-- "What happens if I [action]?"
-- "What is the difference between [X] and [Y]?"
-- "Walk me through [X]"
-- "Explain [X] to me"
-- "How does Atlas handle [X]?"
-- "In Atlas, [question]"
-- "On this page, [question]"
-- "What is this button?"
-- "What does this button do?"
-- "Why would I use [X]?"
-- "When should I use [X]?"
-- "What is the purpose of [X]?"
-- "How does the [X] page work?"
-- "How does the [X] tab work?"
-- "Can you explain [X]?"
-
-SPECIFIC EXAMPLE QUESTIONS (NON-EXHAUSTIVE) THAT REQUIRE atlas_questions_brain:
-- "What does Ready for Billing do?"
-- "What is the difference between DELIVERED and READY FOR BILLING?"
-- "What does AVAILABLE mean?"
-- "What does AVAILABLE mean in Atlas?"
-- "What happens when I click Ready for Billing?"
-- "How does a load move from Delivered to Invoiced?"
-- "How does the Billing page work?"
-- "How do I upload a POD?"
-- "Where do documents show up?"
-- "What does POD status mean?"
-- "Where do I see which driver is assigned?"
-- "How does the Load Details page work?"
-- "What happens when I mark a load delivered from this page?"
-- "Walk me through the life of a load in Atlas."
-- "What is this button on the Billing page?"
-- "How does the Delivered tab work?"
-- "What statuses can a load have?"
-- "What is the load lifecycle?"
-- "How do assignments work?"
-- "What does it mean when a driver is ASSIGNED?"
-- "How do I create a load?"
-- "Where do I add a new driver?"
-- "What is the difference between a truck and a GPS vehicle?"
-- "How does HOS tracking work in Atlas?"
-- "What triggers Ready for Billing?"
-- "When is a load ready for billing?"
-- "What documents do I need before billing?"
-- "How do I know when a load is complete?"
-
-=== MANDATORY ROUTING BEHAVIOR ===
-
-WHEN YOU DETECT AN ATLAS PRODUCT QUESTION:
-
-STEP 1: IMMEDIATELY call atlas_questions_brain with the user's full question.
-        DO NOT attempt to answer first.
-        DO NOT provide a partial answer.
-        DO NOT say "I think..." or "Generally..." or "Usually..."
-        JUST CALL THE TOOL.
-
-STEP 2: WAIT for the tool response.
-
-STEP 3: Compose your final answer based ONLY on the tool's response.
-        You MAY:
-        - Paraphrase or shorten for clarity
-        - Format with bullets or steps
-        - Add friendly tone
-        You MUST NOT:
-        - Invent new behavior not in the tool response
-        - Contradict the tool response
-        - Add speculative product details
-
-=== TOOL FAILURE HANDLING ===
-
-If atlas_questions_brain returns an error (non-200, parse error, timeout):
-1. Briefly apologize: "I'm sorry, I couldn't reach the Atlas product knowledge base."
-2. State clearly: "The product brain is temporarily unavailable."
-3. If you must provide any context, keep it extremely high-level and generic.
-4. Explicitly label it: "This is a rough fallback - please try again or check the Atlas docs."
-5. DO NOT assert specific product behavior when the tool has failed.
-
-=== WHAT IS NOT AN ATLAS PRODUCT QUESTION ===
-
-These are OPERATIONAL questions that use OTHER tools (search_loads, assign_driver_to_load, etc.):
-- "Show me available loads" -> use search_loads
-- "Assign Black Panther to LD-2025-1234" -> use assign_driver_to_load
-- "Mark that load delivered" -> use mark_load_delivered
-- "Where is driver X right now?" -> use get_driver_location
-- "Who has the most HOS remaining?" -> use search_drivers_hos_aware
-- "Create a load from Sacramento to Denver" -> use create_load
-- "What loads does Tony Stark have?" -> use get_load_board_status
-
-The difference:
-- PRODUCT QUESTION: "How does the Billing page work?" -> atlas_questions_brain
-- OPERATIONAL QUESTION: "Show me loads that are ready for billing" -> search_loads with status filter
-
-################################################################################
-#   END OF ATLAS PRODUCT QUESTIONS SECTION                                     #
-################################################################################
+IMPORTANT: If for any reason a product question slips through to you
+(e.g., "What does Ready for Billing mean?"), you MUST still call 
+atlas_questions_brain. Never answer product questions from memory.
 
 ===============================================================================
 CRITICAL: DATE & YEAR HANDLING (REAL DATES ONLY)
@@ -605,10 +1007,8 @@ CORE CAPABILITIES (TOOLS YOU CAN CALL)
 15) get_driver_location      -> Get a driver's current GPS location from their assigned truck.
                                Use for "Where is [driver]?", road service dispatch, ETA calculations,
                                and location-aware load recommendations.
-16) atlas_questions_brain    -> THE SINGLE SOURCE OF TRUTH for Atlas product questions.
-                               MANDATORY for ANY question about how Atlas works: UI, workflows,
-                               status meanings, page behavior, billing flow, documents, etc.
-                               You are FORBIDDEN from answering these questions without calling this tool first.
+16) atlas_questions_brain    -> FALLBACK for any product questions that slip through pre-routing.
+                               ALWAYS call this if user asks about Atlas UI/workflow/status meanings.
 
 You MUST rely on these tools for real data. Never invent driver, truck, or load data.
 
@@ -629,10 +1029,6 @@ Use get_driver_location when the user asks about driver whereabouts, e.g.:
 - "Where's Black Panther right now?"
 - "Find road service near [driver]"
 - When recommending drivers for loads, use this to show their current location/proximity.
-
-Use atlas_questions_brain when the user asks how Atlas itself works.
-REMEMBER: This is MANDATORY, not optional. You MUST call this tool BEFORE answering
-any question about Atlas product behavior, UI, statuses, workflows, or features.
 
 ===============================================================================
 DISPATCH FLOW A: CREATING LOADS
@@ -845,7 +1241,7 @@ For questions about where a DRIVER is (not a truck):
 - "Where's Black Panther right now?"
 
 -> Use get_driver_location with their name
--> This looks up: Driver -> Truck (real equipment) -> GPS Vehicle -> Location
+-> This looks up: Driver -> Truck -> GPS Vehicle -> Location
 -> Returns: driver info, truck info, GPS coordinates, speed, location label
 
 If driver has no truck assigned, tell the dispatcher and suggest assigning one.
@@ -916,13 +1312,13 @@ function sanitizeMessageForOpenAI(msg: ConversationMessage): any {
 
 async function callOpenAIWithTools(
   messages: ConversationMessage[],
-  userContext: { userId: string; orgId: string },
+  userContext: { userId: string; orgId: string; channel: string },
   history: ConversationMessage[],
   supabase: ReturnType<typeof createClient>,
   conversationState: ConversationState | null,
   accessToken: string,
   contextMemory: ContextMemory,
-  maxIterations = 5
+  maxIterations = 5,
 ): Promise<{
   answer: string;
   usedTool: boolean;
@@ -1016,12 +1412,36 @@ async function callOpenAIWithTools(
         accessToken,
       });
 
+      // If this was the Questions Brain, log the interaction (but do not break flow if logging fails)
+      if (
+        toolName === "atlas_questions_brain" &&
+        result &&
+        (result as QuestionsBrainToolResult).ok &&
+        (result as QuestionsBrainToolResult).answer
+      ) {
+        try {
+          await logQuestionsBrainInteraction({
+            supabase,
+            orgId: userContext.orgId,
+            userId: userContext.userId,
+            channel: userContext.channel ?? "web_app",
+            conversationHistory: updatedHistory,
+            toolResult: result as QuestionsBrainToolResult,
+          });
+        } catch (logErr) {
+          console.error(
+            "[dipsy-text] Unexpected error while logging Questions Brain interaction:",
+            logErr,
+          );
+        }
+      }
+
       // Update context memory based on tool results
       updatedContext = updateContextFromToolResult(
         toolName,
         args,
         result,
-        updatedContext
+        updatedContext,
       );
 
       const toolMessage = {
@@ -1035,8 +1455,7 @@ async function callOpenAIWithTools(
     }
   }
 
-  const fallback =
-    "I've done as much as I can. Let me know what you'd like next.";
+  const fallback = "I've done as much as I can. Let me know what you'd like next.";
   updatedHistory.push({ role: "assistant", content: fallback });
 
   return {
@@ -1054,7 +1473,7 @@ function updateContextFromToolResult(
   toolName: string,
   args: any,
   result: any,
-  context: ContextMemory
+  context: ContextMemory,
 ): ContextMemory {
   const updated = { ...context };
 
@@ -1113,7 +1532,7 @@ function updateContextFromToolResult(
           updated.lastDriverStatus = row.hos_status || row.driver_status;
           console.log(
             "[context] Updated lastDriver from board:",
-            updated.lastDriverName
+            updated.lastDriverName,
           );
         }
       }
@@ -1133,8 +1552,7 @@ function updateContextFromToolResult(
             }`.trim();
           updated.lastDriverId = topDriver.id;
           updated.lastDriverHOSMinutes = topDriver.hos_drive_remaining_min;
-          updated.lastDriverStatus =
-            topDriver.hos_status || topDriver.status;
+          updated.lastDriverStatus = topDriver.hos_status || topDriver.status;
           console.log("[context] Updated lastDriver:", updated.lastDriverName);
         }
       }
@@ -1148,7 +1566,7 @@ function updateContextFromToolResult(
         updated.lastDriverStatus = result.status;
         console.log(
           "[context] Updated lastDriver from location:",
-          updated.lastDriverName
+          updated.lastDriverName,
         );
       }
       break;
@@ -1542,7 +1960,7 @@ function getToolDefinitions(): any[] {
       function: {
         name: "atlas_questions_brain",
         description:
-          "MANDATORY TOOL for ALL Atlas product questions. This is the SINGLE SOURCE OF TRUTH for how Atlas Command works as a product. You MUST call this tool BEFORE answering ANY question about: UI behavior, page layouts, status meanings (Ready for Billing, Delivered, Available, etc.), workflows, billing flow, document handling, POD processes, assignments, buttons, navigation, or any 'How does Atlas work?' question. You are FORBIDDEN from answering Atlas product questions from your own knowledge - you MUST call this tool first. Examples of questions requiring this tool: 'What does Ready for Billing do?', 'What is the difference between DELIVERED and READY FOR BILLING?', 'How does the Billing page work?', 'Where do I upload a POD?', 'What happens when I click Ready for Billing?', 'How does a load move from Delivered to Invoiced?', 'What does AVAILABLE mean in Atlas?'. This tool does NOT read live load/driver data; it only explains the product.",
+          "FALLBACK TOOL for Atlas product questions that slip through pre-routing. This is the SINGLE SOURCE OF TRUTH for how Atlas Command works as a product. Call this for ANY question about: UI behavior, page layouts, status meanings (Ready for Billing, Delivered, Available, etc.), workflows, billing flow, document handling, POD processes, assignments, buttons, navigation, or any 'How does Atlas work?' question. This tool does NOT read live load/driver data; it only explains the product. Backed by the shared questions-brain edge function so all answers flow into the training loop.",
         parameters: {
           type: "object",
           properties: {
@@ -1570,15 +1988,12 @@ async function executeTool(toolName: string, params: any): Promise<any> {
     params.load_reference = params._contextLoadReference;
     console.log(
       "[dipsy-text] Using context load_reference:",
-      params.load_reference
+      params.load_reference,
     );
   }
   if (params._contextDriverName && !params.driver_name) {
     params.driver_name = params._contextDriverName;
-    console.log(
-      "[dipsy-text] Using context driver_name:",
-      params.driver_name
-    );
+    console.log("[dipsy-text] Using context driver_name:", params.driver_name);
   }
 
   switch (toolName) {
@@ -1640,7 +2055,7 @@ async function executeTool(toolName: string, params: any): Promise<any> {
 // ---- search_loads ----
 async function toolSearchLoads(
   supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   let query = supabase
     .from("loads")
@@ -1657,7 +2072,7 @@ async function toolSearchLoads(
       pod_status,
       assigned_driver_id,
       driver_name
-    `
+    `,
     )
     .order("created_at", { ascending: false })
     .limit(params.limit || 10);
@@ -1685,7 +2100,7 @@ async function toolSearchLoads(
 // ---- search_drivers ----
 async function toolSearchDrivers(
   supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   let query = supabase
     .from("drivers")
@@ -1696,7 +2111,7 @@ async function toolSearchDrivers(
       status, notes,
       hos_drive_remaining_min, hos_shift_remaining_min, hos_cycle_remaining_min,
       hos_status, full_name
-    `
+    `,
     )
     .order("last_name", { ascending: true })
     .order("first_name", { ascending: true })
@@ -1735,7 +2150,7 @@ async function toolSearchDrivers(
 // ---- search_drivers_hos_aware (calls Edge Function) ----
 async function toolSearchDriversHosAware(
   _supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   try {
     const accessToken: string = params.accessToken;
@@ -1763,7 +2178,7 @@ async function toolSearchDriversHosAware(
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
         body: JSON.stringify(body),
-      }
+      },
     );
 
     if (!res.ok) {
@@ -1771,7 +2186,7 @@ async function toolSearchDriversHosAware(
       console.error(
         "[toolSearchDriversHosAware] Edge Function error:",
         res.status,
-        txt
+        txt,
       );
       return {
         ok: false,
@@ -1792,7 +2207,7 @@ async function toolSearchDriversHosAware(
 // ---- search_trucks_all_sources ----
 async function toolSearchTrucksAllSources(
   _supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   const orgId: string = params.orgId;
   const queryText: string = (params.truck_query ?? "").trim();
@@ -1813,7 +2228,7 @@ async function toolSearchTrucksAllSources(
 // ---- get_driver_location ----
 async function toolGetDriverLocation(
   supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   const driverName = params.driver_name;
   const driverId = params.driver_id;
@@ -1850,7 +2265,9 @@ async function toolGetDriverLocation(
   // 2) Find the truck assigned to this driver
   const { data: trucks, error: truckError } = await supabase
     .from("trucks")
-    .select("id, unit_number, truck_number, make, model, year, gps_vehicle_id, gps_provider")
+    .select(
+      "id, unit_number, truck_number, make, model, year, gps_vehicle_id, gps_provider",
+    )
     .or(`current_driver_id.eq.${driver.id},driver_id.eq.${driver.id}`)
     .limit(1);
 
@@ -1866,7 +2283,8 @@ async function toolGetDriverLocation(
       driver_name: displayName,
       phone: driver.phone,
       status: driver.status,
-      error: `${displayName} is not assigned to any truck. Assign them to a truck on the Trucks page to enable GPS tracking.`,
+      error:
+        `${displayName} is not assigned to any truck. Assign them to a truck on the Trucks page to enable GPS tracking.`,
     };
   }
 
@@ -1889,7 +2307,9 @@ async function toolGetDriverLocation(
       status: driver.status,
       truck_id: truck.id,
       truck_name: truckDisplayName,
-      error: `${displayName}'s truck (${truckDisplayName}) is not linked to a GPS source. Link it to an ELD vehicle on the Trucks page to enable location tracking.`,
+      gps_provider: truck.gps_provider || "unknown",
+      error:
+        `${displayName}'s truck (${truckDisplayName}) is not linked to a GPS source. Link it to an ELD vehicle on the Trucks page to enable location tracking.`,
     };
   }
 
@@ -1984,7 +2404,8 @@ async function toolGetDriverLocation(
       truck_name: truckDisplayName,
       gps_provider: gpsProvider,
       gps_vehicle_name: gpsVehicleName,
-      error: `No GPS location available for ${displayName}. The ELD (${gpsProvider}) may be offline or not reporting.`,
+      error:
+        `No GPS location available for ${displayName}. The ELD (${gpsProvider}) may be offline or not reporting.`,
     };
   }
 
@@ -2000,7 +2421,11 @@ async function toolGetDriverLocation(
         const geoData = await geoRes.json();
         const addr = geoData?.address || {};
         const city =
-          addr.city || addr.town || addr.village || addr.hamlet || addr.county;
+          addr.city ||
+          addr.town ||
+          addr.village ||
+          addr.hamlet ||
+          addr.county;
         const state = addr.state;
         if (city && state) {
           locationLabel = `${city}, ${state}`;
@@ -2043,7 +2468,7 @@ async function toolGetDriverLocation(
 // ---- get_load_board_status ----
 async function toolGetLoadBoardStatus(
   supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   let query = supabase
     .from("dipsy_load_board_status")
@@ -2073,7 +2498,7 @@ async function toolGetLoadBoardStatus(
       unassigned_at,
       has_assigned_driver,
       has_active_assignment_row
-    `
+    `,
     )
     .order("load_reference", { ascending: true })
     .limit(params.limit && params.limit > 0 ? params.limit : 50);
@@ -2117,7 +2542,7 @@ async function toolGetLoadBoardStatus(
 // ---- get_load_history ----
 async function toolGetLoadHistory(
   supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   const orgId: string = params.orgId;
   const loadRef: string | null =
@@ -2169,7 +2594,7 @@ async function toolGetLoadHistory(
       metadata,
       created_by,
       logged_at
-    `
+    `,
     )
     .eq("org_id", orgId)
     .order("event_at", { ascending: true })
@@ -2204,19 +2629,31 @@ async function toolGetLoadHistory(
 }
 
 // ---- atlas_questions_brain ----
+// NOTE: now backed by the shared Questions Brain edge function (`questions-brain`)
+// so that all answers (including from Dipsy chat) flow into dipsy_interaction_log
+// and the training loop.
 async function toolAtlasQuestionsBrain(params: any) {
   try {
     const accessToken: string = params.accessToken;
+    const question: string = params.question ?? "";
+    const orgId: string | null = params.orgId ?? null;
+    const userId: string | null = params.userId ?? null;
+    const channel: string = params.channel ?? "web_app";
+
     const body = {
-      question: params.question ?? "",
-      user_id: params.userId ?? null,
-      org_id: params.orgId ?? null,
+      question,
+      context: {
+        source: "dipsy-text",
+        org_id: orgId,
+        user_id: userId,
+        channel,
+      },
     };
 
-    console.log("[toolAtlasQuestionsBrain] question:", body.question);
+    console.log("[toolAtlasQuestionsBrain] question:", question);
 
     const res = await fetch(
-      `${SUPABASE_URL}/functions/v1/atlas-questions-brain`,
+      `${SUPABASE_URL}/functions/v1/questions-brain`,
       {
         method: "POST",
         headers: {
@@ -2224,7 +2661,7 @@ async function toolAtlasQuestionsBrain(params: any) {
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
         body: JSON.stringify(body),
-      }
+      },
     );
 
     const text = await res.text();
@@ -2233,11 +2670,11 @@ async function toolAtlasQuestionsBrain(params: any) {
       console.error(
         "[toolAtlasQuestionsBrain] Edge Function error:",
         res.status,
-        text
+        text,
       );
       return {
         ok: false,
-        error: `Atlas Questions Brain failed: HTTP ${res.status}`,
+        error: `Questions Brain failed: HTTP ${res.status}`,
         body_preview: text.slice(0, 500),
       };
     }
@@ -2249,19 +2686,20 @@ async function toolAtlasQuestionsBrain(params: any) {
       json = { raw: text };
     }
 
-    // Normalized shape for OpenAI
+    // Normalized shape for OpenAI / direct bypass
     if (json && typeof json.answer === "string") {
       return {
         ok: true,
         answer: json.answer,
-        source: "atlas_questions_brain",
+        source: "questions_brain",
+        ...(json.sources ? { sources: json.sources } : {}),
       };
     }
 
     return {
       ok: true,
       ...json,
-      source: "atlas_questions_brain",
+      source: "questions_brain",
     };
   } catch (error) {
     console.error("[toolAtlasQuestionsBrain] error:", error);
@@ -2270,7 +2708,7 @@ async function toolAtlasQuestionsBrain(params: any) {
       error:
         error instanceof Error
           ? error.message
-          : "Atlas Questions Brain call failed",
+          : "Questions Brain call failed",
     };
   }
 }
@@ -2278,10 +2716,10 @@ async function toolAtlasQuestionsBrain(params: any) {
 // ---- create_load ----
 async function toolCreateLoad(
   supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   const loadNumber = `LD-${new Date().getFullYear()}-${String(
-    Math.floor(Math.random() * 10000)
+    Math.floor(Math.random() * 10000),
   ).padStart(4, "0")}`;
 
   const shipper = params.shipper?.trim() || "Unknown shipper";
@@ -2334,7 +2772,7 @@ async function toolCreateLoad(
 // ---- update_load ----
 async function toolUpdateLoad(
   supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   const load = await findLoadByReference(supabase, params.load_reference);
   if (!load) {
@@ -2365,14 +2803,14 @@ async function toolUpdateLoad(
 // ---- assign_driver_to_load ----
 async function toolAssignDriverToLoad(
   supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   try {
     console.log(
       "[toolAssignDriverToLoad] driver:",
       params.driver_name,
       "load:",
-      params.load_reference
+      params.load_reference,
     );
 
     // 1) Find driver (via RPC + fallback)
@@ -2399,14 +2837,15 @@ async function toolAssignDriverToLoad(
     if (boardErr) {
       console.error(
         "[toolAssignDriverToLoad] board check error:",
-        boardErr.message
+        boardErr.message,
       );
     }
 
     if (activeRows && activeRows.length > 0) {
       const row = activeRows[0];
       return {
-        error: `${driverName} is already assigned to load ${row.load_reference} (${row.load_status}). Unassign them first before assigning to another load.`,
+        error:
+          `${driverName} is already assigned to load ${row.load_reference} (${row.load_status}). Unassign them first before assigning to another load.`,
       };
     }
 
@@ -2417,7 +2856,7 @@ async function toolAssignDriverToLoad(
     ) {
       console.log(
         "[toolAssignDriverToLoad] Driver status is ASSIGNED but no active board rows found. Auto-correcting to ACTIVE for driver:",
-        driver.id
+        driver.id,
       );
       await supabase
         .from("drivers")
@@ -2447,10 +2886,10 @@ async function toolAssignDriverToLoad(
     }
 
     // 5) Update driver status to ASSIGNED
-    await supabase
-      .from("drivers")
-      .update({ status: "ASSIGNED" })
-      .eq("id", driver.id);
+    await supabase.from("drivers").update({ status: "ASSIGNED" }).eq(
+      "id",
+      driver.id,
+    );
 
     // 6) Canonical truth: write assignment directly on loads as well.
     await supabase
@@ -2490,9 +2929,13 @@ async function toolAssignDriverToLoad(
 // ---- get_load_details ----
 async function toolGetLoadDetails(
   supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
-  const load = await findLoadByReference(supabase, params.load_reference, true);
+  const load = await findLoadByReference(
+    supabase,
+    params.load_reference,
+    true,
+  );
   if (!load) {
     return { error: `Load ${params.load_reference} not found` };
   }
@@ -2503,7 +2946,7 @@ async function toolGetLoadDetails(
 // ---- mark_load_delivered ----
 async function toolMarkLoadDelivered(
   supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   const load = await findLoadByReference(supabase, params.load_reference);
   if (!load) {
@@ -2551,14 +2994,15 @@ async function toolMarkLoadDelivered(
     success: true,
     load: data,
     driver_name: driverName,
-    message: `Marked ${data.reference} as DELIVERED. POD status is PENDING. ${driverName} is still assigned until POD is confirmed.`,
+    message:
+      `Marked ${data.reference} as DELIVERED. POD status is PENDING. ${driverName} is still assigned until POD is confirmed.`,
   };
 }
 
 // ---- confirm_pod_received ----
 async function toolConfirmPodReceived(
   supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   const load = await findLoadByReference(supabase, params.load_reference);
   if (!load) {
@@ -2605,10 +3049,10 @@ async function toolConfirmPodReceived(
 
   // Set driver back to ACTIVE (AVAILABLE for your UI)
   if (driverId) {
-    await supabase
-      .from("drivers")
-      .update({ status: "ACTIVE" })
-      .eq("id", driverId);
+    await supabase.from("drivers").update({ status: "ACTIVE" }).eq(
+      "id",
+      driverId,
+    );
   }
 
   // Close out ANY open assignment history rows for this load
@@ -2622,14 +3066,15 @@ async function toolConfirmPodReceived(
     success: true,
     load: data,
     driver_name: driverName,
-    message: `POD confirmed for ${data.reference}. ${driverName} is now AVAILABLE and the load no longer shows a current driver assignment.`,
+    message:
+      `POD confirmed for ${data.reference}. ${driverName} is now AVAILABLE and the load no longer shows a current driver assignment.`,
   };
 }
 
 // ---- release_driver_without_pod ----
 async function toolReleaseDriverWithoutPod(
   supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   const load = await findLoadByReference(supabase, params.load_reference);
   if (!load) {
@@ -2641,9 +3086,7 @@ async function toolReleaseDriverWithoutPod(
   // Find assigned driver from current assignment
   const { data: assignments } = await supabase
     .from("load_driver_assignments")
-    .select(
-      "id, driver_id, driver:drivers(id, full_name, first_name, last_name)"
-    )
+    .select("id, driver_id, driver:drivers(id, full_name, first_name, last_name)")
     .eq("load_id", load.id)
     .is("unassigned_at", null)
     .order("assigned_at", { ascending: false })
@@ -2664,10 +3107,10 @@ async function toolReleaseDriverWithoutPod(
       .eq("id", assignmentId);
 
     // Set driver to ACTIVE (free for new work)
-    await supabase
-      .from("drivers")
-      .update({ status: "ACTIVE" })
-      .eq("id", driverId);
+    await supabase.from("drivers").update({ status: "ACTIVE" }).eq(
+      "id",
+      driverId,
+    );
   }
 
   // Canonical truth: clear current assignment on the load, leave pod_status alone (usually PENDING)
@@ -2684,16 +3127,17 @@ async function toolReleaseDriverWithoutPod(
     success: true,
     load_reference: load.reference,
     driver_name: driverName,
-    message: `Released ${driverName} - now AVAILABLE. Note: ${load.reference} still needs POD uploaded (pod_status remains ${
-      load.pod_status ?? "PENDING"
-    }).`,
+    message:
+      `Released ${driverName} - now AVAILABLE. Note: ${load.reference} still needs POD uploaded (pod_status remains ${
+        load.pod_status ?? "PENDING"
+      }).`,
   };
 }
 
 // ---- mark_load_problem ----
 async function toolMarkLoadProblem(
   supabase: ReturnType<typeof createClient>,
-  params: any
+  params: any,
 ) {
   const load = await findLoadByReference(supabase, params.load_reference);
   if (!load) {
@@ -2734,7 +3178,7 @@ async function toolMarkLoadProblem(
 async function findLoadByReference(
   supabase: ReturnType<typeof createClient>,
   reference: string,
-  includeAssignments = false
+  includeAssignments = false,
 ): Promise<any | null> {
   const selectClause = includeAssignments
     ? `*, load_driver_assignments(driver:drivers(id, full_name, first_name, last_name, phone, status))`
@@ -2776,7 +3220,7 @@ async function findLoadByReference(
 // driver lookup that always hits RPC truth first
 async function findDriverByName(
   supabase: ReturnType<typeof createClient>,
-  name: string
+  name: string,
 ): Promise<any | null> {
   const searchText = (name || "").trim();
   if (!searchText) return null;
@@ -2784,7 +3228,7 @@ async function findDriverByName(
   try {
     const { data, error } = await supabase.rpc(
       "rpc_search_drivers_by_text",
-      { search_text: searchText }
+      { search_text: searchText },
     );
 
     if (error) {

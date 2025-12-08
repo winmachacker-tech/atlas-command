@@ -757,6 +757,7 @@ function MobileSidebar({ isOpen, onClose, onSignOut, isSuperAdmin, activeGroupBy
               <SideLink to="/privacy" icon={ShieldCheck} onClick={onClose}>Privacy Policy</SideLink>
               <SideLink to="/teammanagement" icon={UserRound} onClick={onClose}>Team Management</SideLink>
               <SideLink to="/admin/driver-learning-test" icon={GraduationCap} onClick={onClose}>Driver Learning Test</SideLink>
+              <SideLink to="/admin/dipsy-training-review" icon={Bot} onClick={onClose}>Dipsy Training Review</SideLink>
               {isSuperAdmin && (
                 <>
                   <SideLink to="/super-admin" icon={Crown} onClick={onClose}>Platform Admin</SideLink>
@@ -906,6 +907,7 @@ export default function MainLayout() {
         "/settings/whatsapp",
         "/teammanagement",
         "/admin/driver-learning-test",
+        "/admin/dipsy-training-review",
         "/ai-proof",
         "/ai-lab-proof",
         "/customers",
@@ -1136,6 +1138,9 @@ export default function MainLayout() {
                     icon={GraduationCap}
                   >
                     Driver Learning Test
+                  </SideLink>
+                  <SideLink to="/admin/dipsy-training-review" icon={Bot}>
+                    Dipsy Training Review
                   </SideLink>
                   {checkedSuperAdmin && isSuperAdmin && (
                     <>

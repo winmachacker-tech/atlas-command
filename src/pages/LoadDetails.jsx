@@ -367,6 +367,29 @@ function RouteMap({ stops, onRouteCalculated }) {
   );
 }
 
+/* ------------------------- Timeline Stop Circle Helper ------------------------- */
+
+function getStopCircleClasses(status, isCompleted) {
+  if (status === "COMPLETED" || isCompleted) {
+    return "h-4 w-4 rounded-full bg-emerald-500 border-2 border-emerald-400 shadow-lg shadow-emerald-500/40";
+  }
+  if (status === "ARRIVED") {
+    return "h-4 w-4 rounded-full bg-blue-500 border-2 border-blue-400 shadow-lg shadow-blue-500/40";
+  }
+  if (status === "EN_ROUTE") {
+    return "h-4 w-4 rounded-full bg-amber-500 border-2 border-amber-400 shadow-lg shadow-amber-500/40 animate-pulse";
+  }
+  // PENDING or unknown
+  return "h-4 w-4 rounded-full bg-slate-700 border-2 border-slate-600";
+}
+
+function getTimelineLineClasses(currentStatus, nextStatus, allPreviousCompleted) {
+  if (allPreviousCompleted && (currentStatus === "COMPLETED")) {
+    return "flex-1 w-0.5 bg-emerald-500/60 min-h-[2rem]";
+  }
+  return "flex-1 w-0.5 bg-slate-700 min-h-[2rem]";
+}
+
 /* ------------------------- Main page ------------------------- */
 
 export default function LoadDetails() {
@@ -380,8 +403,14 @@ export default function LoadDetails() {
   const [loadingDocs, setLoadingDocs] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  // NEW: dedicated POD upload state
+  // POD upload state
   const [uploadingPod, setUploadingPod] = useState(false);
+
+  // Per-stop POD upload state
+  const [stopPodUploadingId, setStopPodUploadingId] = useState(null);
+
+  // Per-stop POD map (sequence -> boolean)
+  const [stopPodMap, setStopPodMap] = useState({});
 
   const [error, setError] = useState("");
 
@@ -432,16 +461,16 @@ export default function LoadDetails() {
     pricePerGallon: 3.87, // Default fallback
   });
 
-  // Route weather alerts - NEW
+  // Route weather alerts
   const [routeWeatherAlerts, setRouteWeatherAlerts] = useState([]);
   const [loadingWeatherAlerts, setLoadingWeatherAlerts] = useState(false);
 
-  // Chain control alerts - NEW
+  // Chain control alerts
   const [chainControlAlerts, setChainControlAlerts] = useState([]);
   const [loadingChainAlerts, setLoadingChainAlerts] = useState(false);
 
   const fileInputRef = useRef(null);
-  const podFileInputRef = useRef(null); // NEW: POD input
+  const podFileInputRef = useRef(null);
   const quickActionsRef = useRef(null);
 
   // collapse state
@@ -449,10 +478,10 @@ export default function LoadDetails() {
   const [showAiSection, setShowAiSection] = useState(true);
   const [showActivityLog, setShowActivityLog] = useState(false);
   const [showRelatedLoads, setShowRelatedLoads] = useState(false);
-  const [showWeatherAlerts, setShowWeatherAlerts] = useState(true); // NEW
-  const [showChainAlerts, setShowChainAlerts] = useState(true); // NEW
+  const [showWeatherAlerts, setShowWeatherAlerts] = useState(true);
+  const [showChainAlerts, setShowChainAlerts] = useState(true);
 
-  // NEW: ready for billing button loading state
+  // ready for billing button loading state
   const [markingBillingReady, setMarkingBillingReady] = useState(false);
 
   const loadKey = load?.id?.slice(0, 6) ?? "—";
@@ -707,13 +736,27 @@ export default function LoadDetails() {
 
         if (listErr) throw listErr;
 
-        setDocs(
-          (data || []).map((d) => ({
-            name: d.name,
-            path: `${folder}/${d.name}`,
-            updated_at: d.updated_at,
-          }))
-        );
+        // Build docs array
+        const docsArray = (data || []).map((d) => ({
+          name: d.name,
+          path: `${folder}/${d.name}`,
+          updated_at: d.updated_at,
+        }));
+
+        setDocs(docsArray);
+
+        // Parse stop-level POD flags from document names
+        const stopPodFlags = {};
+        (data || []).forEach((d) => {
+          // Match pattern: STOP-<sequence>-POD-
+          const match = d.name.match(/^STOP-(\d+)-POD-/);
+          if (match) {
+            const seq = parseInt(match[1], 10);
+            stopPodFlags[seq] = true;
+          }
+        });
+        setStopPodMap(stopPodFlags);
+
       } catch (err) {
         console.error("[LoadDetails] docs list error", err);
       } finally {
@@ -755,7 +798,7 @@ export default function LoadDetails() {
     }
   };
 
-  // NEW: dedicated POD upload handler
+  // Load-level POD upload handler
   const handleUploadPod = async (e) => {
     const file = e.target.files?.[0];
     if (!file || !load?.org_id || !load?.id) return;
@@ -833,6 +876,59 @@ export default function LoadDetails() {
     }
   };
 
+  // Per-stop POD upload handler
+  const handleUploadStopPod = async (stop, e) => {
+    const file = e.target.files?.[0];
+    if (!file || !load?.org_id || !load?.id || !stop?.sequence) return;
+
+    try {
+      setStopPodUploadingId(stop.id);
+      const folder = `${load.org_id}/${load.id}`;
+      const filePath = `${folder}/STOP-${stop.sequence}-POD-${Date.now()}-${file.name}`;
+
+      // 1) Upload to Storage
+      const { error: uploadErr } = await supabase.storage
+        .from(DOC_BUCKET)
+        .upload(filePath, file, {
+          upsert: true,
+        });
+
+      if (uploadErr) throw uploadErr;
+
+      // 2) Insert metadata row into load_docs as STOP_POD
+      try {
+        const { error: docErr } = await supabase
+          .from("load_docs")
+          .insert({
+            load_id: load.id,
+            org_id: load.org_id,
+            doc_type: "STOP_POD",
+            storage_path: filePath,
+          });
+
+        if (docErr) {
+          console.error("[LoadDetails] load_docs insert error for stop POD", docErr);
+        }
+      } catch (docErr) {
+        console.error("[LoadDetails] load_docs insert error for stop POD", docErr);
+      }
+
+      await refreshDocuments();
+      await logActivity(
+        "Stop POD uploaded",
+        `Stop ${stop.sequence}: ${stop.location_name || stop.city || "Stop"} - ${file.name}`
+      );
+      
+      alert(`POD uploaded for Stop ${stop.sequence} (${stop.location_name || stop.city || "Stop"}).`);
+    } catch (err) {
+      console.error("[LoadDetails] Stop POD upload error", err);
+      alert("Stop POD upload failed. Check console for details.");
+    } finally {
+      setStopPodUploadingId(null);
+      e.target.value = "";
+    }
+  };
+
   const handleOpenDoc = async (doc) => {
     try {
       const { data, error: urlErr } = await supabase.storage
@@ -903,7 +999,7 @@ export default function LoadDetails() {
     setShowEditModal(true);
   };
 
-const handleSaveEdit = async () => {
+  const handleSaveEdit = async () => {
     try {
       setSaving(true);
 
@@ -980,7 +1076,7 @@ const handleSaveEdit = async () => {
     setInlineValue("");
   };
 
-  /* -------- stop status update -------- */
+  /* -------- stop status update with auto-advance -------- */
 
   const handleUpdateStopStatus = async (stopId, newStatus) => {
     try {
@@ -995,6 +1091,41 @@ const handleSaveEdit = async () => {
         "Stop status updated",
         `Stop ${stopId}: ${newStatus}`
       );
+
+      // Auto-advance logic: if marking as COMPLETED, advance next stop to EN_ROUTE
+      if (newStatus === "COMPLETED") {
+        // Sort stops by sequence
+        const sortedStops = [...stops].sort((a, b) => a.sequence - b.sequence);
+        
+        // Find current stop index
+        const currentIdx = sortedStops.findIndex((s) => s.id === stopId);
+        
+        if (currentIdx !== -1 && currentIdx < sortedStops.length - 1) {
+          const nextStop = sortedStops[currentIdx + 1];
+          
+          // Only auto-advance if next stop is PENDING or null/undefined
+          if (!nextStop.status || nextStop.status === "PENDING") {
+            try {
+              const { error: advanceErr } = await supabase
+                .from("load_stops")
+                .update({ status: "EN_ROUTE" })
+                .eq("id", nextStop.id);
+
+              if (advanceErr) {
+                console.error("[LoadDetails] auto-advance error", advanceErr);
+              } else {
+                await logActivity(
+                  "Stop auto-advanced to EN_ROUTE",
+                  `Stop ${nextStop.sequence}: ${nextStop.location_name || nextStop.city || "Next stop"}`
+                );
+              }
+            } catch (advanceErr) {
+              console.error("[LoadDetails] auto-advance error", advanceErr);
+            }
+          }
+        }
+      }
+
       await fetchData();
       setEditingStopStatus(null);
     } catch (err) {
@@ -1546,6 +1677,16 @@ const handleSaveEdit = async () => {
     deliveryDisplayState,
   ]);
 
+  /* -------- Helper to check if all previous stops are completed -------- */
+  const areAllPreviousStopsCompleted = useCallback((idx, stopsArray) => {
+    for (let i = 0; i < idx; i++) {
+      if (stopsArray[i]?.status !== "COMPLETED") {
+        return false;
+      }
+    }
+    return true;
+  }, []);
+
   /* -------- AUTO-CALCULATE MILES (moved here to access displayStops) -------- */
 
   const handleCalculateMiles = useCallback(
@@ -1812,7 +1953,6 @@ const handleSaveEdit = async () => {
                   ? formatDateTime(pickupStop.scheduled_start)
                   : formatDateTime(load.pickup_at)}{" "}
                 · DEL:{" "}
-
                 {deliveryStop
                   ? formatDateTime(deliveryStop.scheduled_end)
                   : formatDateTime(load.delivery_at)}{" "}
@@ -2338,7 +2478,7 @@ const handleSaveEdit = async () => {
                   </button>
                 )}
 
-                {/* NEW: Upload POD */}
+                {/* Upload POD */}
                 <button
                   onClick={() => podFileInputRef.current?.click()}
                   className="inline-flex items-center gap-1 rounded-full border border-emerald-500/80 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -2448,7 +2588,7 @@ const handleSaveEdit = async () => {
         </div>
       </div>
 
-      {/* Route Weather Alerts Section - NEW */}
+      {/* Route Weather Alerts Section */}
       <section className="bg-slate-900/70 border border-amber-500/30 rounded-2xl p-5">
         <button
           type="button"
@@ -2486,7 +2626,7 @@ const handleSaveEdit = async () => {
         )}
       </section>
 
-      {/* Chain Control Alerts Section - NEW */}
+      {/* Chain Control Alerts Section */}
       <section className="bg-slate-900/70 border border-red-500/30 rounded-2xl p-5">
         <button
           type="button"
@@ -2537,7 +2677,7 @@ const handleSaveEdit = async () => {
         )}
       </section>
 
-      {/* Route & Stops with status tracking */}
+      {/* Route & Stops with hybrid timeline UI */}
       <section className="bg-slate-900/70 border border-emerald-500/30 rounded-2xl p-5 space-y-4">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-base font-semibold text-slate-50">
@@ -2549,93 +2689,158 @@ const handleSaveEdit = async () => {
           </div>
         </div>
 
-        <div className="space-y-3">
-          {displayStops.map((stop) => (
-            <div
-              key={stop.id}
-              className="rounded-xl bg-slate-950/60 border border-slate-700/70 p-3 space-y-2"
-            >
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                    Stop {stop.sequence} · {stop.stop_type || "STOP"}
-                  </div>
-                  <div className="text-sm font-medium text-slate-50">
-                    {stop.location_name ||
-                      buildStopAddress(stop) ||
-                      "—"}
-                  </div>
-                  <div className="text-xs text-slate-400">
-                    {buildStopAddress(stop)}
-                  </div>
-                </div>
-                <div className="text-right text-xs text-slate-400">
-                  <div>
-                    Start:{" "}
-                    {formatDateTime(stop.scheduled_start)}
-                  </div>
-                  <div>
-                    End: {formatDateTime(stop.scheduled_end)}
-                  </div>
-                </div>
-              </div>
+        <div className="space-y-0">
+          {displayStops.map((stop, idx) => {
+            const isRealStop = stop.id && !stop.id.startsWith("virtual-");
+            const allPrevCompleted = areAllPreviousStopsCompleted(idx, displayStops);
+            const nextStop = displayStops[idx + 1];
+            const hasStopPod = stopPodMap[stop.sequence] || false;
+            const isUploadingThisStop = stopPodUploadingId === stop.id;
 
-              {/* Stop status */}
-              <div className="flex items-center gap-2">
-                <MapPin className="h-3 w-3 text-slate-400" />
-                {editingStopStatus === stop.id ? (
-                  <div className="flex items-center gap-1">
-                    <select
-                      className="rounded bg-slate-900 border border-slate-700 px-2 py-0.5 text-xs text-slate-100"
-                      defaultValue={stop.status || "PENDING"}
-                      onChange={(e) =>
-                        handleUpdateStopStatus(
-                          stop.id,
-                          e.target.value
-                        )
-                      }
-                      autoFocus
-                    >
-                      {STOP_STATUSES.map((s) => (
-                        <option key={s} value={s}>
-                          {s.replace("_", " ")}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => setEditingStopStatus(null)}
-                      className="p-1 rounded bg-slate-800 hover:bg-slate-700"
-                    >
-                      <X className="h-3 w-3 text-slate-300" />
-                    </button>
-                  </div>
-                ) : (
-                  <div
-                    className="flex items-center gap-2 cursor-pointer group"
-                    onClick={() =>
-                      setEditingStopStatus(stop.id)
-                    }
-                  >
-                    <span
-                      className={cx(
-                        "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium",
-                        stop.status === "COMPLETED"
-                          ? "bg-emerald-500/20 text-emerald-200 border border-emerald-500/40"
-                          : stop.status === "ARRIVED"
-                          ? "bg-blue-500/20 text-blue-200 border border-blue-500/40"
-                          : stop.status === "EN_ROUTE"
-                          ? "bg-amber-500/20 text-amber-200 border border-amber-500/40"
-                          : "bg-slate-700/60 text-slate-300 border border-slate-600"
+            return (
+              <div key={stop.id} className="flex gap-3">
+                {/* Timeline column */}
+                <div className="flex flex-col items-center pt-4">
+                  {/* Circle */}
+                  <div className={getStopCircleClasses(stop.status, false)} />
+                  {/* Line to next stop */}
+                  {idx < displayStops.length - 1 && (
+                    <div
+                      className={getTimelineLineClasses(
+                        stop.status,
+                        nextStop?.status,
+                        allPrevCompleted
                       )}
-                    >
-                      {(stop.status || "PENDING").replace("_", " ")}
-                    </span>
-                    <Edit className="h-3 w-3 text-slate-500 group-hover:text-emerald-400" />
+                    />
+                  )}
+                </div>
+
+                {/* Card column */}
+                <div className="flex-1 rounded-xl bg-slate-950/60 border border-slate-700/70 p-3 space-y-2 mb-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                        Stop {stop.sequence} · {stop.stop_type || "STOP"}
+                      </div>
+                      <div className="text-sm font-medium text-slate-50">
+                        {stop.location_name ||
+                          buildStopAddress(stop) ||
+                          "—"}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        {buildStopAddress(stop)}
+                      </div>
+                    </div>
+                    <div className="text-right text-xs text-slate-400">
+                      <div>
+                        Start:{" "}
+                        {formatDateTime(stop.scheduled_start)}
+                      </div>
+                      <div>
+                        End: {formatDateTime(stop.scheduled_end)}
+                      </div>
+                    </div>
                   </div>
-                )}
+
+                  {/* Stop status and POD controls row */}
+                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-700/40">
+                    {/* Stop status */}
+                    <div className="flex items-center gap-2">
+                      <MapPin className="h-3 w-3 text-slate-400" />
+                      {editingStopStatus === stop.id ? (
+                        <div className="flex items-center gap-1">
+                          <select
+                            className="rounded bg-slate-900 border border-slate-700 px-2 py-0.5 text-xs text-slate-100"
+                            defaultValue={stop.status || "PENDING"}
+                            onChange={(e) =>
+                              handleUpdateStopStatus(
+                                stop.id,
+                                e.target.value
+                              )
+                            }
+                            autoFocus
+                          >
+                            {STOP_STATUSES.map((s) => (
+                              <option key={s} value={s}>
+                                {s.replace("_", " ")}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() => setEditingStopStatus(null)}
+                            className="p-1 rounded bg-slate-800 hover:bg-slate-700"
+                          >
+                            <X className="h-3 w-3 text-slate-300" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div
+                          className={cx(
+                            "flex items-center gap-2",
+                            isRealStop && "cursor-pointer group"
+                          )}
+                          onClick={() =>
+                            isRealStop && setEditingStopStatus(stop.id)
+                          }
+                        >
+                          <span
+                            className={cx(
+                              "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium",
+                              stop.status === "COMPLETED"
+                                ? "bg-emerald-500/20 text-emerald-200 border border-emerald-500/40"
+                                : stop.status === "ARRIVED"
+                                ? "bg-blue-500/20 text-blue-200 border border-blue-500/40"
+                                : stop.status === "EN_ROUTE"
+                                ? "bg-amber-500/20 text-amber-200 border border-amber-500/40"
+                                : "bg-slate-700/60 text-slate-300 border border-slate-600"
+                            )}
+                          >
+                            {(stop.status || "PENDING").replace("_", " ")}
+                          </span>
+                          {isRealStop && (
+                            <Edit className="h-3 w-3 text-slate-500 group-hover:text-emerald-400" />
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Per-stop POD controls (only for real stops) */}
+                    {isRealStop && (
+                      <div className="flex items-center gap-2">
+                        {/* POD status indicator */}
+                        {hasStopPod ? (
+                          <div className="inline-flex items-center gap-1 rounded-full border border-emerald-500/60 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-100">
+                            <CheckCircle2 className="h-2.5 w-2.5" />
+                            POD on file
+                          </div>
+                        ) : (
+                          <div className="inline-flex items-center gap-1 rounded-full border border-slate-600 bg-slate-900/60 px-2 py-0.5 text-[10px] text-slate-400">
+                            No POD yet
+                          </div>
+                        )}
+
+                        {/* Upload POD for this stop */}
+                        <label className="inline-flex items-center gap-1 rounded-full border border-emerald-500/70 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-100 hover:bg-emerald-500/20 cursor-pointer">
+                          {isUploadingThisStop ? (
+                            <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                          ) : (
+                            <Upload className="h-2.5 w-2.5" />
+                          )}
+                          <span>POD</span>
+                          <input
+                            type="file"
+                            className="hidden"
+                            onChange={(e) => handleUploadStopPod(stop, e)}
+                            disabled={isUploadingThisStop}
+                          />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {displayStops.length === 0 && (
             <div className="text-sm text-slate-300">

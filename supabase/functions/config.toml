@@ -1,0 +1,2 @@
+[functions.dipsy-training-evaluate]
+verify_jwt = true

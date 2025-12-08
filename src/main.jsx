@@ -11,7 +11,6 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import "./index.css";
 
 import FaqTestPanel from "@/lib/dipsy/FaqTestPanel";
-
 import { Analytics } from "@vercel/analytics/react";
 
 /* Supabase */
@@ -74,6 +73,7 @@ const CustomerDetail = lazy(() => import("./pages/CustomerDetail.jsx"));
 const Documents = lazy(() => import("./pages/Documents.jsx"));
 const LaneTraining = lazy(() => import("./pages/LaneTraining.jsx"));
 const Sales = lazy(() => import("./pages/Sales.jsx"));
+const DipsyTrainingReview = lazy(() => import("./pages/DipsyTrainingReview.jsx"));
 const Audit = lazy(() => import("./pages/Audit.jsx"));
 const AiLaneIntelligence = lazy(() => import("./pages/AiLaneIntelligence.jsx"));
 const CompleteAccount = lazy(() => import("./pages/CompleteAccount.jsx"));
@@ -510,6 +510,11 @@ function AppRoutes() {
                   />
                   <Route path="super-admin" element={<SuperAdmin />} />
                   <Route path="financials" element={<Financials />} />
+                  <Route
+                  path="admin/dipsy-training-review"
+                  element={<DipsyTrainingReview />}
+                  />
+
 
                   {/* User settings */}
                   <Route path="profile" element={<Profile />} />
