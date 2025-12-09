@@ -99,7 +99,8 @@ serve(async (req) => {
       global: { headers: { Authorization: authHeader } }
     });
     const { error: authError } = await userClient.auth.getUser();
-    if (authError && !authHeader.includes('service_role')) throw new Error('Unauthorized');
+    const isServiceRole = authHeader.includes('eyJpc3MiOiJzdXBhYmFzZSI');
+if (authError && !isServiceRole) throw new Error('Unauthorized');
 
     console.log('[dipsy-auto-eval] Starting batch at offset ' + offset);
 
