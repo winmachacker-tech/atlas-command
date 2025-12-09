@@ -1074,9 +1074,7 @@ function PreviewModal({ document, onClose }) {
             <span>Uploaded: {formatDateTime(document.created_at)}</span>
             {document.expires_at && (
               <span
-                className={
-                  isExpired(document.expires_at) ? "text-rose-400" : ""
-                }
+                className={isExpired(document.expires_at) ? "text-rose-400" : ""}
               >
                 Expires: {formatDate(document.expires_at)}
               </span>
@@ -1328,322 +1326,361 @@ export default function Documents() {
     <div className="p-4 md:p-6">
       {ToastView}
 
-      {/* Header */}
-      <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-purple-500/15 border border-purple-500/30">
-            <FileText className="w-4 h-4 text-purple-300" />
-          </span>
-          <h1 className="text-xl font-semibold text-zinc-100">Documents</h1>
-          <span className="ml-2 px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 text-xs">
-            {totalCount}
-          </span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={fetchDocuments}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60"
-            title="Refresh"
-          >
-            <RefreshCw
-              className={cx("w-4 h-4", loading && "animate-spin")}
-            />
-            Refresh
-          </button>
-
-          <button
-            onClick={() => setShowUploadModal(true)}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium"
-          >
-            <Plus className="w-4 h-4" />
-            Upload
-          </button>
-        </div>
-      </div>
-
-      {/* Quick Stats */}
-      {(expiringCount > 0 || expiredCount > 0) && (
-        <div className="mb-4 flex flex-wrap gap-3">
-          {expiredCount > 0 && (
-            <button
-              onClick={() => setExpirationFilter("expired")}
-              className={cx(
-                "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm",
-                expirationFilter === "expired"
-                  ? "bg-rose-500/20 border-rose-500/40 text-rose-300"
-                  : "border-rose-500/30 text-rose-400 hover:bg-rose-500/10"
-              )}
-            >
-              <AlertTriangle className="w-4 h-4" />
-              {expiredCount} Expired
-            </button>
-          )}
-          {expiringCount > 0 && (
-            <button
-              onClick={() => setExpirationFilter("expiring_soon")}
-              className={cx(
-                "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm",
-                expirationFilter === "expiring_soon"
-                  ? "bg-amber-500/20 border-amber-500/40 text-amber-300"
-                  : "border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
-              )}
-            >
-              <Clock className="w-4 h-4" />
-              {expiringCount} Expiring Soon
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Filters */}
-      <div className="mb-4 flex flex-col sm:flex-row gap-3">
-        <div className="flex items-center gap-2 px-3 h-10 rounded-lg border border-zinc-700/60 bg-zinc-900/40 text-zinc-200 w-full sm:max-w-md">
-          <SearchIcon className="w-4 h-4 text-zinc-400" />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            className="bg-transparent outline-none w-full placeholder:text-zinc-500"
-            placeholder="Search by name, load, customer, driver..."
-          />
-        </div>
-
-        <select
-          value={typeFilter}
-          onChange={(e) => setTypeFilter(e.target.value)}
-          className="h-10 px-3 rounded-lg border border-zinc-700/60 bg-zinc-900/40 text-zinc-200 focus:outline-none"
-        >
-          <option value="all">All Types</option>
-          {DOCUMENT_TYPES.map((dt) => (
-            <option key={dt.value} value={dt.value}>
-              {dt.label}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={expirationFilter}
-          onChange={(e) => setExpirationFilter(e.target.value)}
-          className="h-10 px-3 rounded-lg border border-zinc-700/60 bg-zinc-900/40 text-zinc-200 focus:outline-none"
-        >
-          <option value="all">All Documents</option>
-          <option value="expiring_soon">Expiring Soon (30 days)</option>
-          <option value="expired">Expired</option>
-        </select>
-      </div>
-
-      {/* Table */}
-      <div className="rounded-2xl border border-zinc-700/60 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="bg-zinc-900/50 text-xs text-zinc-400 border-b border-zinc-700/60">
-                <th className="px-4 py-3 text-left font-medium">Document</th>
-                <th className="px-4 py-3 text-left font-medium">Type</th>
-                <th className="px-4 py-3 text-left font-medium">Linked To</th>
-                <th className="px-4 py-3 text-center font-medium">Size</th>
-                <th className="px-4 py-3 text-center font-medium">Expires</th>
-                <th className="px-4 py-3 text-left font-medium">Uploaded</th>
-                <th className="px-4 py-3 text-right font-medium w-16">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800/70">
-              {loading && (
-                <tr>
-                  <td
-                    colSpan={7}
-                    className="px-4 py-8 text-center text-zinc-400"
-                  >
-                    Loading documents…
-                  </td>
-                </tr>
-              )}
-
-              {!loading && documents.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={7}
-                    className="px-4 py-8 text-center text-zinc-400"
-                  >
-                    No documents found.{" "}
-                    <button
-                      onClick={() => setShowUploadModal(true)}
-                      className="text-blue-400 hover:underline"
-                    >
-                      Upload your first document
-                    </button>
-                  </td>
-                </tr>
-              )}
-
-              {documents.map((doc) => {
-                const FileIcon = getFileIcon(doc.file_type);
-                const expired = isExpired(doc.expires_at);
-                const expiringSoon = isExpiringSoon(doc.expires_at);
-
-                return (
-                  <tr
-                    key={doc.id}
-                    className="hover:bg-zinc-900/40 cursor-pointer"
-                    onClick={() => setPreviewDocument(doc)}
-                  >
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-lg bg-zinc-800 flex items-center justify-center flex-shrink-0">
-                          <FileIcon className="w-4 h-4 text-zinc-400" />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium text-zinc-100 truncate max-w-[200px]">
-                            {doc.name}
-                          </div>
-                          {doc.notes && (
-                            <div className="text-xs text-zinc-500 truncate max-w-[200px]">
-                              {doc.notes}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      {typeBadge(doc.document_type)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="space-y-1">
-                        {doc.load_reference && (
-                          <div
-                            className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-blue-400 cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigate(`/loads/${doc.load_id}`);
-                            }}
-                          >
-                            <Truck className="w-3 h-3" />
-                            {doc.load_reference}
-                          </div>
-                        )}
-                        {doc.customer_name && (
-                          <div
-                            className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-blue-400 cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigate(`/customers/${doc.customer_id}`);
-                            }}
-                          >
-                            <Building2 className="w-3 h-3" />
-                            {doc.customer_name}
-                          </div>
-                        )}
-                        {doc.driver_name && (
-                          <div
-                            className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-blue-400 cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigate(`/drivers/${doc.driver_id}`);
-                            }}
-                          >
-                            <UserRound className="w-3 h-3" />
-                            {doc.driver_name}
-                          </div>
-                        )}
-                        {!doc.load_reference &&
-                          !doc.customer_name &&
-                          !doc.driver_name && (
-                            <span className="text-xs text-zinc-600">—</span>
-                          )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-center text-sm text-zinc-400">
-                      {formatBytes(doc.file_size)}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      {doc.expires_at ? (
-                        <div
-                          className={cx(
-                            "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs",
-                            expired &&
-                              "bg-rose-500/10 text-rose-300 border border-rose-500/30",
-                            expiringSoon &&
-                              !expired &&
-                              "bg-amber-500/10 text-amber-300 border border-amber-500/30",
-                            !expired &&
-                              !expiringSoon &&
-                              "text-zinc-400"
-                          )}
-                        >
-                          {(expired || expiringSoon) && (
-                            <AlertTriangle className="w-3 h-3" />
-                          )}
-                          {formatDate(doc.expires_at)}
-                        </div>
-                      ) : (
-                        <span className="text-sm text-zinc-600">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="text-sm text-zinc-400">
-                        {formatDate(doc.created_at)}
-                      </div>
-                      {doc.uploaded_by_name && (
-                        <div className="text-xs text-zinc-500">
-                          {doc.uploaded_by_name}
-                        </div>
-                      )}
-                    </td>
-                    <td
-                      className="px-4 py-3 text-right"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <RowActions
-                        doc={doc}
-                        onPreview={(d) => setPreviewDocument(d)}
-                        onEdit={(d) => setEditDocument(d)}
-                        onDelete={(d) => setDeleteDocument(d)}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-800/60 bg-zinc-900/30">
-            <div className="text-sm text-zinc-500">
-              Showing {page * PAGE_SIZE + 1}–
-              {Math.min((page + 1) * PAGE_SIZE, totalCount)} of {totalCount}
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0}
-                className={cx(
-                  "p-2 rounded-lg border border-zinc-700/60 text-zinc-300 hover:bg-zinc-800/60",
-                  page === 0 && "opacity-40 cursor-not-allowed"
-                )}
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <span className="text-sm text-zinc-400 px-2">
-                Page {page + 1} of {totalPages}
-              </span>
-              <button
-                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                disabled={page >= totalPages - 1}
-                className={cx(
-                  "p-2 rounded-lg border border-zinc-700/60 text-zinc-300 hover:bg-zinc-800/60",
-                  page >= totalPages - 1 &&
-                    "opacity-40 cursor-not-allowed"
-                )}
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
+      <div className="max-w-6xl mx-auto space-y-4">
+        {/* Header Card */}
+        <div className="rounded-2xl border border-zinc-700/70 bg-gradient-to-r from-zinc-950 via-zinc-900 to-zinc-950 px-4 py-4 md:px-6 md:py-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-purple-500/15 border border-purple-500/30 mt-0.5">
+              <FileText className="w-4 h-4 text-purple-300" />
+            </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl md:text-2xl font-semibold text-zinc-50">
+                  Documents
+                </h1>
+                <span className="px-2 py-0.5 rounded-full bg-zinc-900/80 text-zinc-400 text-xs border border-zinc-700/70">
+                  {totalCount} total
+                </span>
+              </div>
+              <p className="mt-1 text-xs md:text-sm text-zinc-400">
+                Central hub for rate cons, BOLs, PODs, driver files, and company documents.
+              </p>
             </div>
           </div>
+
+          <div className="flex items-center gap-2 self-start md:self-center">
+            <button
+              onClick={fetchDocuments}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700/60 text-zinc-200 hover:bg-zinc-800/60 text-sm"
+              title="Refresh"
+            >
+              <RefreshCw
+                className={cx("w-4 h-4", loading && "animate-spin")}
+              />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+
+            <button
+              onClick={() => setShowUploadModal(true)}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm shadow-sm shadow-blue-500/20"
+            >
+              <Plus className="w-4 h-4" />
+              Upload
+            </button>
+          </div>
+        </div>
+
+        {/* Quick Stats */}
+        {(expiringCount > 0 || expiredCount > 0) && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {expiredCount > 0 && (
+              <button
+                onClick={() => setExpirationFilter("expired")}
+                className={cx(
+                  "flex items-center justify-between px-4 py-3 rounded-2xl border text-sm transition-colors",
+                  expirationFilter === "expired"
+                    ? "bg-rose-500/15 border-rose-500/50 text-rose-100"
+                    : "bg-zinc-950/80 border-rose-500/30 text-rose-200 hover:bg-rose-500/10"
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-rose-500/20">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                  </span>
+                  <div className="text-left">
+                    <div className="font-medium">{expiredCount} expired</div>
+                    <div className="text-xs text-rose-200/80">
+                      Needs attention now
+                    </div>
+                  </div>
+                </div>
+                <span className="text-xs uppercase tracking-wide">
+                  View
+                </span>
+              </button>
+            )}
+            {expiringCount > 0 && (
+              <button
+                onClick={() => setExpirationFilter("expiring_soon")}
+                className={cx(
+                  "flex items-center justify-between px-4 py-3 rounded-2xl border text-sm transition-colors",
+                  expirationFilter === "expiring_soon"
+                    ? "bg-amber-500/15 border-amber-500/50 text-amber-100"
+                    : "bg-zinc-950/80 border-amber-500/30 text-amber-200 hover:bg-amber-500/10"
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-amber-500/20">
+                    <Clock className="w-3.5 h-3.5" />
+                  </span>
+                  <div className="text-left">
+                    <div className="font-medium">
+                      {expiringCount} expiring in 30 days
+                    </div>
+                    <div className="text-xs text-amber-200/80">
+                      Renew before they lapse
+                    </div>
+                  </div>
+                </div>
+                <span className="text-xs uppercase tracking-wide">
+                  Filter
+                </span>
+              </button>
+            )}
+          </div>
         )}
+
+        {/* Filters Bar */}
+        <div className="rounded-2xl border border-zinc-700/60 bg-zinc-950/70 px-4 py-3 md:px-5 md:py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div className="flex-1 flex items-center gap-2 px-3 h-10 rounded-lg border border-zinc-700/60 bg-zinc-900/60 text-zinc-200">
+            <SearchIcon className="w-4 h-4 text-zinc-400" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              className="bg-transparent outline-none w-full placeholder:text-zinc-500 text-sm"
+              placeholder="Search by name, notes, load, customer, or driver…"
+            />
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              className="h-10 px-3 rounded-lg border border-zinc-700/60 bg-zinc-900/60 text-zinc-200 focus:outline-none text-sm"
+            >
+              <option value="all">All Types</option>
+              {DOCUMENT_TYPES.map((dt) => (
+                <option key={dt.value} value={dt.value}>
+                  {dt.label}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={expirationFilter}
+              onChange={(e) => setExpirationFilter(e.target.value)}
+              className="h-10 px-3 rounded-lg border border-zinc-700/60 bg-zinc-900/60 text-zinc-200 focus:outline-none text-sm"
+            >
+              <option value="all">All Documents</option>
+              <option value="expiring_soon">Expiring Soon (30 days)</option>
+              <option value="expired">Expired</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Table Card */}
+        <div className="rounded-2xl border border-zinc-700/60 overflow-hidden bg-zinc-950/80">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-zinc-900/70 text-xs text-zinc-400 border-b border-zinc-700/60">
+                  <th className="px-4 py-3 text-left font-medium">Document</th>
+                  <th className="px-4 py-3 text-left font-medium">Type</th>
+                  <th className="px-4 py-3 text-left font-medium">Linked To</th>
+                  <th className="px-4 py-3 text-center font-medium">Size</th>
+                  <th className="px-4 py-3 text-center font-medium">Expires</th>
+                  <th className="px-4 py-3 text-left font-medium">Uploaded</th>
+                  <th className="px-4 py-3 text-right font-medium w-16">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-800/70">
+                {loading && (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="px-4 py-8 text-center text-zinc-400 text-sm"
+                    >
+                      Loading documents…
+                    </td>
+                  </tr>
+                )}
+
+                {!loading && documents.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="px-4 py-8 text-center text-zinc-400 text-sm"
+                    >
+                      No documents found.{" "}
+                      <button
+                        onClick={() => setShowUploadModal(true)}
+                        className="text-blue-400 hover:underline"
+                      >
+                        Upload your first document
+                      </button>
+                    </td>
+                  </tr>
+                )}
+
+                {documents.map((doc) => {
+                  const FileIcon = getFileIcon(doc.file_type);
+                  const expired = isExpired(doc.expires_at);
+                  const expiringSoon = isExpiringSoon(doc.expires_at);
+
+                  return (
+                    <tr
+                      key={doc.id}
+                      className="hover:bg-zinc-900/50 cursor-pointer"
+                      onClick={() => setPreviewDocument(doc)}
+                    >
+                      <td className="px-4 py-3 align-top">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-lg bg-zinc-800 flex items-center justify-center flex-shrink-0">
+                            <FileIcon className="w-4 h-4 text-zinc-400" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-zinc-100 truncate max-w-[220px]">
+                              {doc.name}
+                            </div>
+                            {doc.notes && (
+                              <div className="text-xs text-zinc-500 truncate max-w-[220px] mt-0.5">
+                                {doc.notes}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        {typeBadge(doc.document_type)}
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        <div className="space-y-1">
+                          {doc.load_reference && (
+                            <div
+                              className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-blue-400 cursor-pointer"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigate(`/loads/${doc.load_id}`);
+                              }}
+                            >
+                              <Truck className="w-3 h-3" />
+                              {doc.load_reference}
+                            </div>
+                          )}
+                          {doc.customer_name && (
+                            <div
+                              className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-blue-400 cursor-pointer"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigate(`/customers/${doc.customer_id}`);
+                              }}
+                            >
+                              <Building2 className="w-3 h-3" />
+                              {doc.customer_name}
+                            </div>
+                          )}
+                          {doc.driver_name && (
+                            <div
+                              className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-blue-400 cursor-pointer"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigate(`/drivers/${doc.driver_id}`);
+                              }}
+                            >
+                              <UserRound className="w-3 h-3" />
+                              {doc.driver_name}
+                            </div>
+                          )}
+                          {!doc.load_reference &&
+                            !doc.customer_name &&
+                            !doc.driver_name && (
+                              <span className="text-xs text-zinc-600">—</span>
+                            )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-center text-sm text-zinc-400 align-top">
+                        {formatBytes(doc.file_size)}
+                      </td>
+                      <td className="px-4 py-3 text-center align-top">
+                        {doc.expires_at ? (
+                          <div
+                            className={cx(
+                              "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border",
+                              expired &&
+                                "bg-rose-500/10 text-rose-300 border-rose-500/30",
+                              expiringSoon &&
+                                !expired &&
+                                "bg-amber-500/10 text-amber-300 border-amber-500/30",
+                              !expired &&
+                                !expiringSoon &&
+                                "text-zinc-400 border-zinc-700/70"
+                            )}
+                          >
+                            {(expired || expiringSoon) && (
+                              <AlertTriangle className="w-3 h-3" />
+                            )}
+                            {formatDate(doc.expires_at)}
+                          </div>
+                        ) : (
+                          <span className="text-sm text-zinc-600">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        <div className="text-sm text-zinc-400">
+                          {formatDate(doc.created_at)}
+                        </div>
+                        {doc.uploaded_by_name && (
+                          <div className="text-xs text-zinc-500">
+                            {doc.uploaded_by_name}
+                          </div>
+                        )}
+                      </td>
+                      <td
+                        className="px-4 py-3 text-right align-top"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <RowActions
+                          doc={doc}
+                          onPreview={(d) => setPreviewDocument(d)}
+                          onEdit={(d) => setEditDocument(d)}
+                          onDelete={(d) => setDeleteDocument(d)}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-800/60 bg-zinc-900/60">
+              <div className="text-xs sm:text-sm text-zinc-500">
+                Showing {page * PAGE_SIZE + 1}–
+                {Math.min((page + 1) * PAGE_SIZE, totalCount)} of {totalCount}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  className={cx(
+                    "p-2 rounded-lg border border-zinc-700/60 text-zinc-300 hover:bg-zinc-800/60",
+                    page === 0 && "opacity-40 cursor-not-allowed"
+                  )}
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="text-xs sm:text-sm text-zinc-400 px-2">
+                  Page {page + 1} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                  disabled={page >= totalPages - 1}
+                  className={cx(
+                    "p-2 rounded-lg border border-zinc-700/60 text-zinc-300 hover:bg-zinc-800/60",
+                    page >= totalPages - 1 &&
+                      "opacity-40 cursor-not-allowed"
+                  )}
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Modals */}

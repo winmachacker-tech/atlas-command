@@ -1,4 +1,5 @@
 ﻿// FILE: src/pages/LoadDetails.jsx
+import StatusTimeline from "@/components/loads/StatusTimeline.jsx";
 import WeatherCard from "../components/WeatherCard";
 import RouteWeatherAlerts from "../components/RouteWeatherAlerts";
 import ChainControlAlerts from "../components/ChainControlAlerts";
@@ -108,55 +109,6 @@ function parseCityState(text) {
   const city = (cityPart || "").trim();
   const state = (rest || "").trim().split(/\s+/)[0] || "";
   return { city, state };
-}
-
-/* ------------------------- Status Timeline Component ------------------------- */
-
-function StatusTimeline({ status }) {
-  const statuses = ["AVAILABLE", "DISPATCHED", "IN_TRANSIT", "DELIVERED"];
-  const currentIndex = statuses.indexOf(status || "AVAILABLE");
-
-  return (
-    <div className="flex items-center gap-2">
-      {statuses.map((s, idx) => {
-        const isActive = idx <= currentIndex;
-        const isCurrent = idx === currentIndex;
-        return (
-          <div key={s} className="flex items-center">
-            <div
-              className={cx(
-                "flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                isCurrent
-                  ? "bg-emerald-500/20 text-emerald-200 border border-emerald-500/60"
-                  : isActive
-                  ? "bg-slate-700/60 text-slate-300 border border-slate-600"
-                  : "bg-slate-900/60 text-slate-500 border border-slate-700"
-              )}
-            >
-              {isActive && (
-                <CheckCircle2
-                  className={cx(
-                    "h-3 w-3",
-                    isCurrent ? "text-emerald-300" : "text-slate-400"
-                  )}
-                />
-              )}
-              {!isActive && <Clock className="h-3 w-3" />}
-              <span>{s.replace("_", " ")}</span>
-            </div>
-            {idx < statuses.length - 1 && (
-              <div
-                className={cx(
-                  "w-8 h-0.5 mx-1",
-                  isActive ? "bg-emerald-500/60" : "bg-slate-700"
-                )}
-              />
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
 }
 
 /* ------------------------- Map component ------------------------- */
@@ -1881,7 +1833,7 @@ export default function LoadDetails() {
         setCalculatingMiles(false);
       }
     },
-    [stops, displayStops, load, GOOGLE_MAPS_API_KEY, fetchData]
+    [stops, displayStops, load, fetchData]
   );
 
   // Calculate profitability using REAL diesel prices

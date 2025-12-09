@@ -758,10 +758,10 @@ function MobileSidebar({ isOpen, onClose, onSignOut, isSuperAdmin, activeGroupBy
               <SideLink to="/privacy" icon={ShieldCheck} onClick={onClose}>Privacy Policy</SideLink>
               <SideLink to="/teammanagement" icon={UserRound} onClick={onClose}>Team Management</SideLink>
               <SideLink to="/admin/driver-learning-test" icon={GraduationCap} onClick={onClose}>Driver Learning Test</SideLink>
-              <SideLink to="/admin/dipsy-training-review" icon={Bot} onClick={onClose}>Dipsy Training Review</SideLink>
-              <SideLink to="/admin/dipsy-quality" icon={Brain} onClick={onClose}>Dipsy Quality</SideLink>
               {isSuperAdmin && (
                 <>
+                  <SideLink to="/admin/dipsy-training-review" icon={Bot} onClick={onClose}>Dipsy Training Review</SideLink>
+                  <SideLink to="/admin/dipsy-quality" icon={Brain} onClick={onClose}>Dipsy Quality</SideLink>
                   <SideLink to="/super-admin" icon={Crown} onClick={onClose}>Platform Admin</SideLink>
                   <SideLink to="/financials" icon={TrendingUp} onClick={onClose}>Financials</SideLink>
                 </>
@@ -790,7 +790,9 @@ function MobileSidebar({ isOpen, onClose, onSignOut, isSuperAdmin, activeGroupBy
               defaultOpen={activeGroupByPath === "debug"}
             >
               <SideLink to="/debug/board" icon={Bug} onClick={onClose}>Commander Board Debug</SideLink>
-              <SideLink to="/faq-test" icon={FileText} onClick={onClose}>FAQ Test Panel</SideLink>
+              {isSuperAdmin && (
+                <SideLink to="/faq-test" icon={FileText} onClick={onClose}>FAQ Test Panel</SideLink>
+              )}
             </SideGroup>
           </nav>
 
@@ -821,7 +823,7 @@ export default function MainLayout() {
   // Mobile sidebar state
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // 👑 Super admin flag (for showing /super-admin in sidebar)
+  // 👑 Super admin flag (for showing /super-admin and other super-only pages)
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [checkedSuperAdmin, setCheckedSuperAdmin] = useState(false);
 
@@ -858,6 +860,26 @@ export default function MainLayout() {
       cancelled = true;
     };
   }, []);
+
+  // 🔒 CLIENT-SIDE ROUTE GUARD for super-admin-only pages
+  useEffect(() => {
+    if (!checkedSuperAdmin) return;
+
+    const superAdminOnlyPrefixes = [
+      "/admin/dipsy-quality",
+      "/admin/dipsy-training-review",
+      "/faq-test",
+    ];
+
+    const isProtected = superAdminOnlyPrefixes.some((p) =>
+      pathname.startsWith(p)
+    );
+
+    if (isProtected && !isSuperAdmin) {
+      // Non-super-admin trying to hit a restricted page: send them home
+      navigate("/", { replace: true });
+    }
+  }, [checkedSuperAdmin, isSuperAdmin, pathname, navigate]);
 
   // Dipsy state management
   const [dipsyState, setDipsyState] = useState("idle");
@@ -933,7 +955,6 @@ export default function MainLayout() {
       return "debug";
     return null;
   }, [pathname]);
-
 
   useEffect(() => {
     const key = "atlas.sidebar.open";
@@ -1142,14 +1163,14 @@ export default function MainLayout() {
                   >
                     Driver Learning Test
                   </SideLink>
-                  <SideLink to="/admin/dipsy-training-review" icon={Bot}>
-                    Dipsy Training Review
-                  </SideLink>
-                  <SideLink to="/admin/dipsy-quality" icon={Brain}>
-                    Dipsy Quality
-                  </SideLink>
                   {checkedSuperAdmin && isSuperAdmin && (
                     <>
+                      <SideLink to="/admin/dipsy-training-review" icon={Bot}>
+                        Dipsy Training Review
+                      </SideLink>
+                      <SideLink to="/admin/dipsy-quality" icon={Brain}>
+                        Dipsy Quality
+                      </SideLink>
                       <SideLink to="/super-admin" icon={Crown}>
                         Platform Admin
                       </SideLink>
@@ -1194,9 +1215,11 @@ export default function MainLayout() {
                   <SideLink to="/debug/board" icon={Bug}>
                     Commander Board Debug
                   </SideLink>
-                  <SideLink to="/faq-test" icon={FileText}>
-                    FAQ Test Panel
-                  </SideLink>
+                  {checkedSuperAdmin && isSuperAdmin && (
+                    <SideLink to="/faq-test" icon={FileText}>
+                      FAQ Test Panel
+                    </SideLink>
+                  )}
                 </SideGroup>
 
               </nav>

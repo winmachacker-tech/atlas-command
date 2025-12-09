@@ -38,7 +38,6 @@ if (typeof window !== "undefined") {
   window.askDipsyQuestion = askDipsyQuestion;
 }
 
-
 /* Lazy pages */
 const Dashboard = lazy(() => import("./pages/Dashboard.jsx"));
 const Loads = lazy(() => import("./pages/Loads.jsx"));
@@ -113,7 +112,8 @@ const DriverSettlements = lazy(() =>
 /* Platform Admin */
 const SuperAdmin = lazy(() => import("./pages/SuperAdmin.jsx"));
 const Financials = lazy(() => import("./pages/Financials.jsx"));
-const DipsyQualityDashboard = lazy(() => import('./pages/DipsyQualityDashboard'));
+const DipsyQualityDashboard = lazy(() => import("./pages/DipsyQualityDashboard"));
+
 /* Billing subscription page (Stripe checkout) */
 const BillingSubscription = lazy(() =>
   import("./pages/BillingSubscription.jsx")
@@ -167,8 +167,6 @@ async function logLoginEventWithMfa(event, session) {
     }
 
     // 🔧 FIX: Add to Set IMMEDIATELY (before async work) to prevent race condition
-    // Both getSession() and onAuthStateChange fire nearly simultaneously on page load.
-    // If we wait until after the fetch, both calls pass the .has() check.
     if (loggedTokens.has(accessToken)) {
       console.log(
         "[main] Already logged/logging event for this access_token, skipping:",
@@ -176,7 +174,7 @@ async function logLoginEventWithMfa(event, session) {
       );
       return;
     }
-    
+
     // Mark as "in progress" immediately to block concurrent calls
     loggedTokens.add(accessToken);
 
@@ -233,11 +231,10 @@ async function logLoginEventWithMfa(event, session) {
         text
       );
       // Note: We keep the token in the Set even on failure to prevent retry storms.
-      // If you want retries, you'd need a more sophisticated approach.
     }
   } catch (err) {
     console.error("[main] Failed to log login event:", err);
-    // Note: Token stays in Set to prevent retry loops on persistent errors
+    // Token stays in Set to prevent retry loops on persistent errors
   }
 }
 
@@ -376,7 +373,6 @@ function MfaGate({ children }) {
             Open your authenticator app and enter the 6-digit code for Atlas
             Command.
           </p>
-          {/* 🔧 FIX: Changed border.white/20 → border-white/20 */}
           <input
             type="text"
             inputMode="numeric"
@@ -403,6 +399,65 @@ function MfaGate({ children }) {
   }
 
   // ✅ Either no MFA enrolled, or it's already verified for this session
+  return children;
+}
+
+/**
+ * SuperAdminRoute – client-side guard for super-admin-only pages
+ *
+ * - Calls rpc_is_super_admin (same RPC we use in MainLayout).
+ * - While checking: renders nothing (you could add a small loader if you want).
+ * - If NOT super admin: redirects to "/".
+ * - If super admin: renders the children.
+ *
+ * Does NOT touch RLS or backend auth. This is extra UI-layer safety.
+ */
+function SuperAdminRoute({ children }) {
+  const [loading, setLoading] = useState(true);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkSuperAdmin() {
+      try {
+        const { data, error } = await supabase.rpc("rpc_is_super_admin");
+        if (cancelled) return;
+
+        if (error) {
+          console.error("[SuperAdminRoute] rpc_is_super_admin error:", error);
+          setIsSuperAdmin(false);
+        } else {
+          setIsSuperAdmin(!!data);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error("[SuperAdminRoute] exception:", err);
+          setIsSuperAdmin(false);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    checkSuperAdmin();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loading) {
+    // You can swap this for a skeleton or spinner if you want.
+    return null;
+  }
+
+  if (!isSuperAdmin) {
+    return <Navigate to="/" replace />;
+  }
+
   return children;
 }
 
@@ -503,22 +558,54 @@ function AppRoutes() {
                   <Route path="ai/lanes" element={<AiLaneIntelligence />} />
 
                   {/* Admin */}
-                  <Route path="/faq-test" element={<FaqTestPanel />} />
+                  {/* FAQ Test – super admin only */}
+                  <Route
+                    path="/faq-test"
+                    element={
+                      <SuperAdminRoute>
+                        <FaqTestPanel />
+                      </SuperAdminRoute>
+                    }
+                  />
                   <Route
                     path="admin/driver-learning-test"
                     element={<DriverLearningTest />}
                   />
                   <Route path="super-admin" element={<SuperAdmin />} />
                   <Route path="financials" element={<Financials />} />
+                  {/* Dipsy Training Review – super admin only */}
                   <Route
-                  path="admin/dipsy-training-review"
-                  element={<DipsyTrainingReview />}
+                    path="admin/dipsy-training-review"
+                    element={
+                      <SuperAdminRoute>
+                        <DipsyTrainingReview />
+                      </SuperAdminRoute>
+                    }
                   />
-                 <Route path="admin">
-                 <Route path="driver-learning-test" element={<DriverLearningTest />} />
-                 <Route path="dipsy-training-review" element={<DipsyTrainingReview />} />
-                 <Route path="dipsy-quality" element={<DipsyQualityDashboard />} />  {/* ← Add */}
-                 </Route>
+                  {/* Nested /admin routes (keep working as well) */}
+                  <Route path="admin">
+                    <Route
+                      path="driver-learning-test"
+                      element={<DriverLearningTest />}
+                    />
+                    <Route
+                      path="dipsy-training-review"
+                      element={
+                        <SuperAdminRoute>
+                          <DipsyTrainingReview />
+                        </SuperAdminRoute>
+                      }
+                    />
+                    {/* Dipsy Quality – super admin only */}
+                    <Route
+                      path="dipsy-quality"
+                      element={
+                        <SuperAdminRoute>
+                          <DipsyQualityDashboard />
+                        </SuperAdminRoute>
+                      }
+                    />
+                  </Route>
 
                   {/* User settings */}
                   <Route path="profile" element={<Profile />} />
