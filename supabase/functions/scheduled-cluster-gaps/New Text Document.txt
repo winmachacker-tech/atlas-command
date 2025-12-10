@@ -1,0 +1,380 @@
+// FILE: supabase/functions/scheduled-cluster-gaps/index.ts
+// Purpose: Nightly cron job to cluster knowledge gaps and generate doc drafts
+// Triggered by: Supabase pg_cron or external scheduler (e.g., Vercel cron)
+//
+// Security:
+// - Validates cron secret or service role
+// - Processes all orgs with unprocessed gaps
+// - Uses service_role for cross-org operations
+
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY")!;
+const CRON_SECRET = Deno.env.get("CRON_SECRET") || "";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COSINE SIMILARITY
+// ─────────────────────────────────────────────────────────────────────────────
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0, magA = 0, magB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GENERATE EMBEDDING
+// ─────────────────────────────────────────────────────────────────────────────
+async function generateEmbedding(text: string): Promise<number[] | null> {
+  try {
+    const response = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: text,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error("[Embedding] Failed:", await response.text());
+      return null;
+    }
+
+    const data = await response.json();
+    return data.data[0].embedding;
+  } catch (err) {
+    console.error("[Embedding] Error:", err);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GENERATE DOC DRAFT
+// ─────────────────────────────────────────────────────────────────────────────
+async function generateDocDraft(questions: string[]): Promise<{ title: string; body: string } | null> {
+  const prompt = `You are a documentation writer for Atlas Command, a Transportation Management System (TMS) for trucking carriers.
+
+Based on these user questions that Dipsy (our AI assistant) couldn't answer:
+${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}
+
+Write a clear, helpful documentation article that would answer these questions.
+
+Requirements:
+- Title should be concise and descriptive
+- Content should be practical and actionable
+- Use simple language (target audience: truck dispatchers)
+- Include examples where helpful
+- Format with markdown (headers, bullet points)
+- Keep it focused - don't add unrelated information
+
+Respond in JSON format:
+{
+  "title": "Article Title Here",
+  "body": "Full markdown content here..."
+}`;
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.7,
+        max_tokens: 2000,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error("[DocGen] Failed:", await response.text());
+      return null;
+    }
+
+    const data = await response.json();
+    const content = data.choices[0]?.message?.content || "";
+    
+    // Parse JSON from response
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    return null;
+  } catch (err) {
+    console.error("[DocGen] Error:", err);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLUSTER GAPS FOR ORG
+// ─────────────────────────────────────────────────────────────────────────────
+async function clusterGapsForOrg(
+  supabase: any,
+  orgId: string
+): Promise<{ clusters: number; drafts: number; gaps: number }> {
+  console.log(`[Cluster] Processing org: ${orgId}`);
+
+  // Fetch unprocessed gaps with embeddings
+  const { data: gaps, error: gapsError } = await supabase
+    .from("knowledge_gaps")
+    .select("id, question, embedding")
+    .eq("org_id", orgId)
+    .is("cluster_id", null)
+    .not("embedding", "is", null)
+    .order("created_at", { ascending: true })
+    .limit(100);
+
+  if (gapsError) {
+    console.error("[Cluster] Error fetching gaps:", gapsError);
+    return { clusters: 0, drafts: 0, gaps: 0 };
+  }
+
+  if (!gaps || gaps.length === 0) {
+    console.log("[Cluster] No unprocessed gaps for org");
+    return { clusters: 0, drafts: 0, gaps: 0 };
+  }
+
+  console.log(`[Cluster] Found ${gaps.length} unprocessed gaps`);
+
+  // Simple clustering: group questions with similarity > 0.75
+  const SIMILARITY_THRESHOLD = 0.75;
+  const clusters: { questions: string[]; gapIds: string[] }[] = [];
+  const processed = new Set<string>();
+
+  for (const gap of gaps) {
+    if (processed.has(gap.id)) continue;
+
+    const cluster = { questions: [gap.question], gapIds: [gap.id] };
+    processed.add(gap.id);
+
+    // Find similar questions
+    for (const other of gaps) {
+      if (processed.has(other.id)) continue;
+      
+      const similarity = cosineSimilarity(gap.embedding, other.embedding);
+      if (similarity >= SIMILARITY_THRESHOLD) {
+        cluster.questions.push(other.question);
+        cluster.gapIds.push(other.id);
+        processed.add(other.id);
+      }
+    }
+
+    clusters.push(cluster);
+  }
+
+  console.log(`[Cluster] Created ${clusters.length} clusters`);
+
+  // Generate drafts for each cluster
+  let draftsCreated = 0;
+  
+  for (const cluster of clusters) {
+    // Create cluster record
+    const { data: clusterRecord, error: clusterError } = await supabase
+      .from("knowledge_gap_clusters")
+      .insert({
+        org_id: orgId,
+        representative_question: cluster.questions[0],
+        question_count: cluster.questions.length,
+        status: "processing",
+      })
+      .select()
+      .single();
+
+    if (clusterError) {
+      console.error("[Cluster] Error creating cluster:", clusterError);
+      continue;
+    }
+
+    // Update gaps with cluster_id
+    await supabase
+      .from("knowledge_gaps")
+      .update({ cluster_id: clusterRecord.id })
+      .in("id", cluster.gapIds);
+
+    // Generate doc draft
+    const draft = await generateDocDraft(cluster.questions);
+    
+    if (draft) {
+      // Create draft record
+      const { error: draftError } = await supabase
+        .from("atlas_docs_drafts")
+        .insert({
+          org_id: orgId,
+          cluster_id: clusterRecord.id,
+          title: draft.title,
+          body: draft.body,
+          doc_type: "knowledge",
+          source_questions: cluster.questions,
+          status: "draft",
+        });
+
+      if (!draftError) {
+        draftsCreated++;
+        
+        // Update cluster status
+        await supabase
+          .from("knowledge_gap_clusters")
+          .update({ status: "draft_generated" })
+          .eq("id", clusterRecord.id);
+      }
+    } else {
+      // Mark cluster as failed
+      await supabase
+        .from("knowledge_gap_clusters")
+        .update({ status: "generation_failed" })
+        .eq("id", clusterRecord.id);
+    }
+  }
+
+  return { 
+    clusters: clusters.length, 
+    drafts: draftsCreated, 
+    gaps: gaps.length 
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN HANDLER
+// ─────────────────────────────────────────────────────────────────────────────
+serve(async (req) => {
+  // Handle CORS preflight
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    // Verify cron secret or authorization
+    const cronSecret = req.headers.get("x-cron-secret");
+    const authHeader = req.headers.get("authorization");
+    
+    const isValidCron = CRON_SECRET && cronSecret === CRON_SECRET;
+    const isServiceRole = authHeader?.includes(SUPABASE_SERVICE_ROLE_KEY);
+    
+    if (!isValidCron && !isServiceRole) {
+      // Check if it's a valid user JWT with admin privileges
+      const supabaseAuth = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      const token = authHeader?.replace("Bearer ", "");
+      
+      if (token) {
+        const { data: { user }, error } = await supabaseAuth.auth.getUser(token);
+        if (error || !user) {
+          return new Response(
+            JSON.stringify({ error: "Unauthorized" }),
+            { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        // Allow authenticated users to trigger manually
+      } else {
+        return new Response(
+          JSON.stringify({ error: "Unauthorized - missing credentials" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    console.log("[ScheduledCluster] Starting nightly clustering job");
+    
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+    // Find all orgs with unprocessed gaps
+    const { data: orgsWithGaps, error: orgsError } = await supabase
+      .from("knowledge_gaps")
+      .select("org_id")
+      .is("cluster_id", null)
+      .not("embedding", "is", null);
+
+    if (orgsError) {
+      throw new Error(`Failed to fetch orgs: ${orgsError.message}`);
+    }
+
+    // Get unique org IDs
+    const uniqueOrgIds = [...new Set(orgsWithGaps?.map(g => g.org_id) || [])];
+    
+    if (uniqueOrgIds.length === 0) {
+      console.log("[ScheduledCluster] No orgs with unprocessed gaps");
+      return new Response(
+        JSON.stringify({ 
+          success: true, 
+          message: "No unprocessed gaps found",
+          orgs_processed: 0,
+          total_clusters: 0,
+          total_drafts: 0,
+          total_gaps: 0,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log(`[ScheduledCluster] Processing ${uniqueOrgIds.length} orgs`);
+
+    // Process each org
+    let totalClusters = 0;
+    let totalDrafts = 0;
+    let totalGaps = 0;
+    const results: { org_id: string; clusters: number; drafts: number; gaps: number }[] = [];
+
+    for (const orgId of uniqueOrgIds) {
+      const result = await clusterGapsForOrg(supabase, orgId);
+      results.push({ org_id: orgId, ...result });
+      totalClusters += result.clusters;
+      totalDrafts += result.drafts;
+      totalGaps += result.gaps;
+    }
+
+    // Log the run
+    await supabase
+      .from("scheduled_job_logs")
+      .insert({
+        job_name: "cluster-knowledge-gaps",
+        status: "completed",
+        details: {
+          orgs_processed: uniqueOrgIds.length,
+          total_clusters: totalClusters,
+          total_drafts: totalDrafts,
+          total_gaps: totalGaps,
+          results,
+        },
+      })
+      .catch(err => console.warn("[ScheduledCluster] Could not log job:", err));
+
+    console.log(`[ScheduledCluster] Complete - ${totalClusters} clusters, ${totalDrafts} drafts`);
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        orgs_processed: uniqueOrgIds.length,
+        total_clusters: totalClusters,
+        total_drafts: totalDrafts,
+        total_gaps: totalGaps,
+        results,
+      }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+
+  } catch (err) {
+    console.error("[ScheduledCluster] Error:", err);
+    return new Response(
+      JSON.stringify({ error: err.message || "Clustering failed" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+});

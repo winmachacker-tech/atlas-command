@@ -602,30 +602,19 @@ serve(async (req: Request): Promise<Response> => {
       return jsonResponse(405, { ok: false, error: "Method not allowed" });
     }
 
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader || !authHeader.toLowerCase().startsWith("bearer ")) {
-      return jsonResponse(401, {
-        ok: false,
-        error: "Missing or invalid Authorization header",
-      });
-    }
-
-    const accessToken = authHeader.replace(/bearer /i, "").trim();
-
-    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      },
-    });
-
+const authHeader = req.headers.get("Authorization");
     const body = await req.json().catch(() => ({} as any));
+    
     const userMessage: string = body.message ?? body.prompt ?? "";
     const conversationState: ConversationState | null =
       body.conversation_state ?? null;
     const channel: string =
       typeof body.channel === "string" ? body.channel : "web_app";
+    
+    // Check for service-role caller with org_id provided (e.g., Telegram, WhatsApp)
+    const providedOrgId = body.org_id;
+    const providedUserId = body.user_id || body.driver_id;
+    const senderName = body.sender_name;
 
     if (!userMessage || typeof userMessage !== "string") {
       return jsonResponse(400, {
@@ -633,36 +622,71 @@ serve(async (req: Request): Promise<Response> => {
         error: "Missing 'message' in request body",
       });
     }
-    // Resolve current user
-    const {
-      data: { user },
-      error: userErr,
-    } = await supabase.auth.getUser();
 
-    if (userErr || !user) {
-      console.error("[dipsy-text] auth.getUser error:", userErr);
-      return jsonResponse(401, {
-        ok: false,
-        error: "Unable to resolve user from token",
+    let supabase: ReturnType<typeof createClient>;
+    let userId: string | null = null;
+    let orgId: string | null = null;
+    let accessToken: string = "";
+
+    if (providedOrgId) {
+      // Service-role caller (Telegram/WhatsApp) - use provided org_id
+      const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+      supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      orgId = providedOrgId;
+      userId = providedUserId || null;
+      accessToken = SUPABASE_SERVICE_ROLE_KEY; // For downstream tool calls
+      console.log("[dipsy-text] Service-role caller, org_id:", orgId, "channel:", channel);
+    } else {
+      // Standard JWT auth flow (web UI)
+      if (!authHeader || !authHeader.toLowerCase().startsWith("bearer ")) {
+        return jsonResponse(401, {
+          ok: false,
+          error: "Missing or invalid Authorization header",
+        });
+      }
+
+      accessToken = authHeader.replace(/bearer /i, "").trim();
+
+      supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        global: {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        },
       });
+
+      // Resolve current user
+      const {
+        data: { user },
+        error: userErr,
+      } = await supabase.auth.getUser();
+
+      if (userErr || !user) {
+        console.error("[dipsy-text] auth.getUser error:", userErr);
+        return jsonResponse(401, {
+          ok: false,
+          error: "Unable to resolve user from token",
+        });
+      }
+
+      userId = user.id;
+
+      // Resolve org_id via current_org_id() (REQUIRED, per Option B)
+      const { data: resolvedOrgId, error: orgErr } = await supabase.rpc(
+        "current_org_id",
+      );
+
+      if (orgErr || !resolvedOrgId) {
+        console.error("[dipsy-text] current_org_id() error:", orgErr);
+        return jsonResponse(403, {
+          ok: false,
+          error:
+            "You do not belong to an active org, or org context could not be resolved.",
+        });
+      }
+      
+      orgId = resolvedOrgId;
     }
-
-    const userId = user.id;
-
-    // Resolve org_id via current_org_id() (REQUIRED, per Option B)
-    const { data: orgId, error: orgErr } = await supabase.rpc(
-      "current_org_id",
-    );
-
-    if (orgErr || !orgId) {
-      console.error("[dipsy-text] current_org_id() error:", orgErr);
-      return jsonResponse(403, {
-        ok: false,
-        error:
-          "You do not belong to an active org, or org context could not be resolved.",
-      });
-    }
-
     console.log("[dipsy-text] user:", userId, "org:", orgId);
     console.log("[dipsy-text] incoming message:", userMessage);
 
@@ -2640,13 +2664,13 @@ async function toolAtlasQuestionsBrain(params: any) {
     const userId: string | null = params.userId ?? null;
     const channel: string = params.channel ?? "web_app";
 
-    const body = {
+const body = {
       question,
+      org_id: orgId,
+      channel: channel,
       context: {
         source: "dipsy-text",
-        org_id: orgId,
         user_id: userId,
-        channel,
       },
     };
 

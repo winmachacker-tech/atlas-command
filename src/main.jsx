@@ -137,6 +137,16 @@ const InvoiceDetails = lazy(() =>
   import("./pages/InvoiceDetails.jsx")
 );
 
+/* ---------------- Customer Portal Layout (new) ----------------- */
+/**
+ * Separate shell for external customer users (shippers/brokers).
+ * We'll handle Supabase session checks + customer-specific UI
+ * inside this layout without touching internal org auth.
+ */
+const CustomerPortalLayout = lazy(() =>
+  import("./layout/CustomerPortalLayout.jsx")
+);
+
 /* ---------------------- LOGIN EVENT WIRING ---------------------- */
 /**
  * Behavior:
@@ -473,6 +483,9 @@ function AppRoutes() {
                 <Route path="/auth" element={<Navigate to="/login" replace />} />
                 <Route path="/login" element={<Login />} />
                 <Route path="/signup" element={<Signup />} />
+
+                {/* CUSTOMER PORTAL (separate shell for shippers/brokers) */}
+                <Route path="/portal/*" element={<CustomerPortalLayout />} />
 
                 {/* ONBOARDING ROUTE */}
                 <Route
