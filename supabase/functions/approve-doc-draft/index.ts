@@ -15,15 +15,15 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY")!;
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey, x-client-info",
+};
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-      },
-    });
+    return new Response("ok", { headers: corsHeaders });
   }
 
   if (req.method !== "POST") {
@@ -32,7 +32,7 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const { action, draft_id, rejection_reason, org_id } = body;
+    const { action, draft_id, rejection_reason, org_id, title, body: editedBody } = body;
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -96,23 +96,26 @@ serve(async (req) => {
         return jsonResponse({ error: `Draft already ${draft.status}` }, 400);
       }
 
-      // Generate embedding for the new doc
-      const embedding = await generateEmbedding(draft.body);
+      // Use edited values if provided, otherwise use original
+      const finalTitle = title || draft.title;
+      const finalBody = editedBody || draft.body;
+      const finalSlug = generateSlug(finalTitle);
 
-      // Insert into atlas_docs (matching actual schema)
+      // STEP 1: Insert doc WITHOUT embedding first
+      console.log(`[approve-draft] Step 1: Inserting doc: ${finalTitle}`);
+      
       const { data: newDoc, error: insertError } = await supabase
         .from("atlas_docs")
         .insert({
           org_id: draft.org_id,
-          title: draft.title,
-          slug: draft.slug,
-          body: draft.body,
-          embedding: embedding,
-          domain: "general",  // Default domain for AI-generated docs
-          doc_type: "knowledge",  // Type for knowledge base articles
+          title: finalTitle,
+          slug: finalSlug,
+          body: finalBody,
+          domain: "general",
+          doc_type: "knowledge",
           version: "1.0",
-          related_docs: [],  // Empty array, can be updated later
-          summary: draft.source_questions?.join(", ") || null,  // Store source questions as summary
+          related_docs: [],
+          summary: draft.source_questions?.join(", ") || null,
         })
         .select()
         .single();
@@ -121,6 +124,56 @@ serve(async (req) => {
         console.error("[approve-draft] Insert error:", insertError);
         return jsonResponse({ error: insertError.message }, 500);
       }
+
+      console.log(`[approve-draft] Doc inserted: ${newDoc.id}`);
+
+      // STEP 2: Generate embedding
+      console.log(`[approve-draft] Step 2: Generating embedding...`);
+      
+      let embedding: number[];
+      try {
+        embedding = await generateEmbedding(finalBody);
+        console.log(`[approve-draft] Embedding generated: ${embedding.length} dimensions`);
+      } catch (err) {
+        console.error("[approve-draft] Embedding generation failed:", err);
+        // Doc was created but embedding failed - still return success but note the issue
+        return jsonResponse({ 
+          ok: true,
+          message: `Published "${finalTitle}" but embedding failed - run backfill`,
+          doc_id: newDoc.id,
+          slug: newDoc.slug,
+          embedding_error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      // STEP 3: UPDATE doc with embedding (this is what works!)
+      console.log(`[approve-draft] Step 3: Updating doc with embedding...`);
+      
+      const { error: updateError } = await supabase
+        .from("atlas_docs")
+        .update({ embedding: embedding })
+        .eq("id", newDoc.id);
+
+      if (updateError) {
+        console.error("[approve-draft] Embedding update error:", updateError);
+        return jsonResponse({ 
+          ok: true,
+          message: `Published "${finalTitle}" but embedding update failed - run backfill`,
+          doc_id: newDoc.id,
+          slug: newDoc.slug,
+          embedding_error: updateError.message,
+        });
+      }
+
+      // Verify embedding was saved
+      const { data: verifyDoc } = await supabase
+        .from("atlas_docs")
+        .select("id, embedding")
+        .eq("id", newDoc.id)
+        .single();
+      
+      const embeddingSaved = verifyDoc?.embedding !== null;
+      console.log(`[approve-draft] Embedding saved: ${embeddingSaved}`);
 
       // Update draft status
       await supabase
@@ -145,13 +198,15 @@ serve(async (req) => {
           .eq("cluster_id", draft.cluster_id);
       }
 
-      console.log(`[approve-draft] Published: ${draft.title} -> doc ${newDoc.id}`);
+      console.log(`[approve-draft] Complete: ${finalTitle} -> doc ${newDoc.id}, embedding: ${embeddingSaved}`);
 
       return jsonResponse({
         ok: true,
-        message: `Published "${draft.title}" to atlas_docs`,
+        message: `Published "${finalTitle}" to atlas_docs`,
         doc_id: newDoc.id,
         slug: newDoc.slug,
+        embedding_saved: embeddingSaved,
+        embedding_dimensions: embedding.length,
       });
     }
 
@@ -225,30 +280,43 @@ serve(async (req) => {
 // ============================================================================
 
 async function generateEmbedding(text: string): Promise<number[]> {
-  try {
-    const response = await fetch("https://api.openai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "text-embedding-3-small",
-        input: text.slice(0, 8000), // Limit input size
-      }),
-    });
+  console.log(`[approve-draft] Calling OpenAI embeddings API, text length: ${text.length}`);
+  
+  const response = await fetch("https://api.openai.com/v1/embeddings", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "text-embedding-3-small",
+      input: text.slice(0, 8000), // Limit input size
+    }),
+  });
 
-    if (!response.ok) {
-      console.error("[approve-draft] Embedding error:", await response.text());
-      return [];
-    }
-
-    const data = await response.json();
-    return data.data?.[0]?.embedding || [];
-  } catch (err) {
-    console.error("[approve-draft] Embedding error:", err);
-    return [];
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("[approve-draft] OpenAI API error:", response.status, errorText);
+    throw new Error(`OpenAI API error (${response.status}): ${errorText}`);
   }
+
+  const data = await response.json();
+  const embedding = data.data?.[0]?.embedding;
+  
+  if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {
+    console.error("[approve-draft] Invalid embedding response:", JSON.stringify(data).slice(0, 500));
+    throw new Error("No valid embedding returned from OpenAI");
+  }
+  
+  console.log(`[approve-draft] Embedding received: ${embedding.length} dimensions`);
+  return embedding;
+}
+
+function generateSlug(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -256,7 +324,7 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: {
       "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
+      ...corsHeaders,
     },
   });
 }

@@ -1304,18 +1304,6 @@ export default function DipsyQualityDashboard() {
         throw new Error(data.error || "Approval failed");
       }
 
-      // Backfill embeddings
-      await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/backfill-doc-embeddings`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({}),
-        }
-      );
 
       await fetchDrafts();
     } catch (err) {
